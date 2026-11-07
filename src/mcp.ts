@@ -46,6 +46,19 @@ const TOOLS = [
   },
 ];
 
+// Every panel tool belongs to a permission domain (see PERMISSION_DOMAINS
+// in registry.ts). All current tools are registry-domain; future boards add
+// their own entries here.
+const TOOL_DOMAINS: Record<string, string> = {
+  mcp_search: "registry",
+  mcp_list: "registry",
+  mcp_get: "registry",
+};
+
+function domainOfTool(name: string): string | null {
+  return Object.prototype.hasOwnProperty.call(TOOL_DOMAINS, name) ? TOOL_DOMAINS[name] : null;
+}
+
 export async function handleMcp(request: Request, env: Env, _ctx: WaitCtx): Promise<Response> {
   if (request.method.toUpperCase() !== "POST") {
     return json({ jsonrpc: "2.0", id: null, error: { code: -32600, message: "只接受 POST" } }, 405, { allow: "POST" });
@@ -67,7 +80,7 @@ export async function handleMcp(request: Request, env: Env, _ctx: WaitCtx): Prom
   try {
     if (record.method === "initialize") return initialize(id, record.params);
     if (record.method === "notifications/initialized") return rpcResult(id, {});
-    if (record.method === "tools/list") return rpcResult(id, { tools: TOOLS });
+    if (record.method === "tools/list") return listTools(request, env, id);
     if (record.method === "tools/call") return callTool(request, env, id, record.params);
     return rpcError(id, -32601, "方法不存在");
   } catch {
@@ -88,6 +101,22 @@ function initialize(id: unknown, params: unknown): Response {
   });
 }
 
+// tools/list is filtered by the calling agent permissions: a tool whose
+// domain is not granted simply does not appear. Requests without a bearer
+// keep the historical public listing (downstream snapshot probes rely on
+// it); a bearer that fails authentication is rejected like tools/call.
+async function listTools(request: Request, env: Env, id: unknown): Promise<Response> {
+  const token = bearerToken(request);
+  if (!token) return rpcResult(id, { tools: TOOLS });
+  const auth = await authenticateAgent(env.DB, token, Date.now());
+  if (!auth.ok) return rpcError(id, -32001, auth.error, 401);
+  const tools = TOOLS.filter((tool) => {
+    const domain = domainOfTool(tool.name);
+    return domain !== null && auth.permissions.includes(domain);
+  });
+  return rpcResult(id, { tools });
+}
+
 async function callTool(request: Request, env: Env, id: unknown, params: unknown): Promise<Response> {
   const token = bearerToken(request);
   if (!token) return rpcError(id, -32001, "缺少 Bearer 令牌", 401);
@@ -100,6 +129,10 @@ async function callTool(request: Request, env: Env, id: unknown, params: unknown
   const record = args == null ? {} : args;
   if (typeof record !== "object" || Array.isArray(record)) return rpcError(id, -32602, "参数不正确");
   const fields = record as { query?: unknown; tag?: unknown; server_id?: unknown; name?: unknown };
+  const domain = domainOfTool(name);
+  if (domain && !auth.permissions.includes(domain)) {
+    return rpcError(id, -32003, "该 Agent 没有 " + domain + " 权限，无法调用这个工具", 403);
+  }
   if (name === "mcp_search") {
     const query = readString(fields.query);
     const tag = readString(fields.tag);

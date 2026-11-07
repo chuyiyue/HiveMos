@@ -43,16 +43,99 @@
     return '<div class="empty-state"><p class="empty-title">' + escapeHtml(title) + "</p><p>" + escapeHtml(text) + "</p></div>";
   }
 
-  function section(title, hint, body) {
+  function section(title, hint, body, actionsHtml) {
     return (
       '<section class="panel"><div class="section-head"><h2>' +
       escapeHtml(title) +
       "</h2>" +
       (hint ? '<p class="subtle">' + escapeHtml(hint) + "</p>" : "") +
+      (actionsHtml ? '<div class="section-actions">' + actionsHtml + "</div>" : "") +
       "</div>" +
       body +
       "</section>"
     );
+  }
+
+  // Top action row shared by list pages and by every tab inside a section:
+  // one primary add button plus a secondary add-group button, same spot and
+  // same markup everywhere. Actions are data-action values handled by the
+  // click delegation of the page.
+  function addBar(options) {
+    options = options || {};
+    return (
+      '<div class="add-bar"><button type="button" class="add-button" data-action="' +
+      escapeHtml(options.addAction || "add") +
+      '">' +
+      escapeHtml(options.addLabel || "添加") +
+      '</button><button type="button" class="secondary add-group-button" data-action="' +
+      escapeHtml(options.groupAction || "add-group") +
+      '">' +
+      escapeHtml(options.groupLabel || "添加分组") +
+      "</button></div>"
+    );
+  }
+
+  // Group picker used by create/edit dialogs: blank value means ungrouped.
+  function groupSelect(name, groups, current) {
+    var html =
+      '<select data-field="' +
+      escapeHtml(name) +
+      '" name="' +
+      escapeHtml(name) +
+      '"><option value=""' +
+      (!current ? " selected" : "") +
+      ">未分组</option>";
+    (groups || []).forEach(function (group) {
+      html +=
+        '<option value="' +
+        escapeHtml(group.id) +
+        '"' +
+        (group.id === current ? " selected" : "") +
+        ">" +
+        escapeHtml(group.name) +
+        "</option>";
+    });
+    return html + "</select>";
+  }
+
+  // Renders items bucketed into group sections (group order as given),
+  // ungrouped items last. Group sections always render, even when empty, so
+  // rename/delete stays reachable; the ungrouped section renders when it has
+  // items or when there are no groups at all.
+  // options: { groups, items, groupOf, renderItem, groupActions,
+  //            ungroupedTitle, emptyGroupText, emptyTitle, emptyText }
+  function groupedSections(options) {
+    var groups = options.groups || [];
+    var buckets = {};
+    groups.forEach(function (group) {
+      buckets[group.id] = [];
+    });
+    var loose = [];
+    (options.items || []).forEach(function (item) {
+      var gid = options.groupOf(item);
+      if (gid && Object.prototype.hasOwnProperty.call(buckets, gid)) buckets[gid].push(item);
+      else loose.push(item);
+    });
+    var html = "";
+    groups.forEach(function (group) {
+      var members = buckets[group.id];
+      var body = members.length
+        ? list(members.map(options.renderItem).join(""))
+        : emptyState("还没有成员", options.emptyGroupText || "添加时选择这个分组即可归入");
+      html += section(
+        group.name,
+        members.length ? members.length + " 个" : "",
+        body,
+        options.groupActions ? options.groupActions(group) : "",
+      );
+    });
+    if (loose.length || !groups.length) {
+      var looseBody = loose.length
+        ? list(loose.map(options.renderItem).join(""))
+        : emptyState(options.emptyTitle || "暂无内容", options.emptyText || "");
+      html += section(options.ungroupedTitle || "未分组", loose.length ? loose.length + " 个" : "", looseBody);
+    }
+    return html;
   }
 
   function facts(pairs) {
@@ -367,6 +450,82 @@
     return ctrl;
   }
 
+
+  var currentActionMenu = null;
+
+  // Centered floating action menu for per-item management actions. One
+  // shared implementation for every page: a modal dialog centered on
+  // screen (phones included, never an edge drawer); backdrop click and Esc
+  // close it. Selecting an item closes the menu first, then runs the
+  // onSelect of the item; items that need a form open openFormDialog from
+  // there. options: { title, items: [{ label, hint, danger, onSelect }],
+  // cancelLabel }
+  function openActionMenu(options) {
+    options = options || {};
+    if (currentActionMenu) currentActionMenu.close();
+    var dialog = document.createElement("dialog");
+    dialog.className = "action-menu";
+    dialog.setAttribute("aria-label", options.title || "操作菜单");
+    var card = document.createElement("div");
+    card.className = "action-menu-card";
+    if (options.title) {
+      var heading = document.createElement("h2");
+      heading.className = "action-menu-title";
+      heading.textContent = options.title;
+      card.append(heading);
+    }
+    var listBox = document.createElement("div");
+    listBox.className = "action-menu-list";
+    (options.items || []).forEach(function (item) {
+      var button = document.createElement("button");
+      button.type = "button";
+      button.className = "action-menu-item" + (item.danger ? " danger" : "");
+      var label = document.createElement("span");
+      label.textContent = item.label || "";
+      button.append(label);
+      if (item.hint) {
+        var hint = document.createElement("span");
+        hint.className = "action-menu-hint";
+        hint.textContent = item.hint;
+        button.append(hint);
+      }
+      button.addEventListener("click", function () {
+        ctrl.close();
+        if (typeof item.onSelect === "function") item.onSelect();
+      });
+      listBox.append(button);
+    });
+    var cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "action-menu-item cancel";
+    cancel.textContent = options.cancelLabel || "取消";
+    cancel.addEventListener("click", function () {
+      ctrl.close();
+    });
+    listBox.append(cancel);
+    card.append(listBox);
+    dialog.append(card);
+    document.body.append(dialog);
+    var ctrl = {
+      dialog: dialog,
+      close: function () {
+        if (dialog.open) dialog.close();
+      },
+    };
+    currentActionMenu = ctrl;
+    dialog.addEventListener("click", function (event) {
+      if (event.target === dialog) ctrl.close();
+    });
+    dialog.addEventListener("close", function () {
+      document.body.classList.remove("modal-open");
+      if (currentActionMenu === ctrl) currentActionMenu = null;
+      dialog.remove();
+    });
+    dialog.showModal();
+    document.body.classList.add("modal-open");
+    return ctrl;
+  }
+
   document.addEventListener("click", function (event) {
     var target = event.target;
     if (!(target instanceof Element)) return;
@@ -412,5 +571,9 @@
     formatMinute: formatMinute,
     askConfirm: askConfirm,
     openFormDialog: openFormDialog,
+    openActionMenu: openActionMenu,
+    addBar: addBar,
+    groupSelect: groupSelect,
+    groupedSections: groupedSections,
   };
 })();
