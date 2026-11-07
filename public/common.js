@@ -138,6 +138,16 @@
     return html;
   }
 
+  function badge(label, tone) {
+    return '<span class="badge' + (tone ? " is-" + tone : "") + '">' + escapeHtml(label) + "</span>";
+  }
+
+  // Prefer the server's error string. fallback is only for an empty body.
+  function explain(value, fallback) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+    return fallback || "操作失败，请稍后重试";
+  }
+
   function facts(pairs) {
     if (!pairs || !pairs.length) return "";
     return (
@@ -558,6 +568,8 @@
     statusPill: statusPill,
     emptyState: emptyState,
     section: section,
+    badge: badge,
+    explain: explain,
     facts: facts,
     record: record,
     list: list,

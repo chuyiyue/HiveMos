@@ -266,4 +266,80 @@ img, svg, video, canvas { max-width: 100%; }
 /* 移动端统计卡一行两个 */
 @media (max-width: 767px) {
   .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+.section-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; }
+.section-head .section-actions { align-items: center; }
+
+.strength { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; margin-top: 6px; }
+.strength i { display: block; height: 4px; border-radius: var(--r-pill); background: var(--border); }
+.strength[data-score="1"] i:nth-child(-n + 1) { background: var(--danger); }
+.strength[data-score="2"] i:nth-child(-n + 2) { background: var(--warning); }
+.strength[data-score="3"] i:nth-child(-n + 3) { background: var(--accent); }
+.strength[data-score="4"] i:nth-child(-n + 4) { background: var(--success); }
+.strength-label { margin: 4px 0 0; min-height: 1em; color: var(--text-3); font-size: var(--fs-xs); }
+
+.inline-panel {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  background: var(--bg-sunken);
+}
+.inline-panel .subtle { margin: 0; }
+.inline-panel .callout { margin: 0; }
+.recovery-codes {
+  margin: 0;
+  padding: 10px 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  background: var(--surface);
+  border-radius: var(--r-sm);
+}
+
+.session-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--bg);
+}
+.session-row.is-current { border-color: var(--accent); background: var(--accent-soft); }
+.session-main { display: grid; gap: 2px; min-width: 0; flex: 1; overflow-wrap: anywhere; }
+.session-title { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.session-title h3 { margin: 0; }
+.session-row .subtle { margin: 0; }
+.session-row > button { flex: none; }
+.session-row .confirm-slot { flex: 1 0 100%; }
+
+.toasts {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: var(--z-toast);
+  display: grid;
+  gap: 8px;
+  width: min(360px, calc(100% - 32px));
+  pointer-events: none;
+}
+.toast {
+  padding: 12px 14px;
+  border-radius: var(--r-md);
+  background: var(--toast-bg);
+  color: var(--toast-ink);
+  box-shadow: var(--shadow-2);
+  font-size: var(--fs-sm);
+}
+
+@media (max-width: 639px) {
+  .session-row { align-items: stretch; flex-direction: column; }
+  .session-row > button { width: 100%; }
+>>>>>>> origin/feat/admin-accounts
 }
