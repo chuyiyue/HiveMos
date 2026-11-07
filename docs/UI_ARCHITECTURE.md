@@ -173,7 +173,6 @@
 | memory-soul | 记忆与 Soul | `/memory-soul.html` | `/memory-soul.js` | `icon-memory` |
 | mcp-skills | MCP 与 Skills | `/mcp-skills.html` | `/mcp-skills.js` | `icon-plug` |
 | tasks-calendar | 任务与日历 | `/tasks-calendar.html` | `/tasks-calendar.js` | `icon-tasks` |
-| gateway | 模型网关 | `/gateway.html` | `/gateway.js` | `icon-gateway` |
 | vault | 保险库 | `/vault.html` | `/vault.js` | `icon-lock` |
 | settings | 设置 | `/settings.html` | `/settings.js` | `icon-settings` |
 | login | 登录 | `/login.html` | `/login.js` | `icon-log-in` |
@@ -329,7 +328,6 @@ public/
   memory-soul.html + memory-soul.js
   mcp-skills.html + mcp-skills.js
   tasks-calendar.html + tasks-calendar.js
-  gateway.html + gateway.js
   vault.html + vault.js
   settings.html + settings.js
   login.html + login.js
