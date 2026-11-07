@@ -216,3 +216,117 @@ dialog.modal::backdrop { background: var(--overlay); }
     border-radius: 0;
   }
 }
+
+/* Top action row: primary add button grows, add-group sits beside it. */
+.add-bar { display: flex; gap: 10px; }
+.add-bar .add-button { flex: 1 1 auto; width: auto; }
+.add-group-button {
+  flex: none;
+  min-height: 52px;
+  padding: 12px 18px;
+  font-size: var(--fs-md);
+  font-weight: 600;
+  border-radius: var(--r-lg);
+}
+
+/* Small actions parked at the right of a section head (group rename/delete). */
+.section-actions { display: flex; gap: 8px; margin-left: auto; }
+.section-actions button { min-height: 32px; padding: 4px 10px; font-size: var(--fs-sm); }
+
+/* Centered floating action menu (openActionMenu). Deliberately not a
+   drawer: it stays centered with margins on phones too. */
+dialog.action-menu {
+  position: fixed;
+  inset: 0;
+  margin: auto;
+  width: min(360px, calc(100% - 48px));
+  height: fit-content;
+  max-height: min(80dvh, 560px);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+}
+
+dialog.action-menu::backdrop { background: var(--overlay); }
+
+.action-menu-card {
+  background: var(--surface);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-3);
+  padding: 10px;
+  max-height: min(80dvh, 560px);
+  overflow-y: auto;
+}
+
+.action-menu-title { margin: 6px 10px 10px; font-size: var(--fs-md); }
+
+.action-menu-list { display: grid; gap: 2px; }
+
+.action-menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  min-height: 44px;
+  padding: 10px;
+  background: transparent;
+  border: 0;
+  border-radius: var(--r-md);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.action-menu-item:hover { background: var(--surface-hover); }
+
+.action-menu-item.danger { color: var(--danger-text); }
+
+.action-menu-item.cancel {
+  justify-content: center;
+  color: var(--text-2);
+  margin-top: 6px;
+  border-top: 1px solid var(--border);
+  border-radius: 0 0 var(--r-md) var(--r-md);
+}
+
+.action-menu-hint { color: var(--text-3); font-size: var(--fs-sm); }
+
+/* Permission rows with project switches (agent advanced settings). */
+.perm-list { display: grid; }
+.perm-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 2px;
+  border-bottom: 1px solid var(--border);
+}
+.perm-row:last-child { border-bottom: 0; }
+.perm-meta strong { display: block; font-weight: 600; }
+.switch {
+  position: relative;
+  flex: none;
+  width: 46px;
+  min-height: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 999px;
+  background: var(--bg-sunken);
+  border: 1px solid var(--border-strong);
+}
+.switch .switch-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--surface);
+  box-shadow: var(--shadow-1);
+  transition: left var(--dur-fast) var(--ease);
+}
+.switch[aria-checked="true"] { background: var(--accent-button); border-color: transparent; }
+.switch[aria-checked="true"] .switch-knob { left: 20px; background: var(--on-accent); }
