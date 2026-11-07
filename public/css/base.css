@@ -61,7 +61,7 @@ button, .button, a.button {
 }
 
 button:hover, .button:hover, a.button:hover { background: var(--accent-button-hover); }
-button:active, .button:active { transform: scale(0.98); }
+/* press feedback lives in pages.css (interaction polish); no transform here */
 
 button.secondary, a.button.secondary, .secondary {
   background: var(--surface);
