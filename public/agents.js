@@ -8,8 +8,6 @@
     name: "",
     notice: "",
     noticeKind: "danger",
-    token: "",
-    tokenName: "",
     busy: false,
   };
 
@@ -22,18 +20,9 @@
   }
 
   function noticeHtml() {
-    var html = "";
-    if (state.token) {
-      html +=
-        '<div class="callout ok" role="status"><p>令牌只显示这一次。离开或刷新页面后无法再查看，请立刻复制</p>' +
-        C.copyLine(state.token, "复制令牌") +
-        '<div class="row-actions"><button type="button" class="secondary" data-action="dismiss-token">我已复制</button></div></div>';
-    }
-    if (state.notice) {
-      var kind = state.noticeKind === "ok" ? "ok" : "danger";
-      html += '<p class="callout ' + kind + '" role="status">' + C.escapeHtml(state.notice) + "</p>";
-    }
-    return html;
+    if (!state.notice) return "";
+    var kind = state.noticeKind === "ok" ? "ok" : "danger";
+    return '<p class="callout ' + kind + '" role="status">' + C.escapeHtml(state.notice) + "</p>";
   }
 
   function card(agent) {
@@ -69,19 +58,12 @@
         ? '<p class="callout danger" role="alert">' + C.escapeHtml(state.loadError) + "</p>"
         : state.agents.length
           ? C.list(state.agents.map(card).join(""))
-          : C.emptyState("还没有 Agent", "在下方输入名字并生成令牌");
-    var form =
-      '<section class="panel"><div class="section-head"><h2>生成令牌</h2></div><form id="agent-form" class="form-grid" novalidate>' +
-      "<label>名字" +
-      '<input data-field="name" name="name" maxlength="64" autocomplete="off" value="' +
-      C.escapeHtml(state.name) +
-      '" />' +
-      '<p class="subtle field-hint">生成后请立刻复制。令牌不会再次显示</p></label>' +
-      '<div class="row-actions"><button type="submit">生成令牌</button></div></form></section>';
+          : C.emptyState("还没有 Agent", "点上方「生成令牌」创建第一个");
+    var addBar = '<button type="button" class="add-button" data-action="open-create">生成令牌</button>';
     C.mount(
       C.layout(
         "",
-        '<div class="stack">' + noticeHtml() + C.section("已登记", state.agents.length ? state.agents.length + " 个" : "", list) + form + "</div>",
+        '<div class="stack">' + noticeHtml() + addBar + C.section("已登记", state.agents.length ? state.agents.length + " 个" : "", list) + "</div>",
       ),
     );
     bind();
@@ -92,26 +74,33 @@
     var page = document.getElementById("page");
     if (!page || bound) return;
     bound = true;
-    page.addEventListener("input", function (event) {
-      var target = event.target;
-      if (target instanceof HTMLElement && target.getAttribute("data-field") === "name") state.name = target.value;
-    });
     page.addEventListener("click", function (event) {
       var target = event.target;
       if (!(target instanceof Element)) return;
       var button = target.closest("[data-action]");
       if (!button || state.busy) return;
       var action = button.getAttribute("data-action");
-      if (action === "dismiss-token") {
-        state.token = "";
-        state.tokenName = "";
-        render();
-      } else if (action === "disable") disable(button.getAttribute("data-id") || "");
+      if (action === "open-create") openCreate();
+      else if (action === "disable") disable(button.getAttribute("data-id") || "");
     });
-    page.addEventListener("submit", function (event) {
-      if (!(event.target instanceof HTMLFormElement) || event.target.id !== "agent-form") return;
-      event.preventDefault();
-      create();
+  }
+
+  function openCreate() {
+    C.openFormDialog({
+      title: "生成令牌",
+      bodyHtml:
+        "<label>名字" +
+        '<input data-field="name" name="name" maxlength="64" autocomplete="off" value="' +
+        C.escapeHtml(state.name) +
+        '" />' +
+        '<p class="subtle field-hint">生成后请立刻复制。令牌不会再次显示</p></label>',
+      submitLabel: "生成令牌",
+      onSubmit: function (ctrl) {
+        create(ctrl);
+      },
+      onClose: function () {
+        render();
+      },
     });
   }
 
@@ -137,31 +126,30 @@
     return true;
   }
 
-  function create() {
+  // The plaintext token only ever exists in this closure and in the
+  // dialog DOM: closing the dialog removes both, and page state never
+  // holds it, so a render() can never leak it back onto the page.
+  function create(ctrl) {
     if (state.busy) return;
+    var input = ctrl.form.querySelector('[data-field="name"]');
+    state.name = input ? input.value : state.name;
     var name = state.name.trim();
     if (!name) {
-      state.token = "";
-      state.notice = "请填写 Agent 名字";
-      state.noticeKind = "danger";
-      render();
+      ctrl.setError("请填写 Agent 名字");
       return;
     }
     state.busy = true;
+    ctrl.setBusy(true);
     api("POST", "/api/agents", { name: name })
       .then(function (result) {
         state.busy = false;
         if (authRedirect(result.status)) return;
         if (!result.data || result.data.ok !== true || !result.data.agent) {
-          state.token = "";
-          state.notice = (result.data && result.data.error) || "没有生成，请重试";
-          state.noticeKind = "danger";
-          render();
+          ctrl.setBusy(false);
+          ctrl.setError((result.data && result.data.error) || "没有生成，请重试");
           return;
         }
         var agent = result.data.agent;
-        state.token = agent.token || "";
-        state.tokenName = agent.name || name;
         state.notice = "";
         state.name = "";
         var listed = {
@@ -176,13 +164,15 @@
             return item.id !== listed.id;
           }),
         );
-        render();
+        ctrl.showResult(
+          "<p>令牌只显示这一次。关掉这个面板后无法再查看，请立刻复制</p>" + C.copyLine(agent.token || "", "复制令牌"),
+          "我已复制",
+        );
       })
       .catch(function () {
         state.busy = false;
-        state.notice = "网络异常，请重试";
-        state.noticeKind = "danger";
-        render();
+        ctrl.setBusy(false);
+        ctrl.setError("网络异常，请重试");
       });
   }
 

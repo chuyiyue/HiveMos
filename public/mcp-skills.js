@@ -176,7 +176,9 @@
       tagsHtml(server.tags) +
       '<div class="row-actions"><button type="button" class="secondary" data-action="open" data-id="' +
       C.escapeHtml(server.id) +
-      '">查看</button></div></div><dl class="kv">' +
+      '">查看</button><button type="button" class="secondary" data-action="edit" data-id="' +
+      C.escapeHtml(server.id) +
+      '">编辑</button></div></div><dl class="kv">' +
       kv("分类", C.escapeHtml(server.category || "未分类")) +
       kv("快照", pill(meta[0], meta[1]) + (time ? ' <span class="subtle">' + C.escapeHtml(time) + "</span>" : "")) +
       kv("版本", '<span class="mono">v' + C.escapeHtml(String(server.version)) + "</span>") +
@@ -208,7 +210,7 @@
           .join("") +
         "</ul>" +
         copyBlock(JSON.stringify(server.snapshot, null, 2), "复制快照")
-      : C.emptyState("还没有工具快照", "http 与 sse 可以刷新探活，stdio 请在下方手填");
+      : C.emptyState("还没有工具快照", "http 与 sse 可以刷新探活，stdio 请用手填快照");
     var audits = state.audit.filter(function (item) {
       return item.server_id === server.id;
     });
@@ -257,24 +259,20 @@
       auditHtml +
       '<div class="row-actions"><button type="button" data-action="refresh" data-id="' +
       C.escapeHtml(server.id) +
-      '">刷新快照</button><button type="button" class="danger" data-action="delete" data-id="' +
+      '">刷新快照</button><button type="button" class="secondary" data-action="snapshot" data-id="' +
       C.escapeHtml(server.id) +
-      '">删除</button></div><div id="mcp-confirm"></div>' +
-      '<form id="snapshot-form" class="form-grid stack-form" novalidate><h3>手填快照</h3><p class="subtle field-hint">把 tools/list 的 JSON 贴在这里。stdio 不能自动探活</p>' +
-      '<textarea data-field="snapshotText" rows="8">' +
-      C.escapeHtml(state.snapshotText) +
-      '</textarea><button type="submit" class="secondary">保存手填快照</button></form></section>'
+      '">手填快照</button><button type="button" class="danger" data-action="delete" data-id="' +
+      C.escapeHtml(server.id) +
+      '">删除</button></div><div id="mcp-confirm"></div></section>'
     );
   }
 
-  function formHtml() {
+  // Fields only: the dialog supplies the <form>, title and actions.
+  function formFieldsHtml() {
     var draft = state.draft;
     var current = state.mode === "edit" ? selected() : null;
     var aiHint = current && current.summary_source === "ai" && current.summary ? "当前 AI 简介：" + current.summary : "留空时由 AI 补一句，已有人工简介不会被覆盖";
     return (
-      '<section class="panel" id="mcp-form-panel"><div class="section-head"><h2>' +
-      (state.mode === "edit" ? "编辑条目" : "登记条目") +
-      "</h2></div><form id=\"mcp-form\" class=\"form-grid\" novalidate>" +
       field("名称", input("name", draft.name, 'maxlength="64" spellcheck="false" autocomplete="off"'), "小写字母、数字、下划线或连字符") +
       field("标题", input("title", draft.title, 'maxlength="120"')) +
       field("说明", area("description", draft.description, 3)) +
@@ -287,10 +285,7 @@
       field("分类", input("category", draft.category, 'maxlength="40"')) +
       field("简介", input("summary", draft.summary, 'maxlength="200"'), aiHint) +
       field("状态", choices("status", draft.status, [["active", "已启用"], ["disabled", "已停用"]])) +
-      field("存活秒数", input("ttl_seconds", draft.ttl_seconds, 'inputmode="numeric"'), "Agent 在这段时间内复用配置，过期后重新 mcp_get") +
-      '<div class="row-actions"><button type="submit">' +
-      (state.mode === "edit" ? "保存修改" : "登记条目") +
-      '</button><button type="button" class="secondary" data-action="create-new">改为新增</button></div></form></section>'
+      field("存活秒数", input("ttl_seconds", draft.ttl_seconds, 'inputmode="numeric"'), "Agent 在这段时间内复用配置，过期后重新 mcp_get")
     );
   }
 
@@ -338,14 +333,14 @@
     if (state.loading) body += C.section("服务", "", C.emptyState("正在读取", "稍等片刻"));
     else if (state.loadError) body += C.section("服务", "", '<p class="callout danger" role="alert">' + C.escapeHtml(state.loadError) + "</p>");
     else {
+      body += '<button type="button" class="add-button" data-action="add">添加条目</button>';
       body += C.section(
         "服务",
         state.servers.length ? state.servers.length + " 个" : "",
-        state.servers.length ? C.list(state.servers.map(card).join("")) : C.emptyState("还没有 MCP 条目", "用下方表单登记第一条"),
+        state.servers.length ? C.list(state.servers.map(card).join("")) : C.emptyState("还没有 MCP 条目", "点上方「添加条目」登记第一条"),
       );
       body += detailHtml(selected());
     }
-    body += formHtml();
     C.mount(
       C.layout(
         "",
@@ -379,7 +374,6 @@
     bound = true;
     page.addEventListener("input", onInput);
     page.addEventListener("click", onClick);
-    page.addEventListener("submit", onSubmit);
   }
 
   function onInput(event) {
@@ -417,31 +411,75 @@
     var action = button.getAttribute("data-action");
     var id = button.getAttribute("data-id") || state.selectedId;
     if (action === "open") openServer(id, true);
-    else if (action === "create-new") startCreate();
+    else if (action === "add") openCreateDialog();
+    else if (action === "edit") openEditDialog(id);
+    else if (action === "snapshot") openSnapshotDialog(id);
     else if (action === "refresh") refresh(id);
     else if (action === "delete") removeServer(id);
   }
 
-  function onSubmit(event) {
-    var form = event.target;
-    if (!(form instanceof HTMLFormElement)) return;
-    if (form.id === "mcp-form") {
-      event.preventDefault();
-      saveServer();
-    } else if (form.id === "snapshot-form") {
-      event.preventDefault();
-      saveSnapshot();
-    }
+  // The dialog lives outside #page, so the page-level delegation never
+  // sees its events; wire the same handlers onto the dialog element so
+  // data-field inputs and data-choice groups keep updating state.draft.
+  function wireDialog(ctrl) {
+    ctrl.dialog.addEventListener("input", onInput);
+    ctrl.dialog.addEventListener("click", onClick);
   }
 
-  function startCreate() {
+  function openServerDialog() {
+    var creating = state.mode !== "edit";
+    var ctrl = C.openFormDialog({
+      title: creating ? "登记条目" : "编辑条目",
+      bodyHtml: formFieldsHtml(),
+      submitLabel: creating ? "登记条目" : "保存修改",
+      wide: true,
+      onSubmit: function (c) {
+        saveServer(c);
+      },
+    });
+    wireDialog(ctrl);
+  }
+
+  function openCreateDialog() {
+    if (state.busy) return;
     state.mode = "create";
-    state.selectedId = "";
     state.draft = emptyDraft();
-    state.snapshotText = "";
-    state.notice = "";
+    openServerDialog();
+  }
+
+  function openEditDialog(id) {
+    var server = state.servers.find(function (item) {
+      return item.id === id;
+    });
+    if (!server || state.busy) return;
+    state.selectedId = id;
+    state.mode = "edit";
+    state.draft = draftFrom(server);
+    state.snapshotText = server.snapshot ? JSON.stringify(server.snapshot, null, 2) : "";
     render();
-    if (history.replaceState) history.replaceState(null, "", location.pathname);
+    openServerDialog();
+  }
+
+  function openSnapshotDialog(id) {
+    var server = state.servers.find(function (item) {
+      return item.id === id;
+    });
+    if (!server || state.busy) return;
+    if (state.selectedId !== id) openServer(id, false);
+    var ctrl = C.openFormDialog({
+      title: "手填快照",
+      bodyHtml:
+        '<p class="subtle field-hint">把 tools/list 的 JSON 贴在这里。stdio 不能自动探活</p>' +
+        '<textarea data-field="snapshotText" rows="8">' +
+        C.escapeHtml(state.snapshotText) +
+        "</textarea>",
+      submitLabel: "保存手填快照",
+      wide: true,
+      onSubmit: function (c) {
+        saveSnapshot(c);
+      },
+    });
+    wireDialog(ctrl);
   }
 
   function openServer(id, scroll) {
@@ -531,41 +569,60 @@
     };
   }
 
-  function saveServer() {
+  // Failures stay inside the dialog (state.notice is borrowed as the
+  // message, then cleared so the page does not repeat it); success closes
+  // the dialog and lets the page show the notice as before.
+  function dialogFailure(ctrl) {
+    ctrl.setBusy(false);
+    ctrl.setError(state.notice || "没有保存成功，请重试");
+    state.notice = "";
+  }
+
+  function saveServer(ctrl) {
     if (state.busy) return;
     state.busy = true;
+    ctrl.setBusy(true);
     var creating = state.mode !== "edit" || !state.selectedId;
     var url = creating ? "/api/mcp-servers" : "/api/mcp-servers/" + encodeURIComponent(state.selectedId);
     api(creating ? "POST" : "PUT", url, payload())
       .then(function (result) {
         state.busy = false;
         var ok = showResult(result, creating ? "已登记" : "已保存");
+        if (!ok) {
+          dialogFailure(ctrl);
+          return;
+        }
+        ctrl.close();
         render();
-        if (ok && state.selectedId && history.replaceState) history.replaceState(null, "", "#" + encodeURIComponent(state.selectedId));
+        if (state.selectedId && history.replaceState) history.replaceState(null, "", "#" + encodeURIComponent(state.selectedId));
       })
       .catch(function () {
         state.busy = false;
-        state.notice = "网络异常，请重试";
-        state.noticeKind = "danger";
-        render();
+        ctrl.setBusy(false);
+        ctrl.setError("网络异常，请重试");
       });
   }
 
-  function saveSnapshot() {
+  function saveSnapshot(ctrl) {
     var server = selected();
     if (!server || state.busy) return;
     state.busy = true;
+    ctrl.setBusy(true);
     api("PUT", "/api/mcp-servers/" + encodeURIComponent(server.id), { snapshot_json: state.snapshotText })
       .then(function (result) {
         state.busy = false;
-        showResult(result, "已保存手填快照");
+        var ok = showResult(result, "已保存手填快照");
+        if (!ok) {
+          dialogFailure(ctrl);
+          return;
+        }
+        ctrl.close();
         render();
       })
       .catch(function () {
         state.busy = false;
-        state.notice = "网络异常，请重试";
-        state.noticeKind = "danger";
-        render();
+        ctrl.setBusy(false);
+        ctrl.setError("网络异常，请重试");
       });
   }
 

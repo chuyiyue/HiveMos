@@ -264,6 +264,109 @@
     });
   }
 
+  var currentFormDialog = null;
+
+  // Shared form dialog built on <dialog>. The element lives on <body>,
+  // outside #page, so a page render() (innerHTML swap) never destroys it;
+  // it removes itself from the DOM when closed. Pages must use this instead
+  // of inline page forms or window.prompt.
+  // options: { title, bodyHtml, submitLabel, cancelLabel, wide, onSubmit, onClose }
+  // onSubmit(ctrl) decides what happens next: ctrl.setError() keeps the
+  // dialog open with a message, ctrl.showResult() swaps in a result view,
+  // ctrl.close() dismisses it.
+  function openFormDialog(options) {
+    options = options || {};
+    if (currentFormDialog) currentFormDialog.close();
+    var dialog = document.createElement("dialog");
+    dialog.className = "modal" + (options.wide ? " wide" : "");
+    dialog.setAttribute("aria-label", options.title || "表单");
+    var card = document.createElement("div");
+    card.className = "modal-card";
+    var heading = document.createElement("h2");
+    heading.className = "modal-title";
+    heading.textContent = options.title || "";
+    var form = document.createElement("form");
+    form.className = "modal-form";
+    form.setAttribute("novalidate", "");
+    var body = document.createElement("div");
+    body.className = "modal-body form-grid";
+    body.innerHTML = options.bodyHtml || "";
+    var error = document.createElement("p");
+    error.className = "field-error modal-error";
+    error.hidden = true;
+    var actions = document.createElement("div");
+    actions.className = "modal-actions";
+    var cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "secondary";
+    cancel.textContent = options.cancelLabel || "取消";
+    var submit = document.createElement("button");
+    submit.type = "submit";
+    submit.textContent = options.submitLabel || "保存";
+    actions.append(cancel, submit);
+    form.append(body, error, actions);
+    card.append(heading, form);
+    dialog.append(card);
+    document.body.append(dialog);
+
+    var submitLabel = submit.textContent;
+    var ctrl = {
+      dialog: dialog,
+      form: form,
+      close: function () {
+        if (dialog.open) dialog.close();
+      },
+      setError: function (message) {
+        if (message) {
+          error.textContent = message;
+          error.hidden = false;
+        } else {
+          error.textContent = "";
+          error.hidden = true;
+        }
+      },
+      setBusy: function (busy) {
+        submit.disabled = !!busy;
+        cancel.disabled = !!busy;
+        submit.textContent = busy ? "处理中…" : submitLabel;
+      },
+      setBody: function (html) {
+        body.innerHTML = html;
+      },
+      showResult: function (html, closeLabel) {
+        body.innerHTML = html;
+        error.hidden = true;
+        submit.hidden = true;
+        cancel.disabled = false;
+        cancel.textContent = closeLabel || "完成";
+        cancel.focus();
+      },
+    };
+    currentFormDialog = ctrl;
+    cancel.addEventListener("click", function () {
+      ctrl.close();
+    });
+    dialog.addEventListener("click", function (event) {
+      if (event.target === dialog) ctrl.close();
+    });
+    form.addEventListener("submit", function (event) {
+      event.preventDefault();
+      ctrl.setError("");
+      if (typeof options.onSubmit === "function") options.onSubmit(ctrl);
+    });
+    dialog.addEventListener("close", function () {
+      document.body.classList.remove("modal-open");
+      if (currentFormDialog === ctrl) currentFormDialog = null;
+      dialog.remove();
+      if (typeof options.onClose === "function") options.onClose();
+    });
+    dialog.showModal();
+    document.body.classList.add("modal-open");
+    var first = form.querySelector("input, textarea, select");
+    if (first) first.focus();
+    return ctrl;
+  }
+
   document.addEventListener("click", function (event) {
     var target = event.target;
     if (!(target instanceof Element)) return;
@@ -308,5 +411,6 @@
     logout: logout,
     formatMinute: formatMinute,
     askConfirm: askConfirm,
+    openFormDialog: openFormDialog,
   };
 })();
