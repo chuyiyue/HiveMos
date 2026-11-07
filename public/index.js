@@ -28,8 +28,8 @@
     "<div class=\"stack\">" +
     C.section("最近动态", "2026-11-07", feedHtml) +
     C.section("告警", "", C.emptyState("还没有告警", "运行中的异常会列在这里")) +
-    "</div>" +
-    statHtml;
+    statHtml +
+    "</div>";
 
   C.mount(
     C.layout(
