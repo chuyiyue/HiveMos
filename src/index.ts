@@ -20,6 +20,7 @@ const MAX_CREDENTIAL_CHARS = 1024;
 // Paths login.html actually loads, plus the stylesheets imported by /style.css.
 const PUBLIC_ASSETS = new Set([
   "/login.html",
+  "/login",
   "/style.css",
   "/theme-boot.js",
   "/common.js",
@@ -83,8 +84,8 @@ function isDocument(path: string): boolean {
 
 function loginLocation(url: URL): string {
   const next = url.pathname + url.search;
-  if (next.length === 0 || next.length > 2048) return "/login.html";
-  return "/login.html?next=" + encodeURIComponent(next);
+  if (next.length === 0 || next.length > 2048) return "/login";
+  return "/login?next=" + encodeURIComponent(next);
 }
 
 function deny(request: Request, url: URL, path: string): Response {
