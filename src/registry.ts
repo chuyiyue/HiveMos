@@ -76,6 +76,7 @@ export interface PublicAgent {
   group_id: string | null;
   permissions: string[];
   last_seen_at: number | null;
+  pinned_at: number | null;
   created_at: number;
 }
 
@@ -102,6 +103,7 @@ interface AgentRow {
   group_id: string | null;
   permissions: string | null;
   last_seen_at: number | string | null;
+  pinned_at: number | string | null;
   created_at: number | string;
 }
 
@@ -1200,12 +1202,13 @@ function toPublicAgent(row: AgentRow): PublicAgent {
     group_id: row.group_id ?? null,
     permissions: parsePermissions(row.permissions),
     last_seen_at: asNumber(row.last_seen_at),
+    pinned_at: asNumber(row.pinned_at),
     created_at: asNumber(row.created_at) ?? 0,
   };
 }
 
 async function getAgentRow(db: D1Database, id: string): Promise<AgentRow | null> {
-  return prepare(db, "SELECT id, name, status, group_id, permissions, last_seen_at, created_at FROM agents WHERE id = ?", [id]).first<AgentRow>();
+  return prepare(db, "SELECT id, name, status, group_id, permissions, last_seen_at, pinned_at, created_at FROM agents WHERE id = ?", [id]).first<AgentRow>();
 }
 
 // Resolves an optional group reference for the agent scope. Absent or blank
@@ -1223,9 +1226,43 @@ async function resolveAgentGroupId(db: D1Database, value: unknown): Promise<{ ok
 export async function listAgents(db: D1Database): Promise<PublicAgent[]> {
   const listed = await prepare(
     db,
-    "SELECT id, name, status, group_id, permissions, last_seen_at, created_at FROM agents ORDER BY created_at DESC",
+    "SELECT id, name, status, group_id, permissions, last_seen_at, pinned_at, created_at FROM agents ORDER BY created_at DESC",
   ).all<AgentRow>();
   return rowsOf(listed).map(toPublicAgent);
+}
+
+export interface SidebarAgent {
+  id: string;
+  name: string;
+  status: string;
+  last_seen_at: number | null;
+  pinned: boolean;
+}
+
+// The sidebar rail is assembled here so every client shows the same list:
+// pinned agents first (in pin order, never capped by the limit), then the
+// most recently active agents fill the remaining slots up to the limit.
+// Only enabled agents appear; a disabled agent drops out of the rail.
+export async function listSidebarAgents(db: D1Database, limit: number): Promise<SidebarAgent[]> {
+  const toItem = (row: AgentRow, pinned: boolean): SidebarAgent => ({
+    id: row.id,
+    name: row.name,
+    status: row.status,
+    last_seen_at: asNumber(row.last_seen_at),
+    pinned,
+  });
+  const pinnedListed = await prepare(
+    db,
+    "SELECT id, name, status, group_id, permissions, last_seen_at, pinned_at, created_at FROM agents WHERE status = 'active' AND pinned_at IS NOT NULL ORDER BY pinned_at ASC, created_at ASC",
+  ).all<AgentRow>();
+  const pinned = rowsOf(pinnedListed).map((row) => toItem(row, true));
+  if (pinned.length >= limit) return pinned;
+  const fillListed = await prepare(
+    db,
+    "SELECT id, name, status, group_id, permissions, last_seen_at, pinned_at, created_at FROM agents WHERE status = 'active' AND pinned_at IS NULL ORDER BY last_seen_at DESC, created_at DESC LIMIT ?",
+    [limit - pinned.length],
+  ).all<AgentRow>();
+  return pinned.concat(rowsOf(fillListed).map((row) => toItem(row, false)));
 }
 
 export async function createAgent(db: D1Database, value: unknown): Promise<{ ok: true; agent: PublicAgent & { token: string } } | Failure> {
@@ -1251,7 +1288,7 @@ export async function createAgent(db: D1Database, value: unknown): Promise<{ ok:
     if (isUniqueError(error)) return { ok: false, status: 409, error: "这个名字已存在" };
     return dbFailure();
   }
-  return { ok: true, agent: { id, name, status: "active", group_id: resolved.groupId, permissions: ["registry"], last_seen_at: null, created_at: now, token } };
+  return { ok: true, agent: { id, name, status: "active", group_id: resolved.groupId, permissions: ["registry"], last_seen_at: null, pinned_at: null, created_at: now, token } };
 }
 
 export async function updateAgent(db: D1Database, id: string, value: unknown): Promise<{ ok: true; agent: PublicAgent } | Failure> {
@@ -1277,8 +1314,13 @@ export async function updateAgent(db: D1Database, id: string, value: unknown): P
     if (!parsedPermissions.ok) return parsedPermissions;
     permissions = parsedPermissions.permissions;
   }
+  let pinnedAt = asNumber(existing.pinned_at);
+  if ("pinned" in body) {
+    if (typeof body.pinned !== "boolean") return { ok: false, status: 400, error: "固定状态不正确" };
+    pinnedAt = body.pinned ? Date.now() : null;
+  }
   try {
-    await prepare(db, "UPDATE agents SET name = ?, group_id = ?, permissions = ? WHERE id = ?", [name, groupId, JSON.stringify(permissions), id]).run();
+    await prepare(db, "UPDATE agents SET name = ?, group_id = ?, permissions = ?, pinned_at = ? WHERE id = ?", [name, groupId, JSON.stringify(permissions), pinnedAt, id]).run();
   } catch (error) {
     if (isUniqueError(error)) return { ok: false, status: 409, error: "这个名字已存在" };
     return dbFailure();
@@ -1318,14 +1360,20 @@ export async function authenticateAgent(
   token: string,
   now: number,
 ): Promise<{ ok: true; agentId: string; permissions: string[] } | Failure> {
-  const row = await prepare(db, "SELECT id, status, permissions FROM agents WHERE token_hash = ?", [await sha256Hex(token)]).first<{
+  const row = await prepare(db, "SELECT id, status, permissions, last_seen_at FROM agents WHERE token_hash = ?", [await sha256Hex(token)]).first<{
     id: string;
     status: string;
     permissions: string | null;
+    last_seen_at: number | string | null;
   }>();
   if (!row) return { ok: false, status: 401, error: "令牌无效" };
   if (row.status !== "active") return { ok: false, status: 401, error: "令牌已停用" };
-  await prepare(db, "UPDATE agents SET last_seen_at = ? WHERE id = ?", [now, row.id]).run();
+  // last_seen_at drives the sidebar fill order; one write per agent per
+  // minute is plenty of resolution, so skip the write inside the window.
+  const seen = asNumber(row.last_seen_at);
+  if (seen === null || now - seen >= 60_000) {
+    await prepare(db, "UPDATE agents SET last_seen_at = ? WHERE id = ?", [now, row.id]).run();
+  }
   return { ok: true, agentId: row.id, permissions: parsePermissions(row.permissions) };
 }
 

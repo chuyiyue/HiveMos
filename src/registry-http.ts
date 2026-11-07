@@ -1,6 +1,7 @@
 // Admin REST for the registry. The caller has already checked the session.
 
 import { isCrossSite, json } from "./http";
+import { getSidebarPinLimit } from "./accounts";
 import type { Env, WaitCtx } from "./env";
 import {
   createAgent,
@@ -13,6 +14,7 @@ import {
   listAudit,
   listGroups,
   listServers,
+  listSidebarAgents,
   readPublicServer,
   refreshServerSnapshot,
   renameGroup,
@@ -34,6 +36,7 @@ export async function handleRegistryRequest(request: Request, env: Env, ctx: Wai
   if (path === "/api/groups") return groupCollection(request, env);
   const group = /^\/api\/groups\/([A-Za-z0-9_-]+)$/.exec(path);
   if (group && group[1]) return groupOne(request, env, group[1]);
+  if (path === "/api/sidebar/agents") return sidebarAgents(request, env);
   if (path === "/api/agents") return agentCollection(request, env);
   const rotate = /^\/api\/agents\/([A-Za-z0-9_-]+)\/rotate$/.exec(path);
   if (rotate && rotate[1]) return agentRotate(request, env, rotate[1]);
@@ -106,6 +109,16 @@ async function audit(request: Request, env: Env): Promise<Response> {
   if (request.method.toUpperCase() !== "GET") return methodNotAllowed("GET");
   try {
     return json({ ok: true, audit: await listAudit(env.DB) });
+  } catch {
+    return dbError();
+  }
+}
+
+async function sidebarAgents(request: Request, env: Env): Promise<Response> {
+  if (request.method.toUpperCase() !== "GET") return methodNotAllowed("GET");
+  try {
+    const limit = await getSidebarPinLimit(env.DB);
+    return json({ ok: true, limit, agents: await listSidebarAgents(env.DB, limit) });
   } catch {
     return dbError();
   }
