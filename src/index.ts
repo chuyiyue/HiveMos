@@ -7,8 +7,11 @@ import {
   sessionCookieHeader,
   sha256Hex,
 } from "./auth";
-import type { Env } from "./env";
+import type { Env, ScheduledEvent, WaitCtx } from "./env";
 import { isCrossSite, json, readCookie } from "./http";
+import { handleMcp } from "./mcp";
+import { handleRegistryRequest } from "./registry-http";
+import { refreshActiveSnapshots } from "./registry";
 import { createSession, deleteSession, readSession } from "./session";
 
 const MAX_BODY_BYTES = 16 * 1024;
@@ -31,13 +34,17 @@ const BAD_CREDENTIALS = "用户名或密码不正确";
 const MISSING_CREDENTIALS = "请填写账号和密码";
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx?: WaitCtx): Promise<Response> {
     const url = new URL(request.url);
     const path = url.pathname.replace(/\/+$/, "") || "/";
+    const wait = ctx ?? { waitUntil(promise: Promise<unknown>) { promise.catch(() => undefined); } };
     try {
       if (isPublicAsset(path)) return env.ASSETS.fetch(request);
       if (path === "/api/health") return json({ ok: true, service: "hivemos" });
       if (path === "/api/auth/login") return login(request, env);
+      // Agents POST JSON-RPC here with their own bearer. GET stays on the session
+      // gate so html_handling can still serve mcp.html at /mcp.
+      if (path === "/mcp" && request.method.toUpperCase() === "POST") return handleMcp(request, env, wait);
 
       const token = readCookie(request.headers.get("cookie"), SESSION_COOKIE);
       const signedIn = await readSession(env.DB, token, Date.now());
@@ -45,11 +52,20 @@ export default {
 
       if (path === "/api/auth/logout") return logout(request, env);
       if (path === "/api/auth/me") return me(request, env);
-      if (path === "/mcp" || path.startsWith("/mcp/")) return env.ASSETS.fetch(request);
+      const registry = await handleRegistryRequest(request, env, wait, path);
+      if (registry) return registry;
       if (path === "/api" || path.startsWith("/api/")) return json({ ok: false, error: "未找到" }, 404);
       return env.ASSETS.fetch(request);
     } catch {
       return json({ ok: false, error: "服务器错误" }, 500);
+    }
+  },
+
+  async scheduled(_event: ScheduledEvent, env: Env, ctx: WaitCtx): Promise<void> {
+    try {
+      await refreshActiveSnapshots(env, ctx);
+    } catch {
+      // The next cron retries. A failed sweep must not throw out of the handler.
     }
   },
 };

@@ -199,6 +199,71 @@
     });
   }
 
+  function formatMinute(value) {
+    var time = Number(value);
+    if (!Number.isFinite(time) || time <= 0) return "";
+    var date = new Date(time);
+    if (Number.isNaN(date.getTime())) return "";
+    function pad(number) {
+      return String(number).padStart(2, "0");
+    }
+    return date.getFullYear() + "-" + pad(date.getMonth() + 1) + "-" + pad(date.getDate()) + " " + pad(date.getHours()) + ":" + pad(date.getMinutes());
+  }
+
+  var closeConfirm = null;
+
+  // Inline confirm. Pages must use this instead of window.confirm.
+  function askConfirm(options) {
+    var anchor = options && options.anchor;
+    if (!anchor) return Promise.resolve(false);
+    if (closeConfirm) closeConfirm(false);
+    return new Promise(function (resolve) {
+      var panel = document.createElement("div");
+      panel.className = "confirm-panel";
+      panel.setAttribute("role", "group");
+      panel.setAttribute("aria-label", (options && options.title) || "确认");
+      var text = document.createElement("p");
+      text.textContent = (options && options.text) || "";
+      var actions = document.createElement("div");
+      actions.className = "confirm-actions";
+      var cancel = document.createElement("button");
+      cancel.type = "button";
+      cancel.className = "secondary";
+      cancel.textContent = (options && options.cancelLabel) || "取消";
+      var confirm = document.createElement("button");
+      confirm.type = "button";
+      confirm.className = options && options.danger ? "danger" : "";
+      confirm.textContent = (options && options.confirmLabel) || "确认";
+      actions.append(cancel, confirm);
+      panel.append(text, actions);
+      anchor.append(panel);
+      var done = false;
+      function finish(value) {
+        if (done) return;
+        done = true;
+        if (closeConfirm === finish) closeConfirm = null;
+        document.removeEventListener("keydown", onKey, true);
+        panel.remove();
+        resolve(value);
+      }
+      function onKey(event) {
+        if (event.key !== "Escape") return;
+        event.preventDefault();
+        event.stopPropagation();
+        finish(false);
+      }
+      closeConfirm = finish;
+      cancel.addEventListener("click", function () {
+        finish(false);
+      });
+      confirm.addEventListener("click", function () {
+        finish(true);
+      });
+      document.addEventListener("keydown", onKey, true);
+      cancel.focus();
+    });
+  }
+
   document.addEventListener("click", function (event) {
     var target = event.target;
     if (!(target instanceof Element)) return;
@@ -241,5 +306,7 @@
     safeNext: safeNext,
     currentUser: currentUser,
     logout: logout,
+    formatMinute: formatMinute,
+    askConfirm: askConfirm,
   };
 })();

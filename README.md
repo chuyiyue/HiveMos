@@ -3,9 +3,9 @@ HiveMOS — Multi-agent Operating System for agents: panel, memory, soul, skills
 
 ## 项目简介
 
-HiveMos 是多 Agent 的控制面，整站运行在 Cloudflare Workers 上。第一阶段的页面仍是静态骨架，业务名单是写死的占位。管理员登录和会话已经接入
+HiveMos 是多 Agent 的控制面，整站运行在 Cloudflare Workers 上。管理员登录和会话已经接入。MCP 注册表与 Agent 令牌也已接入，其余业务页仍是静态骨架
 
-界面沿用 SMSinBox 的多页外壳（侧栏、顶栏、注册表驱动的导航），配色换成 Claude 官网的暖象牙与陶土橙。业务接口仍在后续阶段
+界面沿用 SMSinBox 的多页外壳（侧栏、顶栏、注册表驱动的导航），配色换成 Claude 官网的暖象牙与陶土橙。注册表说明见 [docs/MCP_REGISTRY.md](docs/MCP_REGISTRY.md)
 
 ## UI 架构
 
@@ -13,7 +13,10 @@ HiveMos 是多 Agent 的控制面，整站运行在 Cloudflare Workers 上。第
 
 ## 本地预览
 
+先应用本地迁移，再启动：
+
 ```bash
+npx wrangler d1 migrations apply hivemos --local
 npx wrangler dev
 ```
 
