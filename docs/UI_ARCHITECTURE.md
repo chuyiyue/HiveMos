@@ -169,7 +169,7 @@
 | --- | --- | --- | --- | --- |
 | overview | 总览 | `/` | `/index.js` | `icon-layout` |
 | agents | Agent 集群 | `/agents.html` | `/agents.js` | `icon-bot` |
-| machines | 云电脑 | `/machines.html` | `/machines.js` | `icon-monitor` |
+| machines | 云主机 | `/machines.html` | `/machines.js` | `icon-monitor` |
 | memory-soul | 记忆与 Soul | `/memory-soul.html` | `/memory-soul.js` | `icon-memory` |
 | mcp-skills | MCP 与 Skills | `/mcp-skills.html` | `/mcp-skills.js` | `icon-plug` |
 | tasks-calendar | 任务与日历 | `/tasks-calendar.html` | `/tasks-calendar.js` | `icon-tasks` |
@@ -184,19 +184,19 @@
 ### 4.1 总览 `/`
 
 - 导语：工作区此刻的规模。
-- 六张统计卡：Agent、云电脑、任务、记忆、Soul、保险库。数字来自各页 mock 的计数。
+- 六张统计卡：Agent、云主机、任务、记忆、Soul、保险库。数字来自各页 mock 的计数。
 - 「最近动态」：三条带时刻的文本。
 - 「告警」空态：还没有告警。
 
 ### 4.2 Agent `/agents.html`
 
-- 四张卡：编排（在线）、研究（同步中）、值守（空闲）、档案（离线）。每张有职责、模型、绑定的云电脑、最近活动。
+- 四张卡：编排（在线）、研究（同步中）、值守（空闲）、档案（离线）。每张有职责、模型、绑定的云主机、最近活动。
 - 卡片 `id` 与侧栏链接的 hash 相同，例如 `#agt_orch`。命中的卡片用陶土边标出。
 - 「待接入」空态。
 
 侧栏 Agent 轨与这四条的 id、名称、状态必须一起改。轨的数据在 `shell.js` 的 `SIDEBAR_AGENTS`。
 
-### 4.3 云电脑 `/machines.html`
+### 4.3 云主机 `/machines.html`
 
 - 上海-01、新加坡-02 运行中，本地沙箱已暂停且未绑定。字段是区域、绑定的 Agent、最近心跳。
 - 「已释放」空态。

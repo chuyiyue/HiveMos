@@ -1,4 +1,4 @@
-/* mock: 云电脑占位。接入后改为 GET /api/machines */
+/* mock: 云主机占位。接入后改为 GET /api/machines */
 (function () {
   var C = window.HiveCommon;
   var MACHINES = [
@@ -44,7 +44,7 @@
       "云端与本机的电脑，心跳和绑定关系摊在列表里",
       '<div class="stack">' +
         C.section("电脑", String(MACHINES.length) + " 台", C.list(cards)) +
-        C.section("已释放", "", C.emptyState("没有已释放的云电脑", "释放后的实例会留在这里，直到记录被清掉")) +
+        C.section("已释放", "", C.emptyState("没有已释放的云主机", "释放后的实例会留在这里，直到记录被清掉")) +
         "</div>",
     ),
   );

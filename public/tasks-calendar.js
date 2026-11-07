@@ -2,7 +2,7 @@
 (function () {
   var C = window.HiveCommon;
   var TASKS = [
-    { id: "task_heartbeat", title: "核对云电脑心跳", from: "编排", to: "值守", status: "active", updated: "2026-11-07 09:20" },
+    { id: "task_heartbeat", title: "核对云主机心跳", from: "编排", to: "值守", status: "active", updated: "2026-11-07 09:20" },
     { id: "task_memory", title: "把部署约定写入记忆", from: "研究", to: "档案", status: "queued", updated: "2026-11-07 09:12" },
     { id: "task_rotate", title: "轮换网关密钥展示", from: "编排", to: "编排", status: "done", updated: "2026-11-06 17:45" },
   ];
