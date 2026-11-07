@@ -24,7 +24,7 @@
       "binding": "DB",
       "database_name": "hivemos",
       // 部署前用 wrangler d1 create hivemos 回填
-      "database_id": "",
+      "database_id": "6c07d734-ca39-41ea-ba81-2a392e4abdf2",
       "migrations_dir": "migrations"
     }
   ]
