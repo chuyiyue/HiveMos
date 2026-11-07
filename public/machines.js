@@ -1,4 +1,4 @@
-/* mock: 云主机板块三页签（服务器 / 云主机 / Workers 容器）。接入后分别改为 GET /api/servers、/api/machines、/api/workers */
+/* mock: 云主机板块三页签（服务器 / 云主机 / Workers）。接入后分别改为 GET /api/servers、/api/machines、/api/workers */
 (function () {
   var C = window.HiveCommon;
 
@@ -44,7 +44,7 @@
   ];
   var workerHtml =
     "<div class=\"stack\">" +
-    C.section("Workers 容器", String(WORKERS.length) + " 个", C.list(WORKERS.map(function (item) {
+    C.section("Workers", String(WORKERS.length) + " 个", C.list(WORKERS.map(function (item) {
       return card(item, [
         ["版本", C.escapeHtml(item.ver)],
         ["更新时间", C.escapeHtml(item.updated)],
@@ -58,7 +58,7 @@
       "<div class=\"page-tabs\" role=\"tablist\">" +
         "<button class=\"page-tab\" type=\"button\" role=\"tab\" data-tab=\"servers\" aria-selected=\"true\">服务器</button>" +
         "<button class=\"page-tab\" type=\"button\" role=\"tab\" data-tab=\"hosts\" aria-selected=\"false\">云主机</button>" +
-        "<button class=\"page-tab\" type=\"button\" role=\"tab\" data-tab=\"workers\" aria-selected=\"false\">Workers 容器</button>" +
+        "<button class=\"page-tab\" type=\"button\" role=\"tab\" data-tab=\"workers\" aria-selected=\"false\">Workers</button>" +
         "</div>" +
         "<div data-panel=\"servers\">" + serverHtml + "</div>" +
         "<div data-panel=\"hosts\" hidden>" + hostHtml + "</div>" +
