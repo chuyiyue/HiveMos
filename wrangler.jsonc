@@ -5,6 +5,7 @@
   // 2026-10-30 is the newest date this Wrangler's workerd accepts.
   "compatibility_date": "2026-10-30",
   "workers_dev": true,
+  "routes": [{ "pattern": "mos.loko.pp.ua", "custom_domain": true }],
   "assets": {
     "directory": "./public",
     "binding": "ASSETS",
