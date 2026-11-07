@@ -170,10 +170,9 @@
 | overview | 总览 | `/` | `/index.js` | `icon-layout` |
 | agents | Agent | `/agents.html` | `/agents.js` | `icon-bot` |
 | machines | 云电脑 | `/machines.html` | `/machines.js` | `icon-monitor` |
-| memory | 记忆 | `/memory.html` | `/memory.js` | `icon-memory` |
-| soul | Soul | `/soul.html` | `/soul.js` | `icon-soul` |
+| memory-soul | 记忆与 Soul | `/memory-soul.html` | `/memory-soul.js` | `icon-memory` |
 | skills | Skills | `/skills.html` | `/skills.js` | `icon-puzzle` |
-| tasks | 任务 | `/tasks.html` | `/tasks.js` | `icon-tasks` |
+| tasks-calendar | 任务与日历 | `/tasks-calendar.html` | `/tasks-calendar.js` | `icon-tasks` |
 | mcp | MCP | `/mcp.html` | `/mcp.js` | `icon-plug` |
 | vault | 保险库 | `/vault.html` | `/vault.js` | `icon-lock` |
 | settings | 设置 | `/settings.html` | `/settings.js` | `icon-settings` |
@@ -203,12 +202,12 @@
 - 上海-01、新加坡-02 运行中，本地沙箱已暂停且未绑定。字段是区域、绑定的 Agent、最近心跳。
 - 「已释放」空态。
 
-### 4.4 记忆与 Soul （记忆 / Soul 页签）`/memory.html`
+### 4.4 记忆与 Soul `/memory-soul.html`（记忆 / Soul 页签）
 
 - 三条记忆：标题、摘要、作用域、来源、更新时间。摘要是占位正文，整段可见。
 - 「冲突」空态，留给以后的合并。
 
-### 4.5 Soul（并入 4.4 板块的 Soul 页签）`/soul.html`
+### 4.5 Soul（并入 4.4 板块的 Soul 页签）
 
 - 编排 v12 已同步，研究 v7 同步中，值守 v3 已暂停。
 - 「草稿」空态。
@@ -218,7 +217,7 @@
 - `web-search`、`wrangler-deploy` 已启用，`vault-read` 已停用。字段是版本、来源、引用它的 Agent。
 - 「待审核」空态。
 
-### 4.7 任务与日历 （任务 / 日历 页签）`/tasks.html`
+### 4.7 任务与日历 `/tasks-calendar.html`（任务 / 日历 页签）
 
 - 三条传递：进行中、排队、已完成。字段是从哪个 Agent、到哪个 Agent、更新时间。
 - 「失败队列」空态。
