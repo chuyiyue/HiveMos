@@ -16,6 +16,7 @@ window.HIVEMOS_MODULES = Object.freeze([
   Object.freeze({ key: "soul", title: "Soul", href: "/soul.html", icon: "icon-soul", script: "/soul.js" }),
   Object.freeze({ key: "skills", title: "Skills", href: "/skills.html", icon: "icon-puzzle", script: "/skills.js" }),
   Object.freeze({ key: "tasks", title: "任务", href: "/tasks.html", icon: "icon-tasks", script: "/tasks.js" }),
+  Object.freeze({ key: "calendar", title: "日历", href: "/calendar.html", icon: "icon-calendar", script: "/calendar.js" }),
   Object.freeze({ key: "mcp", title: "MCP", href: "/mcp.html", icon: "icon-plug", script: "/mcp.js" }),
   Object.freeze({ key: "vault", title: "保险库", href: "/vault.html", icon: "icon-lock", script: "/vault.js" }),
   Object.freeze({ key: "settings", title: "设置", href: "/settings.html", icon: "icon-settings", script: "/settings.js" }),

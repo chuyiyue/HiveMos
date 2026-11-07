@@ -131,3 +131,52 @@ button.copy-btn:hover { background: var(--surface-hover); }
   .record { grid-template-columns: 1fr; }
   .kv div { grid-template-columns: 72px minmax(0, 1fr); }
 }
+
+/* 日历占位页（静态示意） */
+.cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 6px;
+}
+.cal-dow {
+  text-align: center;
+  color: var(--text-3);
+  font-size: 12px;
+  padding: 4px 0;
+}
+.cal-cell {
+  min-height: 72px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px;
+  background: var(--surface);
+}
+.cal-pad {
+  border-color: transparent;
+  background: transparent;
+}
+.cal-today {
+  border-color: var(--accent);
+}
+.cal-day {
+  font-size: 13px;
+  color: var(--text-2);
+}
+.cal-today .cal-day {
+  color: var(--accent-text);
+  font-weight: 600;
+}
+.cal-event {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border-radius: 4px;
+  padding: 2px 4px;
+}
+@media (max-width: 639px) {
+  .cal-cell {
+    min-height: 52px;
+  }
+}

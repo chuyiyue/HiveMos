@@ -402,3 +402,13 @@ GET /api/health
 - 统一模型变量 AI_MODEL 管理模型编号（未配时用默认模型），换模型只改变量不改代码；AI 结果按内容哈希缓存，内容不变不重复调用
 - AI 不可用或失败时功能照常运行：只记处理状态，绝不阻塞任何增删改查
 - 已留位的功能：MCP 条目自动打标与一句话简介（注册表已按此实现）、记忆条目提取与整理提案、Skills 自动分类与查重、任务派单建议与交接摘要、日历导入去重与事件打标
+
+## 10. 日历板块设计预留（占位，未实现）
+
+- 定位：日历聚合中枢。agent 可经面板 MCP 增删改查日程，用户可用手机与电脑同步。本节只是设计预留，功能本体不在本期实现；/calendar.html 是静态占位页（月视图示意 + 空状态 + 开发中说明，数据均为 mock）
+- 数据模型按 iCalendar 语义设计：calendars 与 events 两张表。events 关键字段：UID、起止时间（UTC 存储并保留原时区）、RRULE 重复规则、all_day、source（来源：manual、mcp、ics_import、ics_feed、caldav、google、outlook）、created_by（用户或哪个 agent）、etag 与同步令牌、软删除墓碑（deleted_at 不真删），另设操作审计表 calendar_audit
+- 接口分期：
+  - 一期：面板 MCP 工具 calendar_*（list_calendars、list_events、create_event、update_event、delete_event、search_events）；ICS 订阅源输出（带可撤销令牌的签名 URL，每台设备一条，可在设置里吊销）；ICS 文件导入；外部 ICS 链接拉取聚合（Cron 定时刷新、只读镜像）
+  - 二期：CalDAV 双向同步；iPhone 原生日历可直接订阅 ICS，或走 CalDAV 接入
+  - 三期：Google 与 Outlook 的 OAuth 同步
+- AI 预留：导入去重、事件自动打标、冲突提示、每日简报摘要，产出均为提案、人工确认后生效
