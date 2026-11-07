@@ -1,4 +1,4 @@
-/* mock: 设置占位，含 MCP 设置与授权设备。令牌和设备标识只留末四位。接入后改为 GET /api/settings */
+/* mock: 设置占位，含 MCP 设置与登录记录。接入后改为 GET /api/settings；登录记录将由管理员账号体系提供真实会话数据 */
 (function () {
   var C = window.HiveCommon;
   var SERVERS = [
@@ -6,9 +6,9 @@
     { name: "github", transport: "http", tools: "8", status: "enabled" },
     { name: "browser", transport: "sse", tools: "5", status: "disabled" },
   ];
-  var DEVICES = [
-    { id: "dev_mac", name: "管理员的 Mac", platform: "macOS", seen: "2026-11-07 08:10", tail: "3F2A", status: "online" },
-    { id: "dev_ipad", name: "工作室 iPad", platform: "iPadOS", seen: "2026-11-06 21:04", tail: "90C1", status: "idle" },
+  var LOGINS = [
+    { id: "sess_mac", name: "管理员的 Mac · Safari", at: "2026-11-08 03:12", current: true },
+    { id: "sess_ipad", name: "工作室 iPad · Safari", at: "2026-11-07 21:44", current: false },
   ];
   var serverCards = SERVERS.map(function (item) {
     return C.record({
@@ -20,16 +20,13 @@
       ],
     });
   }).join("");
-  var deviceCards = DEVICES.map(function (item) {
+  var loginCards = LOGINS.map(function (item) {
     return C.record({
       id: item.id,
       title: item.name,
-      status: item.status,
-      facts: [
-        ["平台", C.escapeHtml(item.platform)],
-        ["最近在线", C.escapeHtml(item.seen)],
-        ["标识", C.copyLine(C.maskTail(item.tail), "复制末四位")],
-      ],
+      status: item.current ? "active" : "",
+      lede: item.current ? "当前会话" : "",
+      facts: [["登录时间", C.escapeHtml(item.at)]],
     });
   }).join("");
   C.mount(
@@ -56,8 +53,7 @@
             C.list(serverCards) +
             "</div>",
         ) +
-        C.section("授权设备", String(DEVICES.length) + " 台", C.list(deviceCards)) +
-        C.section("待批准", "", C.emptyState("没有待批准的设备", "新设备申请授权后会列在这里")) +
+        C.section("登录记录", String(LOGINS.length) + " 条", C.list(loginCards)) +
         "</div>",
     ),
   );
