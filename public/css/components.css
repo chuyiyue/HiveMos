@@ -147,3 +147,72 @@ input:focus, textarea:focus {
 .empty-state p { margin: 0; color: var(--text-2); max-width: 36rem; }
 
 @keyframes breathe { 50% { opacity: 0.35; } }
+
+/* Full-width primary action above a list (the SMSinBox notify-page add
+   button, in HiveMos colors). Opens a form dialog; forms never sit inline
+   in the page body. */
+.add-button {
+  width: 100%;
+  min-height: 52px;
+  padding: 12px 20px;
+  font-size: var(--fs-md);
+  font-weight: 600;
+  border-radius: var(--r-lg);
+}
+
+/* Form dialog on the native <dialog> element, project styling only. */
+body.modal-open { overflow: hidden; }
+
+dialog.modal {
+  position: fixed;
+  inset: 0;
+  width: min(480px, calc(100% - 32px));
+  height: fit-content;
+  max-height: min(88dvh, 760px);
+  margin: auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+}
+
+dialog.modal.wide { width: min(600px, calc(100% - 32px)); }
+
+dialog.modal::backdrop { background: var(--overlay); }
+
+.modal-card {
+  background: var(--surface);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-3);
+  padding: 24px;
+  max-height: min(88dvh, 760px);
+  overflow-y: auto;
+}
+
+.modal-title { margin: 0 0 16px; font-size: var(--fs-lg); }
+
+.modal-error { margin-top: 12px; }
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+/* Phones get a full-screen sheet instead of a floating card. */
+@media (max-width: 639px) {
+  dialog.modal,
+  dialog.modal.wide {
+    width: 100%;
+    height: 100dvh;
+    max-height: 100dvh;
+    margin: 0;
+  }
+
+  .modal-card {
+    min-height: 100dvh;
+    max-height: none;
+    border-radius: 0;
+  }
+}
