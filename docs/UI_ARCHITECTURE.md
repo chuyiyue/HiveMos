@@ -168,12 +168,11 @@
 | key | 标题 | 路径 | 脚本 | 图标 |
 | --- | --- | --- | --- | --- |
 | overview | 总览 | `/` | `/index.js` | `icon-layout` |
-| agents | Agent | `/agents.html` | `/agents.js` | `icon-bot` |
+| agents | Agent 集群 | `/agents.html` | `/agents.js` | `icon-bot` |
 | machines | 云电脑 | `/machines.html` | `/machines.js` | `icon-monitor` |
 | memory-soul | 记忆与 Soul | `/memory-soul.html` | `/memory-soul.js` | `icon-memory` |
-| skills | Skills | `/skills.html` | `/skills.js` | `icon-puzzle` |
+| mcp-skills | MCP 与 Skills | `/mcp-skills.html` | `/mcp-skills.js` | `icon-plug` |
 | tasks-calendar | 任务与日历 | `/tasks-calendar.html` | `/tasks-calendar.js` | `icon-tasks` |
-| mcp | MCP | `/mcp.html` | `/mcp.js` | `icon-plug` |
 | vault | 保险库 | `/vault.html` | `/vault.js` | `icon-lock` |
 | settings | 设置 | `/settings.html` | `/settings.js` | `icon-settings` |
 | login | 登录 | `/login.html` | `/login.js` | `icon-log-in` |
@@ -327,9 +326,8 @@ public/
   agents.html + agents.js
   machines.html + machines.js
   memory-soul.html + memory-soul.js
-  skills.html + skills.js
+  mcp-skills.html + mcp-skills.js
   tasks-calendar.html + tasks-calendar.js
-  mcp.html + mcp.js
   vault.html + vault.js
   settings.html + settings.js
   login.html + login.js

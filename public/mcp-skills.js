@@ -1,4 +1,4 @@
-/* MCP 注册表。列表、详情、登记和手填快照都走 /api/mcp-servers */
+/* MCP 与 Skills 合并板块。MCP 注册表走 /api/mcp-servers；Skills 为 mock 占位（接入后 GET /api/skills） */
 (function () {
   var C = window.HiveCommon;
   var state = {
@@ -294,6 +294,45 @@
     );
   }
 
+  var activeTab = location.hash === "#skills" ? "skills" : "mcp";
+
+  function skillsHtml() {
+    var SKILLS = [
+      { id: "skill_search", name: "web-search", version: "1.4.0", source: "官方注册表", used: "研究、编排", status: "enabled" },
+      { id: "skill_deploy", name: "wrangler-deploy", version: "0.9.2", source: "工作区", used: "编排", status: "enabled" },
+      { id: "skill_vault", name: "vault-read", version: "1.0.1", source: "官方注册表", used: "值守", status: "disabled" },
+    ];
+    var cards = SKILLS.map(function (item) {
+      return C.record({
+        id: item.id,
+        title: item.name,
+        status: item.status,
+        lede: item.source,
+        facts: [
+          ["版本", C.escapeHtml(item.version)],
+          ["引用", C.escapeHtml(item.used)],
+        ],
+      });
+    }).join("");
+    return (
+      "<div class=\"stack\">" +
+      C.section("已登记", String(SKILLS.length) + " 个", C.list(cards)) +
+      C.section("待审核", "", C.emptyState("没有待审核的技能", "新提交的技能会先出现在这里")) +
+      "</div>"
+    );
+  }
+
+  function activateTab(name) {
+    activeTab = name;
+    document.querySelectorAll(".page-tab").forEach(function (btn) {
+      btn.setAttribute("aria-selected", btn.getAttribute("data-tab") === name ? "true" : "false");
+    });
+    document.querySelectorAll("[data-panel]").forEach(function (panel) {
+      panel.hidden = panel.getAttribute("data-panel") !== name;
+    });
+    history.replaceState(null, "", name === "skills" ? "#skills" : "#mcp");
+  }
+
   function render() {
     var body = noticeHtml();
     if (state.loading) body += C.section("服务", "", C.emptyState("正在读取", "稍等片刻"));
@@ -307,7 +346,29 @@
       body += detailHtml(selected());
     }
     body += formHtml();
-    C.mount(C.layout("发现式登记 MCP 条目。Agent 取回配置后直连下游，流量不经过这里", '<div class="stack">' + body + "</div>"));
+    C.mount(
+      C.layout(
+        "MCP 注册表与技能注册表在一个板块，页签切换",
+        "<div class=\"page-tabs\" role=\"tablist\">" +
+          "<button class=\"page-tab\" type=\"button\" role=\"tab\" data-tab=\"mcp\" aria-selected=\"" +
+          (activeTab === "mcp" ? "true" : "false") +
+          "\">MCP</button>" +
+          "<button class=\"page-tab\" type=\"button\" role=\"tab\" data-tab=\"skills\" aria-selected=\"" +
+          (activeTab === "skills" ? "true" : "false") +
+          "\">Skills</button>" +
+          "</div>" +
+          "<div data-panel=\"mcp\"" +
+          (activeTab === "mcp" ? "" : " hidden") +
+          "><div class=\"stack\">" +
+          body +
+          "</div></div>" +
+          "<div data-panel=\"skills\"" +
+          (activeTab === "skills" ? "" : " hidden") +
+          ">" +
+          skillsHtml() +
+          "</div>"
+      )
+    );
     bind();
   }
 
@@ -333,6 +394,11 @@
   function onClick(event) {
     var target = event.target;
     if (!(target instanceof Element)) return;
+    var tab = target.closest(".page-tab");
+    if (tab) {
+      activateTab(tab.getAttribute("data-tab"));
+      return;
+    }
     var choice = target.closest("[data-choice]");
     if (choice) {
       var group = choice.getAttribute("data-choice");
