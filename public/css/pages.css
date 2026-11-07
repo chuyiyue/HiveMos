@@ -233,3 +233,7 @@ button.copy-btn:hover { background: var(--surface-hover); }
 .auth-subtitle { color: var(--text-2); margin: 0 0 4px; }
 .auth-note { color: var(--text-3); font-size: 13px; text-align: center; margin: 16px 0 0; }
 .auth-card .callout { margin: 14px 0 0; }
+
+.page-tabs { display: flex; gap: 4px; margin-bottom: 16px; border-bottom: 1px solid var(--border); }
+.page-tab { appearance: none; background: none; border: 0; border-bottom: 2px solid transparent; color: var(--text-2); font: inherit; padding: 8px 14px; cursor: pointer; margin-bottom: -1px; }
+.page-tab[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }

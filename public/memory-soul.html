@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>记忆与 Soul · HiveMos</title>
+    <script src="/theme-boot.js"></script>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <div class="app-layout">
+      <aside class="sidebar" id="sidebar">
+        <a class="brand" href="/">
+          <span class="mark" aria-hidden="true">H</span>
+          <span class="brand-name">HiveMos</span>
+        </a>
+        <nav class="sidebar-nav" aria-label="主导航"></nav>
+        <div class="sidebar-devices" aria-labelledby="sidebar-agents-title">
+          <div class="sidebar-label-row">
+            <p class="sidebar-label" id="sidebar-agents-title">Agent</p>
+          </div>
+          <div id="sidebar-agents" class="device-list"></div>
+        </div>
+        <div class="sidebar-footer">
+          <a class="account-btn" href="/settings.html" title="设置" aria-label="设置">
+            <span class="account-avatar" aria-hidden="true">管</span>
+            <span class="account-name btn-label">管理员</span>
+          </a>
+          <a class="account-logout ghost" href="/login.html" title="登录" aria-label="前往登录">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#icon-log-out"/></svg>
+            <span class="btn-label">登录</span>
+          </a>
+        </div>
+      </aside>
+      <div class="main">
+        <header class="topbar">
+          <button id="menu-toggle" class="ghost icon-btn" type="button" aria-label="打开导航" aria-expanded="false" aria-controls="sidebar">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#icon-menu"/></svg>
+          </button>
+          <h1 class="topbar-title">记忆与 Soul</h1>
+          <p class="live-status" role="status"><span class="live-dot" aria-hidden="true"></span><span>静态骨架</span></p>
+          <div class="topbar-actions">
+            <button class="ghost icon-btn" type="button" data-theme-toggle aria-label="主题：跟随系统">
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#icon-sun"/></svg>
+              <span class="btn-label sr-only">主题：跟随系统</span>
+            </button>
+          </div>
+        </header>
+        <div class="page" id="page"></div>
+      </div>
+    </div>
+    <div id="sidebar-backdrop" class="sidebar-backdrop" hidden></div>
+    <script src="/registry.js"></script>
+    <script src="/common.js"></script>
+    <script src="/shell.js"></script>
+    <script src="/memory-soul.js"></script>
+  </body>
+</html>
