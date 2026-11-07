@@ -10,6 +10,16 @@
     "binding": "ASSETS",
     "html_handling": "auto-trailing-slash",
     "not_found_handling": "404-page",
-    "run_worker_first": ["/api/*"]
-  }
+    "run_worker_first": ["/*"]
+  },
+  // database_id 可留空：当前 Wrangler 的配置校验不强制填写。
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "hivemos",
+      // 部署前用 wrangler d1 create hivemos 回填
+      "database_id": "",
+      "migrations_dir": "migrations"
+    }
+  ]
 }

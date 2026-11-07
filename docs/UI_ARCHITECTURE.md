@@ -1,8 +1,8 @@
 # HiveMos UI 架构
 
-第一阶段只建立控制面的页面骨架。技术形态与 SMSinBox 对齐：Cloudflare Worker 提供静态资源和一个健康检查，`public/` 下每个模块是一个 HTML 加一个同名脚本，没有构建步骤，也没有 npm 依赖。视觉只改配色和标题字体，布局、组件和交互保持 SMSinBox 的外壳。
+控制面跑在 Cloudflare Workers 上，没有构建步骤，也没有 npm 依赖。页面外壳与 SMSinBox 对齐：`public/` 下每个模块是一个 HTML 加一个同名脚本。视觉只改配色和标题字体，布局、组件和交互保持 SMSinBox 的外壳。
 
-业务接口、数据库、登录会话都不在这一阶段。页面上的名单、状态和密钥尾号全部写死，并在对应脚本顶部用 `mock` 注释标出。
+业务名单、状态和密钥尾号仍是写死的占位，对应脚本顶部用 `mock` 注释标出。管理员登录和会话已经接入，口径见第 11 节。
 
 ## 1. 设计原则
 
@@ -140,7 +140,7 @@
     .sidebar-brand-row        品牌（H + HiveMos）+ 收起按钮
     nav.sidebar-nav           注册表渲染的主导航
     .sidebar-devices          侧栏区：Agent 名称与状态，类名与 SMSinBox 设备轨相同
-    .sidebar-footer           账号区：管理员（链到设置）+ 登录
+    .sidebar-footer           账号区：链到设置。已登录显示管理员名和「退出登录」，未登录仍是「登录」
   .main
     header.topbar             菜单按钮 + 页面标题 + 「静态骨架」+ 主题按钮
     .page                     本页内容，最大宽度 1080px
@@ -179,7 +179,7 @@
 | settings | 设置 | `/settings.html` | `/settings.js` | `icon-settings` |
 | login | 登录 | `/login.html` | `/login.js` | `icon-log-in` |
 
-账号区的「管理员」也指向设置。当前页是设置时，导航项和账号按钮一起带 `aria-current="page"`。`nav: false` 预留着，这一阶段没有使用。
+账号区指向设置。已登录时这里显示管理员用户名；未登录时名字仍是占位「管理员」，旁边的入口仍是「登录」。当前页是设置时，导航项和账号按钮一起带 `aria-current="page"`。`nav: false` 预留着，这一阶段没有使用。
 
 匹配当前页时会去掉尾部斜线和 `.html`，`/index.html` 视为 `/`。这样静态资源把 `/agents.html` 收成 `/agents` 时，高亮仍然正确。
 
@@ -247,12 +247,13 @@
 
 ### 4.11 登录 `/login.html`
 
-登录也使用完整外壳，方便在骨架阶段从导航进入。
+登录使用与其他页相同的外壳。未登录可以打开这一页。已登录时 `login.js` 请求 `GET /api/auth/me`，成功则立刻离开，去 `next` 或总览。
 
 - 账号、密码。密码可在输入框内切换可见，不弹窗。
-- 不使用 `required`，避免浏览器自带的校验气泡。缺字段时在表单里写「请填写账号和密码」。
-- 始终可见的说明：静态骨架，提交不会建立会话。提交被脚本拦住，不会发出请求。
-- 「其他方式」空态，留给通行密钥和第三方登录。
+- 不使用 `required`，避免浏览器自带的校验气泡。缺字段时在表单上方写「请填写账号和密码」。
+- 提交 `POST /api/auth/login`。成功后进入安全的 `next`（仅站内路径）或 `/`。失败文案在表单上方。
+- 管理员机密未设置时，接口拒绝登录，页面直接写出需要配置 `ADMIN_USERNAME` 与 `ADMIN_PASSWORD`。
+- 「其他方式」仍是空态。两步验证和第三方登录都不在本期。
 
 ### 4.12 找不到页面
 
@@ -267,7 +268,7 @@
 | 主导航 | `.sidebar-nav` `a.active` | `shell.js` 按注册表生成 |
 | 收起按钮 | `.sidebar-collapse` | 桌面把侧栏收成 64px |
 | Agent 轨 | `.sidebar-devices` `.device-link` `.ui-status-dot` | 侧栏底部以上。状态点用 success / warning / danger / idle |
-| 账号区 | `.sidebar-footer` `.account-btn` `.account-avatar` `.account-logout` | 管理员、登录 |
+| 账号区 | `.sidebar-footer` `.account-btn` `.account-avatar` `.account-logout` | 已登录：管理员名与退出。未登录：登录 |
 | 顶栏 | `.topbar` `.topbar-title` `.live-status` `.icon-btn` | 标题、静态骨架标记、主题 |
 | 抽屉 | `#menu-toggle` `.sidebar-backdrop` `.is-open` | 仅 639px 以下显示菜单按钮 |
 | 页面栈 | `.page` `.lede` `.stack` `.section-head` | 每页导语和分节 |
@@ -303,8 +304,13 @@
 ## 6. 文件结构
 
 ```text
-wrangler.jsonc          name: hivemos，assets: ./public，main: src/index.ts
-src/index.ts            /api/health 返回 JSON，其余交给 ASSETS
+wrangler.jsonc          name: hivemos，assets: ./public，D1 绑定 DB，main: src/index.ts
+src/index.ts            门禁、登录接口、健康检查；通过后交给 ASSETS
+src/auth.ts             常量时间比较、令牌、会话 Cookie
+src/session.ts          D1 会话的创建、读取、删除
+src/http.ts             JSON 响应、Cookie 读取、跨站判断
+src/env.ts              Worker 绑定类型
+migrations/0001_admin_sessions.sql
 docs/UI_ARCHITECTURE.md 本文
 public/
   style.css             按顺序引入下面五个样式
@@ -332,7 +338,7 @@ public/
   404.html
 ```
 
-`wrangler.jsonc` 的 `compatibility_date` 是 `2026-10-30`。`assets.run_worker_first` 包含 `/api/*`，健康检查不会被静态资源拦住；Worker 只处理 `/api/health`，其他路径包括未知的 `/api/...` 仍 `ASSETS.fetch`。`html_handling` 为 `auto-trailing-slash`，找不到页面时用 `404.html`。
+`wrangler.jsonc` 的 `compatibility_date` 是 `2026-10-30`。`assets.run_worker_first` 是 `["/*"]`，请求先进入 Worker，会话通过后才 `env.ASSETS.fetch`。`html_handling` 为 `auto-trailing-slash`，找不到页面时用 `404.html`。D1 绑定名 `DB`，库名 `hivemos`，`database_id` 部署前再填。门禁细则见第 11 节。
 
 本地预览：
 
@@ -344,9 +350,9 @@ npx wrangler dev
 
 ## 7. 占位数据与后续 API
 
-页面脚本不发请求。每个文件顶部的 `mock` 注释写了打算接的路径。接入时用同一批字段替换数组，保留 `HiveCommon` 的渲染，这样卡片结构不用重画。
+业务页脚本仍不请求名单接口。登录页和侧栏会请求 `/api/auth/*`。每个业务文件顶部的 `mock` 注释写了打算接的路径。接入时用同一批字段替换数组，保留 `HiveCommon` 的渲染，这样卡片结构不用重画。
 
-已实现：
+已实现的健康检查：
 
 ```http
 GET /api/health
@@ -356,9 +362,11 @@ GET /api/health
 { "ok": true, "service": "hivemos" }
 ```
 
+登录与会话见第 11 节。
+
 尾部斜杠会先去掉再匹配。建议以后的错误体为 `{ "ok": false, "error": "给人看的短句" }`，页面把它放进 `.callout.danger`，不要使用浏览器弹窗。
 
-计划中的只读接口与脚本里的字段对应。时间在骨架里是写死的 `YYYY-MM-DD HH:mm`，接上接口后仍用绝对时间到分钟。
+下面是接口与脚本的对应。业务名单仍是计划中的只读接口，登录三行已经接通。时间在骨架里是写死的 `YYYY-MM-DD HH:mm`，接上接口后仍用绝对时间到分钟。
 
 | 方法与路径 | 替换 | 主要字段 |
 | --- | --- | --- |
@@ -372,7 +380,9 @@ GET /api/health
 | `GET /api/mcp` | `mcp.js` 与设置里的服务列表 | `id` `name` `transport` `tools` `status` `endpoint` |
 | `GET /api/vault` | `vault.js` | `id` `name` `kind` `tail` `updated`。响应里禁止出现完整密钥 |
 | `GET /api/settings` | `settings.js` | `workspace`、`mcp.endpoint`、`mcp.tokenTail`、`devices[]`（`name` `platform` `seen` `tail` `status`） |
-| `POST /api/session` | `login.js` | 本期不实现。接通前提交必须继续被拦住 |
+| `POST /api/auth/login` | `login.js` | 见第 11 节。成功 `{ "ok": true }` 并写 Cookie |
+| `POST /api/auth/logout` | `shell.js` | 删除当前会话并清 Cookie |
+| `GET /api/auth/me` | `common.js` | 已登录 `{ "ok": true, "username" }` |
 
 脱敏约定：
 
@@ -412,3 +422,98 @@ GET /api/health
   - 二期：CalDAV 双向同步；iPhone 原生日历可直接订阅 ICS，或走 CalDAV 接入
   - 三期：Google 与 Outlook 的 OAuth 同步
 - AI 预留：导入去重、事件自动打标、冲突提示、每日简报摘要，产出均为提案、人工确认后生效
+
+## 11. 管理员系统
+
+本期只做单管理员的密码登录和会话门禁，对照 SMSinBox 的 `src/auth.ts` 与 `src/session.ts` 平移。不搬用户表、TOTP 或 GitHub 登录。
+
+### 11.1 机密
+
+Worker 机密 `ADMIN_USERNAME` 与 `ADMIN_PASSWORD` 从 `env` 读取，名字和含义与 SMSinBox 相同。用户名 trim 之后为空，或密码是空字符串（密码不 trim），视为未配置。
+
+未配置时 `POST /api/auth/login` 一律拒绝，状态 503，正文：
+
+```json
+{ "ok": false, "error": "管理员账号尚未配置。请设置 Worker 机密 ADMIN_USERNAME 与 ADMIN_PASSWORD" }
+```
+
+登录页在确认当前没有会话之后，会再发一次空 JSON 的登录请求。收到 503 时，把这句写在表单上方，这次请求不写会话。已经配置时，空请求得到 400，页面不把它当成错误展示。
+
+本地把两项放进不提交的 `.dev.vars`。远程：
+
+```bash
+npx wrangler secret put ADMIN_USERNAME
+npx wrangler secret put ADMIN_PASSWORD
+```
+
+### 11.2 校验
+
+用户名不区分大小写：两侧都 trim、转小写，再各自 SHA-256，用 `timingSafeEqual` 比较摘要。密码用同一套 `secretsEqual`，但不改变原文字。运行时没有 `timingSafeEqual` 时退回等长异或。两项都会比较，避免用提前返回区分是用户名错了还是密码错了。
+
+失败统一为 401：
+
+```json
+{ "ok": false, "error": "用户名或密码不正确" }
+```
+
+缺账号或密码是 400，文案为「请填写账号和密码」。超过 1024 个字符视为请求格式不正确。
+
+### 11.3 会话
+
+登录成功生成 32 字节随机数，Cookie 里是带 `hvm_` 前缀的明文，D1 只存这段明文的 SHA-256 十六进制。Cookie 名 `hivemos_session`，属性为 HttpOnly、Path=/、SameSite=Lax，Max-Age 等于 `SESSION_TTL_SECONDS`（7 天）。请求本身是 https，或 `X-Forwarded-Proto` 的第一段是 https 时，再加 Secure。
+
+表 `sessions`：
+
+| 列 | 类型 | 含义 |
+| --- | --- | --- |
+| id | TEXT 主键 | 令牌的 SHA-256 十六进制，不是明文 |
+| created_at | INTEGER | 创建时刻，Unix 毫秒 |
+| expires_at | INTEGER | 过期时刻，Unix 毫秒 |
+
+过期行在下次带着该令牌访问时删除。退出登录删除当前行，并把同一 Cookie 的 Max-Age 设为 0。
+
+迁移文件是 `migrations/0001_admin_sessions.sql`。注册表功能从 `0002` 起，本期不添加后续迁移。
+
+`wrangler.jsonc` 的 D1 绑定名是 `DB`，`database_name` 是 `hivemos`，`database_id` 先留空字符串。部署前执行 `npx wrangler d1 create hivemos`，把返回的 UUID 填回 `database_id`，再执行 `npx wrangler d1 migrations apply hivemos --remote`。本地预览用 `--local`。
+
+### 11.4 接口
+
+| 方法与路径 | 成功 | 未通过 |
+| --- | --- | --- |
+| `POST /api/auth/login` | 写会话，`Set-Cookie`，`{ "ok": true }` | 见 11.1 与 11.2 |
+| `POST /api/auth/logout` | 删除会话并清 Cookie，`{ "ok": true }` | 未登录 401 |
+| `GET /api/auth/me` | `{ "ok": true, "username": "<ADMIN_USERNAME>" }` | 未登录 401 `{ "ok": false, "error": "未登录" }` |
+
+`username` 是机密里的原始大小写（trim 之后）。跨站的登录和退出返回 403 `{ "ok": false, "error": "跨站请求被拒绝" }`。尾部斜杠会先去掉再匹配。
+
+### 11.5 门禁
+
+`assets.run_worker_first` 为 `["/*"]`。不要求会话的路径只有：`/login.html`、`/api/auth/login`、`/api/health`，以及登录页实际引用的静态资源：`/style.css`、`/css/*`、`/theme-boot.js`、`/common.js`、`/login.js`、`/icons.svg`、`/registry.js`、`/shell.js`。`/style.css` 用 `@import` 引入 `/css/*`，所以这一组样式也要放行。
+
+其余请求要有未过期会话：
+
+- 页面未登录时 302 到 `/login.html?next=<原路径>`。页面包括 `/`、其余 `.html`，以及末段没有点号的路径。后一条是为了拦住 `html_handling` 把 `/agents` 直接送出 HTML。`next` 含路径和查询串，最长 2048 字符。
+- `/api/*`（健康检查和登录除外）未登录返回 401 JSON。已登录但没有对应处理函数时返回 404 `{ "ok": false, "error": "未找到" }`。
+- `/mcp` 以及以 `/mcp/` 开头的路径，未登录同样 401。Agent 令牌鉴权留到注册表阶段，这里不实现；已登录则仍交给静态资源。
+- 其他静态资源未登录也是 401，避免页面脚本在登录前被取走。
+
+已通过门禁的页面和静态资源一律 `env.ASSETS.fetch`。已登录访问 `/login.html` 仍返回页面，由前端根据 `/api/auth/me` 跳走。`next` 只接受以单个 `/` 开头的站内路径，拒绝协议相对地址、反斜杠，以及 `/login` 开头，避免回到登录页打转。
+
+带着失效 Cookie 访问受保护地址时，顺带把 Cookie 清掉。
+
+### 11.6 前端
+
+`login.js` 提交 `{ "username", "password" }` 到 `POST /api/auth/login`。成功后 `location.assign` 到安全的 `next`，否则去 `/`。错误用表单上方的 `.callout`，不用 `alert`、`confirm` 或浏览器校验气泡。
+
+各页侧栏底部的「登录」不逐页改 HTML。`common.js` 提供 `HiveCommon.currentUser()` 和 `HiveCommon.logout()`，同一页只请求一次 `/api/auth/me`。`shell.js` 在确认会话后，把账号名换成管理员用户名，并把该入口换成按钮「退出登录」。退出调用 `POST /api/auth/logout`，成功或已经是 401 时回到 `/login.html`。请求失败时按钮改为「退出失败，请重试」，不弹窗。
+
+### 11.7 本期不做
+
+下面几项只记路线，本期没有表、接口或设置页卡片：
+
+- TOTP 两步验证
+- GitHub 登录
+- 修改密码
+- 会话管理卡（列出设备、单独吊销、退出其他会话）
+
+注册表、业务 CRUD，以及 `/mcp` 的 Agent 令牌鉴权另案实现。那些迁移从 `0002` 开始。

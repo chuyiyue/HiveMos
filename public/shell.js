@@ -229,6 +229,61 @@
     });
   }
 
+  function initialOf(name) {
+    var value = String(name || "").trim();
+    if (!value) return "管";
+    return Array.from(value)[0].toUpperCase();
+  }
+
+  function showLoggedIn(username) {
+    var nameEl = document.querySelector(".account-name");
+    var avatar = document.querySelector(".account-avatar");
+    var accountBtn = document.querySelector(".account-btn");
+    var action = document.querySelector(".account-logout");
+    if (nameEl) nameEl.textContent = username;
+    if (avatar) avatar.textContent = initialOf(username);
+    if (accountBtn) {
+      var title = username + " · 设置";
+      accountBtn.title = title;
+      accountBtn.setAttribute("aria-label", title);
+    }
+    if (!action || action.tagName === "BUTTON") return;
+    var button = document.createElement("button");
+    button.type = "button";
+    button.className = "account-logout ghost";
+    button.title = "退出登录";
+    button.setAttribute("aria-label", "退出登录");
+    var icon = action.querySelector("svg");
+    if (icon) button.append(icon.cloneNode(true));
+    var label = document.createElement("span");
+    label.className = "btn-label";
+    label.textContent = "退出登录";
+    button.append(label);
+    button.addEventListener("click", function () {
+      if (button.disabled) return;
+      button.disabled = true;
+      var common = window.HiveCommon;
+      if (!common || typeof common.logout !== "function") {
+        location.assign("/login.html");
+        return;
+      }
+      common.logout().catch(function () {
+        button.disabled = false;
+        label.textContent = "退出失败，请重试";
+      });
+    });
+    action.replaceWith(button);
+  }
+
+  function paintAccount() {
+    var common = window.HiveCommon;
+    if (!common || typeof common.currentUser !== "function") return;
+    common.currentUser().then(function (username) {
+      if (!username) return;
+      showLoggedIn(username);
+    });
+  }
+
   renderNav();
   renderAgents();
   markAccount();
@@ -236,4 +291,5 @@
   applySidebarState(readCollapsed(), false);
   bindDrawer();
   bindTheme();
+  paintAccount();
 })();

@@ -324,7 +324,7 @@
 }
 
 a.account-logout,
-.account-logout {
+button.account-logout {
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -339,7 +339,7 @@ a.account-logout,
 }
 
 a.account-logout:hover,
-.account-logout:hover { background: var(--sidebar-bg-hover); color: var(--sidebar-text-strong); }
+button.account-logout:hover { background: var(--sidebar-bg-hover); color: var(--sidebar-text-strong); }
 
 :root[data-sidebar="collapsed"] .account-btn { justify-content: center; padding: 0; }
 

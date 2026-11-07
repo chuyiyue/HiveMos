@@ -1,4 +1,5 @@
-// Small DOM helpers shared by the shell and the page scripts. No network calls.
+// DOM helpers shared by the shell and the page scripts.
+// Session helpers talk to /api/auth/me and /api/auth/logout.
 (function () {
   var STATUS = {
     online: ["ok", "在线"],
@@ -129,6 +130,56 @@
     if (node && page.contains(node)) node.scrollIntoView();
   }
 
+  var sessionPromise = null;
+
+  function safeNext(value) {
+    if (typeof value !== "string" || value.length === 0 || value.length > 2048) return "/";
+    if (value.charAt(0) !== "/" || value.charAt(1) === "/" || value.charAt(1) === "\\") return "/";
+    if (value.indexOf("\\") !== -1 || value.indexOf("://") !== -1) return "/";
+    if (/[\u0000-\u001f]/.test(value)) return "/";
+    if (value.indexOf("/login") === 0) return "/";
+    return value;
+  }
+
+  function currentUser() {
+    if (!sessionPromise) {
+      sessionPromise = fetch("/api/auth/me", {
+        headers: { accept: "application/json" },
+        cache: "no-store",
+      }).then(
+        function (response) {
+          if (!response.ok) return "";
+          return response.json().then(
+            function (data) {
+              if (!data || data.ok !== true || typeof data.username !== "string") return "";
+              return data.username.trim();
+            },
+            function () {
+              return "";
+            },
+          );
+        },
+        function () {
+          return "";
+        },
+      );
+    }
+    return sessionPromise;
+  }
+
+  function logout() {
+    return fetch("/api/auth/logout", {
+      method: "POST",
+      headers: { accept: "application/json", "content-type": "application/json" },
+      body: "{}",
+      cache: "no-store",
+    }).then(function (response) {
+      if (!response.ok && response.status !== 401) throw new Error("logout");
+      sessionPromise = null;
+      location.assign("/login.html");
+    });
+  }
+
   function copyText(value) {
     if (navigator.clipboard && window.isSecureContext) {
       return navigator.clipboard.writeText(value);
@@ -187,5 +238,8 @@
     copyLine: copyLine,
     layout: layout,
     mount: mount,
+    safeNext: safeNext,
+    currentUser: currentUser,
+    logout: logout,
   };
 })();
