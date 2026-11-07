@@ -1,0 +1,12 @@
+@import url("/css/tokens.css");
+@import url("/css/base.css");
+@import url("/css/components.css");
+@import url("/css/shell.css");
+@import url("/css/pages.css");
+
+[hidden] { display: none !important; }
+
+@media (max-width: 380px) {
+  .topbar { padding-left: 12px; padding-right: 12px; }
+  .page { width: calc(100% - 24px); }
+}

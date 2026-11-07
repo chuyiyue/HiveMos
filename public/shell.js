@@ -1,0 +1,239 @@
+// Paints the registry nav, the Agent rail, sidebar collapse, the mobile drawer,
+// and the theme cycle. Page bodies are rendered by each page's own script.
+(function () {
+  var THEME_KEY = "hivemos-theme";
+  var SIDEBAR_KEY = "hivemos-sidebar";
+  var THEME_CYCLE = ["system", "light", "dark"];
+  var THEME_LABEL = {
+    system: "主题：跟随系统",
+    light: "主题：浅色",
+    dark: "主题：深色",
+  };
+  var THEME_ICON = {
+    system: "icon-monitor",
+    light: "icon-sun",
+    dark: "icon-moon",
+  };
+
+  // mock: 与 public/agents.js 的 id、名称、状态一致。侧栏只画名称和状态
+  var SIDEBAR_AGENTS = [
+    { id: "agt_orch", name: "编排", status: "online" },
+    { id: "agt_research", name: "研究", status: "syncing" },
+    { id: "agt_ops", name: "值守", status: "idle" },
+    { id: "agt_archive", name: "档案", status: "offline" },
+  ];
+
+  function canonicalPath(pathname) {
+    var path = pathname || "/";
+    if (path.length > 1 && path.endsWith("/")) path = path.slice(0, -1);
+    if (path === "/index.html" || path === "/index") return "/";
+    if (path.endsWith(".html")) path = path.slice(0, -5);
+    return path || "/";
+  }
+
+  function iconRef(id) {
+    return "/icons.svg#" + id;
+  }
+
+  function svgIcon(id) {
+    var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("class", "icon");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("aria-hidden", "true");
+    var use = document.createElementNS("http://www.w3.org/2000/svg", "use");
+    var ref = iconRef(id);
+    use.setAttribute("href", ref);
+    use.setAttributeNS("http://www.w3.org/1999/xlink", "href", ref);
+    svg.append(use);
+    return svg;
+  }
+
+  function renderNav() {
+    var nav = document.querySelector(".sidebar-nav");
+    if (!nav) return;
+    var active = canonicalPath(location.pathname);
+    var items = window.HIVEMOS_MODULES || [];
+    nav.replaceChildren();
+    items.forEach(function (item) {
+      if (item.nav === false) return;
+      var icon = /^icon-[a-z0-9-]+$/.test(item.icon || "") ? item.icon : "icon-layout";
+      var link = document.createElement("a");
+      link.href = item.href;
+      link.setAttribute("data-nav-key", item.key || "");
+      link.title = item.title;
+      if (canonicalPath(item.href) === active) {
+        link.classList.add("active");
+        link.setAttribute("aria-current", "page");
+      }
+      var label = document.createElement("span");
+      label.className = "nav-label";
+      label.textContent = item.title;
+      link.append(svgIcon(icon), label);
+      nav.append(link);
+    });
+  }
+
+  function renderAgents() {
+    var box = document.getElementById("sidebar-agents");
+    if (!box) return;
+    box.replaceChildren();
+    if (!SIDEBAR_AGENTS.length) {
+      var empty = document.createElement("p");
+      empty.className = "sidebar-empty";
+      empty.textContent = "还没有 Agent";
+      box.append(empty);
+      return;
+    }
+    var activeHash = location.hash || "";
+    SIDEBAR_AGENTS.forEach(function (agent) {
+      var meta = window.HiveCommon ? window.HiveCommon.statusMeta(agent.status) : ["idle", agent.status];
+      var link = document.createElement("a");
+      link.className = "device-link";
+      link.href = "/agents.html#" + encodeURIComponent(agent.id);
+      if (activeHash === "#" + agent.id) link.classList.add("is-active");
+      var dot = document.createElement("span");
+      dot.className = "ui-status-dot";
+      dot.setAttribute("data-status", meta[0]);
+      var name = document.createElement("span");
+      name.className = "device-name";
+      name.textContent = agent.name;
+      var state = document.createElement("span");
+      state.className = "device-state";
+      state.textContent = meta[1];
+      link.append(dot, svgIcon("icon-bot"), name, state);
+      box.append(link);
+    });
+  }
+
+  function readCollapsed() {
+    try {
+      return localStorage.getItem(SIDEBAR_KEY) === "collapsed";
+    } catch (error) {
+      return false;
+    }
+  }
+
+  function applySidebarState(collapsed, persist) {
+    document.documentElement.setAttribute("data-sidebar", collapsed ? "collapsed" : "expanded");
+    if (persist) {
+      try {
+        localStorage.setItem(SIDEBAR_KEY, collapsed ? "collapsed" : "expanded");
+      } catch (error) {
+        // 无存储时只在这次浏览里收起
+      }
+    }
+    var button = document.querySelector(".sidebar-collapse");
+    if (!button) return;
+    var label = collapsed ? "展开侧栏" : "收起侧栏";
+    button.setAttribute("aria-label", label);
+    button.setAttribute("title", label);
+    button.setAttribute("aria-expanded", collapsed ? "false" : "true");
+  }
+
+  function injectCollapseButton() {
+    var brand = document.querySelector(".sidebar > .brand");
+    if (!brand || document.querySelector(".sidebar-collapse")) return;
+    var button = document.createElement("button");
+    button.type = "button";
+    button.className = "sidebar-collapse ghost icon-btn";
+    button.append(svgIcon("icon-chevron-left"));
+    button.addEventListener("click", function () {
+      var collapsed = document.documentElement.getAttribute("data-sidebar") === "collapsed";
+      applySidebarState(!collapsed, true);
+    });
+    var row = document.createElement("div");
+    row.className = "sidebar-brand-row";
+    brand.parentNode.insertBefore(row, brand);
+    row.append(brand, button);
+    applySidebarState(document.documentElement.getAttribute("data-sidebar") === "collapsed", false);
+  }
+
+  function markAccount() {
+    var button = document.querySelector(".account-btn");
+    if (!button) return;
+    var on = canonicalPath(location.pathname) === "/settings";
+    button.classList.toggle("active", on);
+    if (on) button.setAttribute("aria-current", "page");
+    else button.removeAttribute("aria-current");
+  }
+
+  function closeSidebar() {
+    var sidebar = document.getElementById("sidebar");
+    if (sidebar) sidebar.classList.remove("is-open");
+    var backdrop = document.getElementById("sidebar-backdrop");
+    if (backdrop) backdrop.hidden = true;
+    var menu = document.getElementById("menu-toggle");
+    if (menu) menu.setAttribute("aria-expanded", "false");
+    document.body.classList.remove("nav-open");
+  }
+
+  function openSidebar() {
+    var sidebar = document.getElementById("sidebar");
+    if (sidebar) sidebar.classList.add("is-open");
+    var backdrop = document.getElementById("sidebar-backdrop");
+    if (backdrop) backdrop.hidden = false;
+    var menu = document.getElementById("menu-toggle");
+    if (menu) menu.setAttribute("aria-expanded", "true");
+    document.body.classList.add("nav-open");
+  }
+
+  function bindDrawer() {
+    var menu = document.getElementById("menu-toggle");
+    var backdrop = document.getElementById("sidebar-backdrop");
+    if (menu) {
+      menu.addEventListener("click", function () {
+        var sidebar = document.getElementById("sidebar");
+        if (sidebar && sidebar.classList.contains("is-open")) closeSidebar();
+        else openSidebar();
+      });
+    }
+    if (backdrop) backdrop.addEventListener("click", closeSidebar);
+    document.addEventListener("keydown", function (event) {
+      if (event.key === "Escape") closeSidebar();
+    });
+  }
+
+  function applyTheme(theme, persist) {
+    var next = THEME_CYCLE.indexOf(theme) === -1 ? "system" : theme;
+    document.documentElement.setAttribute("data-theme", next);
+    if (persist) {
+      try {
+        localStorage.setItem(THEME_KEY, next);
+      } catch (error) {
+        // 无存储时只在这次浏览里换主题
+      }
+    }
+    var button = document.querySelector("[data-theme-toggle]");
+    if (!button) return;
+    var label = THEME_LABEL[next];
+    button.setAttribute("aria-label", label);
+    button.setAttribute("title", label);
+    var text = button.querySelector(".btn-label");
+    if (text) text.textContent = label;
+    var use = button.querySelector("use");
+    if (use) {
+      var ref = iconRef(THEME_ICON[next]);
+      use.setAttribute("href", ref);
+      use.setAttributeNS("http://www.w3.org/1999/xlink", "href", ref);
+    }
+  }
+
+  function bindTheme() {
+    var button = document.querySelector("[data-theme-toggle]");
+    applyTheme(document.documentElement.getAttribute("data-theme") || "system", false);
+    if (!button) return;
+    button.addEventListener("click", function () {
+      var now = document.documentElement.getAttribute("data-theme") || "system";
+      var index = THEME_CYCLE.indexOf(now);
+      applyTheme(THEME_CYCLE[(index + 1) % THEME_CYCLE.length], true);
+    });
+  }
+
+  renderNav();
+  renderAgents();
+  markAccount();
+  injectCollapseButton();
+  applySidebarState(readCollapsed(), false);
+  bindDrawer();
+  bindTheme();
+})();

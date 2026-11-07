@@ -1,0 +1,278 @@
+/* Claude-inspired warm palette on the SMSinBox token names.
+   Light surfaces are warm ivory. Dark surfaces are warm gray, not cool black.
+   Terracotta is reserved for primary buttons, the selected nav state, and emphasis.
+   The sidebar follows the theme: ivory in light mode, warm gray in dark mode.
+   Semantic success / warning / danger values are copied from SMSinBox.
+
+   ==========================================================================
+   响应式断点统一口径表 (Responsive Breakpoints Specification)
+   --------------------------------------------------------------------------
+   统一 3 档响应式口径（CSS 变量无法直接在 @media 查询中使用，以此表为唯一权威值）：
+     1. 移动抽屉断点 (Mobile drawer, --bp-sm): 640px
+        - CSS: @media (max-width: 639px)
+        - JS:  window.matchMedia("(max-width: 639px)")
+        - 行为: 主内容占满屏，顶部汉堡按钮唤起左侧抽屉式侧栏，遮罩轻量覆盖
+     2. 平板断点 (Tablet, --bp-md): 768px
+        - 侧栏图标模式段: @media (min-width: 640px) and (max-width: 1023px)
+        - 平板内容折叠: @media (max-width: 767px)
+        - 行为: 侧栏收拢为 64px 紧凑图标轨，悬停显示文字 Tooltip；内容区弹性双列
+     3. 桌面断点 (Desktop, --bp-lg): 1024px
+        - CSS: @media (min-width: 1024px)
+        - 行为: 248px 完整固定侧栏，支持手动收起/展开；内容区居中最大 1080px
+   ========================================================================== */
+:root {
+  color-scheme: light;
+
+  /* Surfaces */
+  --bg: #FAF9F5;
+  --bg-sunken: #F0EEE6;
+  --surface: #FFFFFF;
+  --surface-hover: #F3F1E8;
+  --overlay: rgba(31, 30, 29, 0.42);
+
+  /* Lines */
+  --border: #E6E3D8;
+  --border-strong: #D8D4C4;
+
+  /* Ink */
+  --text: #1F1E1D;
+  --text-2: #57554E;
+  --text-3: #86837A;
+
+  /* Terracotta accent. Names match SMSinBox so shared components keep working. */
+  --accent: #D97757;
+  --accent-hover: #C6613F;
+  --accent-button: #D97757;
+  --accent-button-hover: #C6613F;
+  --on-accent: #FFFFFF;
+  --accent-soft: #F7E8E0;
+  --accent-text: #C6613F;
+  --focus-ring: rgba(217,119,87,.35);
+
+  /* Semantic colors, same values as SMSinBox light theme. */
+  --success: #16a34a;
+  --success-text: #15803d;
+  --success-soft: #dcfce7;
+  --warning: #d97706;
+  --warning-text: #b45309;
+  --warning-soft: #fef3c7;
+  --danger: #dc2626;
+  --danger-text: #b91c1c;
+  --danger-soft: #fee2e2;
+  --on-danger: #ffffff;
+
+  --danger-bg: #fde8e4;
+  --ok-bg: #e7f5ef;
+  --warn-bg: #fff7e8;
+
+  --switch-knob: #ffffff;
+  --toast-bg: #1F1E1D;
+  --toast-ink: #FAF9F5;
+
+  /* Sidebar follows the page theme. Selected item uses the soft accent. */
+  --sidebar-bg: #FAF9F5;
+  --sidebar-bg-hover: #F0EEE6;
+  --sidebar-active-bg: #F7E8E0;
+  --sidebar-border: #E6E3D8;
+  --sidebar-text: #57554E;
+  --sidebar-text-strong: #1F1E1D;
+  --sidebar-text-muted: #86837A;
+  --sidebar-icon: #86837A;
+  --sidebar-active-ink: #C6613F;
+  --sidebar-mark-bg: #F7E8E0;
+  --sidebar-mark-border: #E4C8B8;
+
+  --avatar-1: #F7E8E0;
+  --avatar-2: #E7E4D8;
+  --avatar-3: #E3E8DE;
+  --avatar-4: #E8E2D6;
+  --avatar-5: #EDE6DC;
+  --avatar-6: #E2E0D4;
+
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.05), 0 1px 3px rgba(0, 0, 0, 0.04);
+  --shadow-2: 0 4px 12px rgba(0, 0, 0, 0.08);
+  --shadow-3: 0 16px 48px rgba(0, 0, 0, 0.18);
+
+  /* Type. Body stays on the SMSinBox sans stack. Brand and page titles use serif. */
+  --font-sans: "Inter", "Inter var", system-ui, -apple-system, "Segoe UI", Roboto,
+    "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+  --font-serif: Georgia, "Times New Roman", "Songti SC", "SimSun", serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --fs-xs: 0.75rem;
+  --fs-sm: 0.8125rem;
+  --fs-base: 0.9375rem;
+  --fs-md: 1.0625rem;
+  --fs-lg: 1.25rem;
+  --fs-xl: 1.625rem;
+  --fs-2xl: 2.25rem;
+  --lh-tight: 1.25;
+  --lh-normal: 1.55;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+
+  --r-sm: 8px;
+  --r-md: 10px;
+  --r-lg: 12px;
+  --r-pill: 999px;
+
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --dur-fast: 120ms;
+  --dur-base: 180ms;
+  --dur-slow: 260ms;
+
+  --bp-sm: 640px;
+  --bp-md: 768px;
+  --bp-lg: 1024px;
+  --sidebar-width: 248px;
+  --sidebar-width-collapsed: 64px;
+  --topbar-height: 64px;
+  --content-max: 1080px;
+  --z-drawer: 60;
+  --z-modal: 70;
+  --z-toast: 80;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg: #262624;
+  --bg-sunken: #1F1E1D;
+  --surface: #30302E;
+  --surface-hover: #3A3A36;
+  --overlay: rgba(20, 19, 18, 0.62);
+
+  --border: #3E3E3A;
+  --border-strong: #524E48;
+
+  --text: #ECEAE2;
+  --text-2: #C4C0B4;
+  --text-3: #8F8C83;
+
+  --accent: #D97757;
+  --accent-hover: #E08A6C;
+  --accent-button: #D97757;
+  --accent-button-hover: #E08A6C;
+  --on-accent: #FFFFFF;
+  --accent-soft: #453630;
+  --accent-text: #E7A08A;
+  --focus-ring: rgba(217,119,87,.45);
+
+  --success: #4ade80;
+  --success-text: #86efac;
+  --success-soft: rgba(74, 222, 128, 0.14);
+  --warning: #fbbf24;
+  --warning-text: #fcd34d;
+  --warning-soft: rgba(251, 191, 36, 0.14);
+  --danger: #f87171;
+  --danger-text: #fca5a5;
+  --danger-soft: rgba(248, 113, 113, 0.14);
+  --danger-bg: var(--danger-soft);
+  --ok-bg: var(--success-soft);
+  --warn-bg: var(--warning-soft);
+  --on-danger: #171717;
+
+  --switch-knob: #ECEAE2;
+  --toast-bg: #ECEAE2;
+  --toast-ink: #1F1E1D;
+
+  --sidebar-bg: #262624;
+  --sidebar-bg-hover: #30302E;
+  --sidebar-active-bg: #453630;
+  --sidebar-border: #3E3E3A;
+  --sidebar-text: #C4C0B4;
+  --sidebar-text-strong: #ECEAE2;
+  --sidebar-text-muted: #8F8C83;
+  --sidebar-icon: #8F8C83;
+  --sidebar-active-ink: #E7A08A;
+  --sidebar-mark-bg: #453630;
+  --sidebar-mark-border: #6A4E43;
+
+  --avatar-1: #453630;
+  --avatar-2: #3A3832;
+  --avatar-3: #343832;
+  --avatar-4: #3E3832;
+  --avatar-5: #3A342E;
+  --avatar-6: #32322E;
+
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-2: 0 8px 24px rgba(0, 0, 0, 0.45);
+  --shadow-3: 0 16px 48px rgba(0, 0, 0, 0.6);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root[data-theme="system"],
+  :root:not([data-theme]) {
+    color-scheme: dark;
+
+    --bg: #262624;
+    --bg-sunken: #1F1E1D;
+    --surface: #30302E;
+    --surface-hover: #3A3A36;
+    --overlay: rgba(20, 19, 18, 0.62);
+
+    --border: #3E3E3A;
+    --border-strong: #524E48;
+
+    --text: #ECEAE2;
+    --text-2: #C4C0B4;
+    --text-3: #8F8C83;
+
+    --accent: #D97757;
+    --accent-hover: #E08A6C;
+    --accent-button: #D97757;
+    --accent-button-hover: #E08A6C;
+    --on-accent: #FFFFFF;
+    --accent-soft: #453630;
+    --accent-text: #E7A08A;
+    --focus-ring: rgba(217,119,87,.45);
+
+    --success: #4ade80;
+    --success-text: #86efac;
+    --success-soft: rgba(74, 222, 128, 0.14);
+    --warning: #fbbf24;
+    --warning-text: #fcd34d;
+    --warning-soft: rgba(251, 191, 36, 0.14);
+    --danger: #f87171;
+    --danger-text: #fca5a5;
+    --danger-soft: rgba(248, 113, 113, 0.14);
+    --danger-bg: var(--danger-soft);
+    --ok-bg: var(--success-soft);
+    --warn-bg: var(--warning-soft);
+    --on-danger: #171717;
+
+    --switch-knob: #ECEAE2;
+    --toast-bg: #ECEAE2;
+    --toast-ink: #1F1E1D;
+
+    --sidebar-bg: #262624;
+    --sidebar-bg-hover: #30302E;
+    --sidebar-active-bg: #453630;
+    --sidebar-border: #3E3E3A;
+    --sidebar-text: #C4C0B4;
+    --sidebar-text-strong: #ECEAE2;
+    --sidebar-text-muted: #8F8C83;
+    --sidebar-icon: #8F8C83;
+    --sidebar-active-ink: #E7A08A;
+    --sidebar-mark-bg: #453630;
+    --sidebar-mark-border: #6A4E43;
+
+    --avatar-1: #453630;
+    --avatar-2: #3A3832;
+    --avatar-3: #343832;
+    --avatar-4: #3E3832;
+    --avatar-5: #3A342E;
+    --avatar-6: #32322E;
+
+    --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-2: 0 8px 24px rgba(0, 0, 0, 0.45);
+    --shadow-3: 0 16px 48px rgba(0, 0, 0, 0.6);
+  }
+}
