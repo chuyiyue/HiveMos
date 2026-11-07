@@ -22,6 +22,8 @@
     recoveryCodes: [],
     sessions: [],
     sessionsError: "",
+    pinLimitInput: "",
+    pinLimitError: "",
     busy: false,
     focus: "",
     focusSelect: false,
@@ -421,6 +423,37 @@
     return C.section("会话管理", "", '<div class="confirm-slot" data-confirm-for="revoke-others"></div>' + error + list, actions);
   }
 
+  function sidebarSection() {
+    var form =
+      '<form id="sidebar-form" class="form-grid" novalidate>' +
+      '<label>展示上限<input data-field="pinLimitInput" name="pinLimitInput" type="number" min="1" max="20" step="1" inputmode="numeric" value="' +
+      C.escapeHtml(state.pinLimitInput) +
+      '" /><p class="subtle field-hint">侧边栏最多展示的 Agent 数量，固定的包含在内，范围 1–20</p></label>' +
+      fieldError("pin-limit-error", state.pinLimitError) +
+      '<div class="row-actions"><button type="submit"' +
+      (state.busy ? " disabled" : "") +
+      ">保存</button></div></form>";
+    return C.section("侧边栏", "", form);
+  }
+
+  function submitPinLimit() {
+    var parsed = Number(fieldValue("pinLimitInput"));
+    state.busy = true;
+    state.pinLimitError = "";
+    render();
+    api("PATCH", "/api/account/preferences", { sidebar_pin_limit: parsed }).then(function (result) {
+      state.busy = false;
+      if (!result.data || result.data.ok !== true || !result.data.preferences) {
+        fail('[data-field="pinLimitInput"]', "pinLimitError", result, "保存失败，请重试");
+        return;
+      }
+      state.pinLimitInput = String(result.data.preferences.sidebar_pin_limit);
+      state.pinLimitError = "";
+      render();
+      toast("侧边栏上限已保存");
+    });
+  }
+
   function render() {
     var active = document.activeElement;
     var activeField = active && active.getAttribute ? active.getAttribute("data-field") : "";
@@ -438,6 +471,7 @@
         passwordSection() +
         totpSection() +
         sessionsSection() +
+        sidebarSection() +
         "</div>";
     }
     C.mount(C.layout("管理员账号、两步验证与登录会话", html));
@@ -485,6 +519,7 @@
       clearNote("password-error", "passwordError");
     }
     if (field === "totpCode" || field === "totpPassword") clearNote("totp-error", "totpError");
+    if (field === "pinLimitInput") clearNote("pin-limit-error", "pinLimitError");
   }
 
   function clearNote(id, key) {
@@ -530,6 +565,7 @@
     if (state.busy) return;
     if (form.id === "profile-form") submitProfile();
     else if (form.id === "password-form") submitPassword();
+    else if (form.id === "sidebar-form") submitPinLimit();
   }
 
   function fail(slot, key, result, fallback) {
@@ -862,7 +898,12 @@
     state.loading = true;
     state.loadError = "";
     render();
-    Promise.all([api("GET", "/api/account/profile"), api("GET", "/api/account/totp"), api("GET", "/api/account/sessions")]).then(
+    Promise.all([
+      api("GET", "/api/account/profile"),
+      api("GET", "/api/account/totp"),
+      api("GET", "/api/account/sessions"),
+      api("GET", "/api/account/preferences"),
+    ]).then(
       function (results) {
         if (token !== loadToken) return;
         if (
@@ -876,6 +917,12 @@
         var profile = results[0];
         var totp = results[1];
         var sessions = results[2];
+        var preferences = results[3];
+        if (preferences.data && preferences.data.ok === true && preferences.data.preferences) {
+          state.pinLimitInput = String(preferences.data.preferences.sidebar_pin_limit);
+        } else if (!state.pinLimitInput) {
+          state.pinLimitInput = "5";
+        }
         var failed = [profile, totp, sessions].filter(function (item) {
           return !item.data || item.data.ok !== true;
         })[0];

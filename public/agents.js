@@ -469,6 +469,13 @@
           openPermissions(agent);
         },
       },
+      {
+        label: agent.pinned_at ? "取消固定" : "固定到侧边栏",
+        hint: agent.pinned_at ? "已固定在侧边栏" : "固定后在侧边栏常驻展示",
+        onSelect: function () {
+          togglePin(agent);
+        },
+      },
     ];
     if (agent.status === "active") {
       items.push({
@@ -487,6 +494,31 @@
       });
     }
     C.openActionMenu({ title: agent.name, items: items });
+  }
+
+  function togglePin(agent) {
+    if (state.busy) return;
+    state.busy = true;
+    api("PATCH", "/api/agents/" + encodeURIComponent(agent.id), { pinned: !agent.pinned_at })
+      .then(function (result) {
+        state.busy = false;
+        if (authRedirect(result.status)) return;
+        if (!result.data || result.data.ok !== true) {
+          state.notice = (result.data && result.data.error) || "没有保存，请重试";
+          state.noticeKind = "danger";
+          render();
+          return;
+        }
+        state.notice = agent.pinned_at ? "已取消固定" : "已固定到侧边栏";
+        state.noticeKind = "ok";
+        loadAll();
+      })
+      .catch(function () {
+        state.busy = false;
+        state.notice = "网络异常，请重试";
+        state.noticeKind = "danger";
+        render();
+      });
   }
 
   function groupNameOf(agent) {

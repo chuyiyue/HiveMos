@@ -15,13 +15,9 @@
     dark: "icon-moon",
   };
 
-  // mock: 与 public/agents.js 的 id、名称、状态一致。侧栏只画名称和状态
-  var SIDEBAR_AGENTS = [
-    { id: "agt_orch", name: "编排", status: "online" },
-    { id: "agt_research", name: "研究", status: "syncing" },
-    { id: "agt_ops", name: "值守", status: "idle" },
-    { id: "agt_archive", name: "档案", status: "offline" },
-  ];
+  // Pin 栏数据由服务端组装（GET /api/sidebar/agents）：固定在前、最近
+  // 活动填充其后，这里只负责渲染。拉不到时整区隐藏，不挡其他功能。
+  var sidebarAgents = [];
 
   function canonicalPath(pathname) {
     var path = pathname || "/";
@@ -73,23 +69,39 @@
     });
   }
 
+  function fullSeenText(value) {
+    var time = Number(value);
+    if (!Number.isFinite(time) || time <= 0) return "还没有调用记录";
+    var formatted = window.HiveCommon ? window.HiveCommon.formatMinute(time) : "";
+    return "上次调用 " + (formatted || new Date(time).toLocaleString());
+  }
+
+  function relativeSeenText(value) {
+    var time = Number(value);
+    if (!Number.isFinite(time) || time <= 0) return "还没有调用记录";
+    var diff = Date.now() - time;
+    if (diff < 60 * 1000) return "刚刚调用";
+    if (diff < 60 * 60 * 1000) return Math.floor(diff / (60 * 1000)) + " 分钟前调用";
+    if (diff < 24 * 60 * 60 * 1000) return Math.floor(diff / (60 * 60 * 1000)) + " 小时前调用";
+    if (diff < 30 * 24 * 60 * 60 * 1000) return Math.floor(diff / (24 * 60 * 60 * 1000)) + " 天前调用";
+    return fullSeenText(time);
+  }
+
   function renderAgents() {
     var box = document.getElementById("sidebar-agents");
     if (!box) return;
+    var section = box.closest(".sidebar-devices");
+    if (section) section.hidden = sidebarAgents.length === 0;
     box.replaceChildren();
-    if (!SIDEBAR_AGENTS.length) {
-      var empty = document.createElement("p");
-      empty.className = "sidebar-empty";
-      empty.textContent = "还没有 Agent";
-      box.append(empty);
-      return;
-    }
     var activeHash = location.hash || "";
-    SIDEBAR_AGENTS.forEach(function (agent) {
+    sidebarAgents.forEach(function (agent) {
       var meta = window.HiveCommon ? window.HiveCommon.statusMeta(agent.status) : ["idle", agent.status];
+      var item = document.createElement("div");
+      item.className = "device-item";
       var link = document.createElement("a");
       link.className = "device-link";
       link.href = "/agents.html#" + encodeURIComponent(agent.id);
+      link.title = fullSeenText(agent.last_seen_at);
       if (activeHash === "#" + agent.id) link.classList.add("is-active");
       var dot = document.createElement("span");
       dot.className = "ui-status-dot";
@@ -99,10 +111,50 @@
       name.textContent = agent.name;
       var state = document.createElement("span");
       state.className = "device-state";
-      state.textContent = meta[1];
+      state.textContent = relativeSeenText(agent.last_seen_at);
       link.append(dot, svgIcon("icon-bot"), name, state);
-      box.append(link);
+      item.append(link);
+      if (agent.pinned) {
+        var unpin = document.createElement("button");
+        unpin.type = "button";
+        unpin.className = "device-unpin";
+        unpin.title = "取消固定";
+        unpin.setAttribute("aria-label", "取消固定 " + agent.name);
+        unpin.append(svgIcon("icon-pin"));
+        unpin.addEventListener("click", function () {
+          unpin.disabled = true;
+          fetch("/api/agents/" + encodeURIComponent(agent.id), {
+            method: "PATCH",
+            headers: { "content-type": "application/json", accept: "application/json" },
+            body: JSON.stringify({ pinned: false }),
+          })
+            .then(function (response) {
+              if (!response.ok) throw new Error("unpin failed");
+              loadSidebarAgents();
+            })
+            .catch(function () {
+              unpin.disabled = false;
+            });
+        });
+        item.append(unpin);
+      }
+      box.append(item);
     });
+  }
+
+  function loadSidebarAgents() {
+    fetch("/api/sidebar/agents", { headers: { accept: "application/json" }, cache: "no-store" })
+      .then(function (response) {
+        return response.ok ? response.json() : null;
+      })
+      .then(function (data) {
+        if (!data || data.ok !== true || !Array.isArray(data.agents)) return;
+        sidebarAgents = data.agents;
+        renderAgents();
+      })
+      .catch(function () {
+        // 侧栏拿不到数据时保持隐藏，不影响页面主体
+      });
   }
 
   function readCollapsed() {
@@ -282,6 +334,7 @@
 
   renderNav();
   renderAgents();
+  loadSidebarAgents();
   markAccount();
   injectCollapseButton();
   applySidebarState(readCollapsed(), false);
