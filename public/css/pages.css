@@ -18,7 +18,7 @@
 
 .stat-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr));
   gap: 12px;
   margin: 0 0 16px;
 }
@@ -37,7 +37,7 @@
 
 .record {
   display: grid;
-  grid-template-columns: minmax(0, 1.4fr) minmax(220px, 1fr);
+  grid-template-columns: minmax(0, 1fr) minmax(200px, 0.6fr);
   gap: 12px 24px;
   align-items: start;
   padding: 16px;
@@ -122,12 +122,7 @@ button.copy-btn:hover { background: var(--surface-hover); }
 .auth-panel form { display: grid; gap: 14px; }
 .auth-panel .callout { margin: 0; }
 
-@media (max-width: 1023px) {
-  .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-}
-
 @media (max-width: 767px) {
-  .stat-grid { grid-template-columns: 1fr; }
   .record { grid-template-columns: 1fr; }
   .kv div { grid-template-columns: 72px minmax(0, 1fr); }
 }
@@ -264,3 +259,7 @@ button.ghost:active, a.ghost:active, .ghost:active, .icon-btn:active, button.cop
   .sidebar-nav a.active:hover { background: var(--sidebar-active-bg); }
   .account-btn.active:hover { background: var(--sidebar-active-bg); }
 }
+
+/* 全局比例一致性：网格子项可收缩、媒体不溢出，元素随容器平滑伸缩不突变 */
+.record > *, .cal-grid > *, .stat-grid > *, .list > * { min-width: 0; }
+img, svg, video, canvas { max-width: 100%; }
