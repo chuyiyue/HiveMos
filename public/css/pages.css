@@ -229,3 +229,7 @@ button.copy-btn:hover { background: var(--surface-hover); }
 .confirm-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .record.is-selected { border-color: var(--accent); }
 .stack-form { margin-top: 4px; }
+
+.auth-subtitle { color: var(--text-2); margin: 0 0 4px; }
+.auth-note { color: var(--text-3); font-size: 13px; text-align: center; margin: 16px 0 0; }
+.auth-card .callout { margin: 14px 0 0; }

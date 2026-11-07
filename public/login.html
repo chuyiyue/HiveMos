@@ -8,52 +8,32 @@
     <script src="/theme-boot.js"></script>
     <link rel="stylesheet" href="/style.css" />
   </head>
-  <body>
-    <div class="app-layout">
-      <aside class="sidebar" id="sidebar">
-        <a class="brand" href="/">
-          <span class="mark" aria-hidden="true">H</span>
-          <span class="brand-name">HiveMos</span>
-        </a>
-        <nav class="sidebar-nav" aria-label="主导航"></nav>
-        <div class="sidebar-devices" aria-labelledby="sidebar-agents-title">
-          <div class="sidebar-label-row">
-            <p class="sidebar-label" id="sidebar-agents-title">Agent</p>
-          </div>
-          <div id="sidebar-agents" class="device-list"></div>
-        </div>
-        <div class="sidebar-footer">
-          <a class="account-btn" href="/settings.html" title="设置" aria-label="设置">
-            <span class="account-avatar" aria-hidden="true">管</span>
-            <span class="account-name btn-label">管理员</span>
-          </a>
-          <a class="account-logout ghost" href="/login.html" title="登录" aria-label="前往登录">
-            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#icon-log-out"/></svg>
-            <span class="btn-label">登录</span>
-          </a>
-        </div>
-      </aside>
-      <div class="main">
-        <header class="topbar">
-          <button id="menu-toggle" class="ghost icon-btn" type="button" aria-label="打开导航" aria-expanded="false" aria-controls="sidebar">
-            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#icon-menu"/></svg>
-          </button>
-          <h1 class="topbar-title">登录</h1>
-          <p class="live-status" role="status"><span class="live-dot" aria-hidden="true"></span><span>静态骨架</span></p>
-          <div class="topbar-actions">
-            <button class="ghost icon-btn" type="button" data-theme-toggle aria-label="主题：跟随系统">
-              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#icon-sun"/></svg>
-              <span class="btn-label sr-only">主题：跟随系统</span>
+  <body class="auth-body">
+    <main class="auth-card">
+      <span class="brand">
+        <span class="mark" aria-hidden="true">H</span>
+        <span class="brand-name">HiveMos</span>
+      </span>
+      <h1 class="auth-title">登录</h1>
+      <p class="auth-subtitle">使用管理员账号进入控制面</p>
+      <p id="login-error" class="callout danger" role="alert" hidden></p>
+      <form id="login-form" novalidate>
+        <label>账号
+          <input id="username" name="username" type="text" autocomplete="username" maxlength="256" spellcheck="false" autofocus />
+        </label>
+        <label>密码
+          <span class="password-field">
+            <input id="password" name="password" type="password" autocomplete="current-password" maxlength="256" />
+            <button id="password-toggle" class="icon-btn" type="button" aria-label="显示密码" aria-pressed="false">
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#icon-eye"/></svg>
             </button>
-          </div>
-        </header>
-        <div class="page" id="page"></div>
-      </div>
-    </div>
-    <div id="sidebar-backdrop" class="sidebar-backdrop" hidden></div>
-    <script src="/registry.js"></script>
+          </span>
+        </label>
+        <button id="login-submit" type="submit">登录</button>
+      </form>
+      <p class="auth-note">两步验证和第三方登录接通后会出现在这里</p>
+    </main>
     <script src="/common.js"></script>
-    <script src="/shell.js"></script>
     <script src="/login.js"></script>
   </body>
 </html>

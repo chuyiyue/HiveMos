@@ -2,28 +2,6 @@
 (function () {
   var C = window.HiveCommon;
   var nextParam = new URLSearchParams(location.search).get("next");
-  C.mount(
-    C.layout(
-      "使用管理员账号进入控制面",
-      '<div class="stack">' +
-        '<p id="login-error" class="callout danger" role="alert" hidden></p>' +
-        '<section class="panel auth-panel"><form id="login-form" novalidate>' +
-        "<label>账号" +
-        '<input id="username" name="username" type="text" autocomplete="username" maxlength="256" spellcheck="false" autofocus />' +
-        "</label>" +
-        "<label>密码" +
-        '<span class="password-field">' +
-        '<input id="password" name="password" type="password" autocomplete="current-password" maxlength="256" />' +
-        '<button id="password-toggle" class="icon-btn" type="button" aria-label="显示密码" aria-pressed="false">' +
-        '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#icon-eye"/></svg>' +
-        "</button></span></label>" +
-        '<button id="login-submit" type="submit">登录</button>' +
-        "</form></section>" +
-        C.section("其他方式", "", C.emptyState("还没有其他登录方式", "两步验证和第三方登录接通后会出现在这里")) +
-        "</div>",
-    ),
-  );
-
   var form = document.getElementById("login-form");
   var username = document.getElementById("username");
   var password = document.getElementById("password");
