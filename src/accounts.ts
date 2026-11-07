@@ -34,6 +34,20 @@ export interface TotpUserRecord {
   totp_last_counter: number | null;
 }
 
+export interface TotpTicketRecord {
+  id: string;
+  user_id: string;
+  expires_at: number;
+  attempts: number;
+  created_at: number;
+  username: string;
+  role: string;
+  disabled_at: number | null;
+  totp_secret: string | null;
+  totp_enabled_at: number | null;
+  totp_last_counter: number | null;
+}
+
 export interface ListedSession {
   id: string;
   created_at: number;
@@ -225,6 +239,12 @@ export async function deleteOtherUserSessions(db: D1Database, userId: string, ke
   await db.prepare("DELETE FROM sessions WHERE user_id = ? AND id <> ?").bind(userId, keepSessionId).run();
 }
 
+// Same statement as deleteOtherUserSessions. TOTP disable keeps the session
+// that just proved the second factor and drops every other one.
+export async function deleteUserSessionsExcept(db: D1Database, userId: string, keepHash: string): Promise<void> {
+  await deleteOtherUserSessions(db, userId, keepHash);
+}
+
 export async function deleteUserTotpTickets(db: D1Database, userId: string): Promise<void> {
   await db.prepare("DELETE FROM totp_tickets WHERE user_id = ?").bind(userId).run();
 }
@@ -240,6 +260,146 @@ export async function findTotpUser(db: D1Database, userId: string): Promise<Totp
     .first<TotpUserRecord>();
 }
 
+export async function setTotpPending(
+  db: D1Database,
+  userId: string,
+  sealedSecret: string,
+  createdAt: number,
+): Promise<void> {
+  await db
+    .prepare("UPDATE users SET totp_pending_secret = ?, totp_pending_created_at = ? WHERE id = ?")
+    .bind(sealedSecret, createdAt, userId)
+    .run();
+}
+
+// Promotes the pending secret. The enrollment code is deliberately not stored
+// as totp_last_counter: the operator may log in again inside the same 30s step.
+export async function enableTotp(db: D1Database, userId: string, enabledAt: number): Promise<boolean> {
+  const result = await db
+    .prepare(
+      `UPDATE users
+       SET totp_secret = totp_pending_secret,
+           totp_enabled_at = ?,
+           totp_last_counter = NULL,
+           totp_pending_secret = NULL,
+           totp_pending_created_at = NULL
+       WHERE id = ? AND totp_pending_secret IS NOT NULL`,
+    )
+    .bind(enabledAt, userId)
+    .run();
+  return changesOf(result) > 0;
+}
+
+export async function clearTotp(db: D1Database, userId: string): Promise<void> {
+  await db.batch([
+    db
+      .prepare(
+        `UPDATE users
+         SET totp_secret = NULL, totp_pending_secret = NULL, totp_pending_created_at = NULL,
+             totp_enabled_at = NULL, totp_last_counter = NULL
+         WHERE id = ?`,
+      )
+      .bind(userId),
+    db.prepare("DELETE FROM totp_recovery_codes WHERE user_id = ?").bind(userId),
+    db.prepare("DELETE FROM totp_tickets WHERE user_id = ?").bind(userId),
+  ]);
+}
+
+// Rejects a code that maps to an already accepted (or older) step.
+export async function advanceTotpCounter(db: D1Database, userId: string, counter: number): Promise<boolean> {
+  const result = await db
+    .prepare(
+      `UPDATE users SET totp_last_counter = ?
+       WHERE id = ? AND (totp_last_counter IS NULL OR totp_last_counter < ?)`,
+    )
+    .bind(counter, userId, counter)
+    .run();
+  return changesOf(result) > 0;
+}
+
+export async function replaceRecoveryCodes(
+  db: D1Database,
+  userId: string,
+  hashes: string[],
+  createdAt: number,
+): Promise<void> {
+  const statements = [db.prepare("DELETE FROM totp_recovery_codes WHERE user_id = ?").bind(userId)];
+  for (const hash of hashes) {
+    statements.push(
+      db
+        .prepare(
+          `INSERT INTO totp_recovery_codes (id, user_id, code_hash, created_at, used_at)
+           VALUES (?, ?, ?, ?, NULL)`,
+        )
+        .bind(crypto.randomUUID(), userId, hash, createdAt),
+    );
+  }
+  await db.batch(statements);
+}
+
+export async function consumeRecoveryCode(
+  db: D1Database,
+  userId: string,
+  codeHash: string,
+  usedAt: number,
+): Promise<boolean> {
+  const result = await db
+    .prepare(
+      `UPDATE totp_recovery_codes SET used_at = ?
+       WHERE user_id = ? AND code_hash = ? AND used_at IS NULL`,
+    )
+    .bind(usedAt, userId, codeHash)
+    .run();
+  return changesOf(result) > 0;
+}
+
+export async function countRecoveryCodes(db: D1Database, userId: string): Promise<number> {
+  const row = await db
+    .prepare("SELECT COUNT(*) AS total FROM totp_recovery_codes WHERE user_id = ? AND used_at IS NULL")
+    .bind(userId)
+    .first<{ total: number }>();
+  return row?.total ?? 0;
+}
+
+export async function createTotpTicket(
+  db: D1Database,
+  ticket: { id: string; userId: string; expiresAt: number; createdAt: number },
+): Promise<void> {
+  await db
+    .prepare(
+      "INSERT INTO totp_tickets (id, user_id, expires_at, attempts, created_at) VALUES (?, ?, ?, 0, ?)",
+    )
+    .bind(ticket.id, ticket.userId, ticket.expiresAt, ticket.createdAt)
+    .run();
+}
+
+export async function findTotpTicket(db: D1Database, ticketHash: string): Promise<TotpTicketRecord | null> {
+  return db
+    .prepare(
+      `SELECT t.id AS id, t.user_id AS user_id, t.expires_at AS expires_at, t.attempts AS attempts,
+              t.created_at AS created_at, u.username AS username, u.role AS role,
+              u.disabled_at AS disabled_at, u.totp_secret AS totp_secret,
+              u.totp_enabled_at AS totp_enabled_at, u.totp_last_counter AS totp_last_counter
+       FROM totp_tickets t
+       JOIN users u ON u.id = t.user_id
+       WHERE t.id = ?`,
+    )
+    .bind(ticketHash)
+    .first<TotpTicketRecord>();
+}
+
+export async function recordTotpAttempt(db: D1Database, ticketHash: string): Promise<number> {
+  const row = await db
+    .prepare("UPDATE totp_tickets SET attempts = attempts + 1 WHERE id = ? RETURNING attempts")
+    .bind(ticketHash)
+    .first<{ attempts: number }>();
+  return row?.attempts ?? 1;
+}
+
+export async function deleteTotpTicket(db: D1Database, ticketHash: string): Promise<void> {
+  await db.prepare("DELETE FROM totp_tickets WHERE id = ?").bind(ticketHash).run();
+}
+
 export function rateLimitWindowStart(now: number, windowMs: number): number {
   return Math.floor(now / windowMs) * windowMs;
 }
@@ -247,6 +407,31 @@ export function rateLimitWindowStart(now: number, windowMs: number): number {
 export function rateLimitRetryAfterSeconds(now: number, windowMs: number): number {
   const end = rateLimitWindowStart(now, windowMs) + windowMs;
   return Math.max(1, Math.ceil((end - now) / 1000));
+}
+
+export async function consumeRateLimit(db: D1Database, tokenHash: string, now: number): Promise<number> {
+  return consumeRateLimitWindow(db, tokenHash, now, 60_000);
+}
+
+// Same table, but callers that need a long window (login failures, second
+// factor guesses) pass it explicitly instead of resetting every minute.
+export async function consumeRateLimitWindow(
+  db: D1Database,
+  tokenHash: string,
+  now: number,
+  windowMs: number,
+): Promise<number> {
+  const windowStart = rateLimitWindowStart(now, windowMs);
+  const row = await db
+    .prepare(
+      `INSERT INTO rate_limits (token_hash, window_start, count)
+       VALUES (?, ?, 1)
+       ON CONFLICT(token_hash, window_start) DO UPDATE SET count = count + 1
+       RETURNING count`,
+    )
+    .bind(tokenHash, windowStart)
+    .first<{ count: number }>();
+  return row?.count ?? 1;
 }
 
 export function loginWindowStart(now: number): number {
@@ -292,6 +477,22 @@ export async function clearRateLimitWindow(
     .prepare("DELETE FROM rate_limits WHERE token_hash = ? AND window_start = ?")
     .bind(key, rateLimitWindowStart(now, windowMs))
     .run();
+}
+
+// Reads the counter without incrementing it, so a caller can refuse the
+// attempt before it checks a password or TOTP code.
+export async function readRateLimitWindow(
+  db: D1Database,
+  tokenHash: string,
+  now: number,
+  windowMs: number,
+): Promise<number> {
+  const windowStart = rateLimitWindowStart(now, windowMs);
+  const row = await db
+    .prepare(`SELECT "count" AS total FROM rate_limits WHERE token_hash = ? AND window_start = ?`)
+    .bind(tokenHash, windowStart)
+    .first<{ total: number }>();
+  return row?.total ?? 0;
 }
 
 export async function clearLoginFailures(db: D1Database, key: string, now: number): Promise<void> {

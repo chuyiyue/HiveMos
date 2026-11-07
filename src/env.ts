@@ -10,6 +10,7 @@ export interface D1PreparedStatement {
 
 export interface D1Database {
   prepare(query: string): D1PreparedStatement;
+  batch(statements: D1PreparedStatement[]): Promise<unknown>;
 }
 
 export interface AiBinding {
@@ -26,7 +27,7 @@ export interface Env {
   ADMIN_PASSWORD?: string;
   // Optional Worker var/secret. Blank falls back to the built-in model.
   AI_MODEL?: string;
-  // Seals TOTP secrets in a later step. Unused until that step lands.
+  // Optional. Seals TOTP secrets. Blank stores them with a plain: prefix.
   CONTENT_KEY?: string;
 }
 

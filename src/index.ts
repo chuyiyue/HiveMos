@@ -24,6 +24,7 @@ import {
 } from "./accounts";
 import type { UserRecord } from "./accounts";
 import { handleAccountRequest } from "./account-http";
+import { handleTotpAccount, startTotpChallenge, verifyTotpLogin } from "./totp-http";
 import type { Env, ScheduledEvent, WaitCtx } from "./env";
 import { clientAddress, isCrossSite, json, readCookie, readJsonLimited } from "./http";
 import { handleMcp } from "./mcp";
@@ -58,6 +59,12 @@ export default {
       if (isPublicAsset(path)) return env.ASSETS.fetch(request);
       if (path === "/api/health") return json({ ok: true, service: "hivemos" });
       if (path === "/api/auth/login") return login(request, env);
+      // The ticket is the credential. This must stay ahead of the session gate,
+      // same as login, or a signed-out operator can never finish the challenge.
+      if (path === "/api/auth/totp/verify") {
+        if (request.method.toUpperCase() !== "POST") return methodNotAllowed("POST");
+        return verifyTotpLogin(request, env);
+      }
       // Agents POST JSON-RPC here with their own bearer. GET stays on the session
       // gate so html_handling can still serve mcp.html at /mcp.
       if (path === "/mcp" && request.method.toUpperCase() === "POST") return handleMcp(request, env, wait);
@@ -71,6 +78,8 @@ export default {
 
       if (path === "/api/auth/logout") return logout(request, env);
       if (path === "/api/auth/me") return me(request, env);
+      const totpAccount = await handleTotpAccount(request, env, path);
+      if (totpAccount) return totpAccount;
       const account = await handleAccountRequest(request, env, path);
       if (account) return account;
       const registry = await handleRegistryRequest(request, env, wait, path);
@@ -288,7 +297,9 @@ async function finishLogin(
 // path cannot drift apart (including the TOTP challenge).
 async function issueSessionFor(request: Request, env: Env, user: UserRecord): Promise<Response> {
   const totp = await findTotpUser(env.DB, user.id);
-  // 下一步在 totp_enabled_at 与 totp_secret 都有值时改为 startTotpChallenge。
+  if (totp?.totp_enabled_at != null && totp.totp_secret != null) {
+    return startTotpChallenge(env, user);
+  }
   return issueSession(request, env, { ...user, totp_enabled_at: totp?.totp_enabled_at ?? null });
 }
 
