@@ -1,78 +1,110 @@
-/* mock: 记忆与 Soul 合并板块。记忆为占位摘要（接入后 GET /api/memories），Soul 为版本占位（接入后 GET /api/souls） */
+/* mock: 记忆与 Soul 合并板块。记忆为占位摘要（接入后 GET /api/memories），Soul 为版本占位（接入后 GET /api/souls）。添加先在页内生效 */
 (function () {
   var C = window.HiveCommon;
+  var activeTab = location.hash === "#soul" ? "soul" : "memory";
+  function now() {
+    var d = new Date();
+    function p(n) { return (n < 10 ? "0" : "") + n; }
+    return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) + " " + p(d.getHours()) + ":" + p(d.getMinutes());
+  }
+  function val(ctrl, name) {
+    var el = ctrl.form.querySelector("[name=\"" + name + "\"]");
+    return el ? el.value.trim() : "";
+  }
+
   var MEMORIES = [
     { id: "mem_pref", title: "回复用简体中文", scope: "工作区", source: "管理员", updated: "2026-11-05 11:02", excerpt: "界面对用户使用简体中文，术语保留英文原名" },
     { id: "mem_deploy", title: "部署走 Wrangler", scope: "编排", source: "研究", updated: "2026-11-07 09:12", excerpt: "控制面只部署在 Cloudflare Workers，不引入构建步骤" },
     { id: "mem_name", title: "如何称呼操作者", scope: "全局", source: "管理员", updated: "2026-11-01 16:40", excerpt: "操作者在界面中显示为管理员" },
   ];
-  var memCards = MEMORIES.map(function (item) {
-    return C.record({
-      id: item.id,
-      title: item.title,
-      lede: item.excerpt,
-      facts: [
-        ["作用域", C.escapeHtml(item.scope)],
-        ["来源", C.escapeHtml(item.source)],
-        ["更新时间", C.escapeHtml(item.updated)],
-      ],
-    });
-  }).join("");
-  var memoryHtml =
-    "<div class=\"stack\">" +
-    C.section("记忆", String(MEMORIES.length) + " 条", C.list(memCards)) +
-    C.section("冲突", "", C.emptyState("没有待合并的记忆", "同一作用域发生冲突时会列在这里")) +
-    "</div>";
-
   var SOULS = [
     { id: "soul_orch", agent: "编排", version: "v12", status: "synced", updated: "2026-11-07 08:55" },
     { id: "soul_research", agent: "研究", version: "v7", status: "syncing", updated: "2026-11-07 09:16" },
     { id: "soul_ops", agent: "值守", version: "v3", status: "paused", updated: "2026-11-06 19:04" },
   ];
-  var soulCards = SOULS.map(function (item) {
-    return C.record({
-      id: item.id,
-      title: item.agent,
-      status: item.status,
-      lede: "当前版本 " + item.version,
-      facts: [
-        ["版本", C.escapeHtml(item.version)],
-        ["同步时间", C.escapeHtml(item.updated)],
-      ],
-    });
-  }).join("");
-  var soulHtml =
-    "<div class=\"stack\">" +
-    C.section("Soul", String(SOULS.length) + " 份", C.list(soulCards)) +
-    C.section("草稿", "", C.emptyState("没有未发布的草稿", "尚未同步的 Soul 草稿会留在这里")) +
-    "</div>";
 
-  C.mount(
-    C.layout(
-      "",
-      "<div class=\"page-tabs\" role=\"tablist\">" +
-        "<button class=\"page-tab\" type=\"button\" role=\"tab\" data-tab=\"memory\" aria-selected=\"true\">记忆</button>" +
-        "<button class=\"page-tab\" type=\"button\" role=\"tab\" data-tab=\"soul\" aria-selected=\"false\">Soul</button>" +
-        "</div>" +
-        "<div data-panel=\"memory\">" + memoryHtml + "</div>" +
-        "<div data-panel=\"soul\" hidden>" + soulHtml + "</div>",
-    ),
-  );
+  function render() {
+    var memCards = MEMORIES.map(function (item) {
+      return C.record({ id: item.id, title: item.title, lede: item.excerpt, facts: [["作用域", C.escapeHtml(item.scope)], ["来源", C.escapeHtml(item.source)], ["更新时间", C.escapeHtml(item.updated)]] });
+    }).join("");
+    var memoryHtml =
+      "<div class=\"stack\">" +
+      "<button type=\"button\" class=\"add-button\" data-add=\"memory\">添加记忆</button>" +
+      C.section("记忆", String(MEMORIES.length) + " 条", C.list(memCards)) +
+      C.section("冲突", "", C.emptyState("没有待合并的记忆", "同一作用域发生冲突时会列在这里")) +
+      "</div>";
+    var soulCards = SOULS.map(function (item) {
+      return C.record({ id: item.id, title: item.agent, status: item.status, lede: "当前版本 " + item.version, facts: [["版本", C.escapeHtml(item.version)], ["同步时间", C.escapeHtml(item.updated)]] });
+    }).join("");
+    var soulHtml =
+      "<div class=\"stack\">" +
+      "<button type=\"button\" class=\"add-button\" data-add=\"soul\">添加 Soul</button>" +
+      C.section("Soul", String(SOULS.length) + " 份", C.list(soulCards)) +
+      C.section("草稿", "", C.emptyState("没有未发布的草稿", "尚未同步的 Soul 草稿会留在这里")) +
+      "</div>";
+    C.mount(
+      C.layout(
+        "",
+        "<div class=\"page-tabs\" role=\"tablist\">" +
+          "<button class=\"page-tab\" type=\"button\" role=\"tab\" data-tab=\"memory\" aria-selected=\"" + (activeTab === "memory" ? "true" : "false") + "\">记忆</button>" +
+          "<button class=\"page-tab\" type=\"button\" role=\"tab\" data-tab=\"soul\" aria-selected=\"" + (activeTab === "soul" ? "true" : "false") + "\">Soul</button>" +
+          "</div>" +
+          "<div data-panel=\"memory\"" + (activeTab === "memory" ? "" : " hidden") + ">" + memoryHtml + "</div>" +
+          "<div data-panel=\"soul\"" + (activeTab === "soul" ? "" : " hidden") + ">" + soulHtml + "</div>"
+      )
+    );
+  }
 
-  function activate(name) {
-    document.querySelectorAll(".page-tab").forEach(function (btn) {
-      btn.setAttribute("aria-selected", btn.getAttribute("data-tab") === name ? "true" : "false");
-    });
-    document.querySelectorAll("[data-panel]").forEach(function (panel) {
-      panel.hidden = panel.getAttribute("data-panel") !== name;
+  function openAddMemory() {
+    C.openFormDialog({
+      title: "添加记忆",
+      bodyHtml:
+        "<label>标题<input name=\"title\" maxlength=\"80\" autocomplete=\"off\" /></label>" +
+        "<label>作用域<input name=\"scope\" maxlength=\"40\" autocomplete=\"off\" placeholder=\"例如 全局、工作区或某个 Agent\" /></label>" +
+        "<label>内容<textarea name=\"excerpt\" rows=\"4\" maxlength=\"500\"></textarea></label>",
+      submitLabel: "添加",
+      onSubmit: function (ctrl) {
+        var title = val(ctrl, "title");
+        if (!title) { ctrl.setError("请填写标题"); return; }
+        MEMORIES.unshift({ id: "mem_" + Date.now(), title: title, scope: val(ctrl, "scope") || "全局", source: "管理员", updated: now(), excerpt: val(ctrl, "excerpt") });
+        ctrl.close();
+        render();
+      },
     });
   }
-  document.querySelectorAll(".page-tab").forEach(function (btn) {
-    btn.addEventListener("click", function () {
-      var name = btn.getAttribute("data-tab");
-      activate(name);
-      history.replaceState(null, "", "#" + name);
+  function openAddSoul() {
+    C.openFormDialog({
+      title: "添加 Soul",
+      bodyHtml:
+        "<label>Agent<input name=\"agent\" maxlength=\"40\" autocomplete=\"off\" /></label>" +
+        "<label>版本<input name=\"version\" maxlength=\"20\" autocomplete=\"off\" placeholder=\"v1\" /></label>",
+      submitLabel: "添加",
+      onSubmit: function (ctrl) {
+        var agent = val(ctrl, "agent");
+        if (!agent) { ctrl.setError("请填写 Agent"); return; }
+        SOULS.push({ id: "soul_" + Date.now(), agent: agent, version: val(ctrl, "version") || "v1", status: "paused", updated: now() });
+        ctrl.close();
+        render();
+      },
     });
+  }
+
+  var page = document.getElementById("page");
+  page.addEventListener("click", function (event) {
+    var target = event.target;
+    if (!(target instanceof Element)) return;
+    var tab = target.closest(".page-tab");
+    if (tab) {
+      activeTab = tab.getAttribute("data-tab");
+      history.replaceState(null, "", "#" + activeTab);
+      render();
+      return;
+    }
+    var add = target.closest("[data-add]");
+    if (add) {
+      if (add.getAttribute("data-add") === "memory") openAddMemory();
+      else openAddSoul();
+    }
   });
-  activate(location.hash === "#soul" ? "soul" : "memory");
+  render();
 })();

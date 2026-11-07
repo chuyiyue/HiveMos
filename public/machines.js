@@ -1,7 +1,16 @@
-/* mock: 云主机板块三页签（服务器 / 云主机 / Workers）。接入后分别改为 GET /api/servers、/api/machines、/api/workers */
+/* mock: 云主机板块三页签（服务器 / 云主机 / Workers）。接入后分别改为 GET /api/servers、/api/machines、/api/workers。添加先在页内生效 */
 (function () {
   var C = window.HiveCommon;
-
+  var activeTab = location.hash === "#hosts" ? "hosts" : location.hash === "#workers" ? "workers" : "servers";
+  function now() {
+    var d = new Date();
+    function p(n) { return (n < 10 ? "0" : "") + n; }
+    return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) + " " + p(d.getHours()) + ":" + p(d.getMinutes());
+  }
+  function val(ctrl, name) {
+    var el = ctrl.form.querySelector("[name=\"" + name + "\"]");
+    return el ? el.value.trim() : "";
+  }
   function card(item, facts) {
     return C.record({ id: item.id, title: item.name, status: item.status, lede: item.lede || "", facts: facts });
   }
@@ -10,77 +19,89 @@
     { id: "sv_sh", name: "上海-01", status: "running", lede: "华东", spec: "8 核 / 16 GB / 500 GB", agent: "编排、值守", heartbeat: "2026-11-07 09:24" },
     { id: "sv_sg", name: "新加坡-02", status: "running", lede: "东南亚", spec: "4 核 / 8 GB / 200 GB", agent: "研究", heartbeat: "2026-11-07 09:18" },
   ];
-  var serverHtml =
-    "<div class=\"stack\">" +
-    C.section("服务器", String(SERVERS.length) + " 台", C.list(SERVERS.map(function (item) {
-      return card(item, [
-        ["配置", C.escapeHtml(item.spec)],
-        ["绑定", C.escapeHtml(item.agent)],
-        ["最近心跳", C.escapeHtml(item.heartbeat)],
-      ]);
-    }).join(""))) +
-    "</div>";
-
   var HOSTS = [
     { id: "pc_hk", name: "香港-01", status: "running", lede: "香港", spec: "2 核 / 4 GB / 40 GB", agent: "值守", heartbeat: "2026-11-07 09:21" },
     { id: "pc_local", name: "本地沙箱", status: "paused", lede: "本机", spec: "沙箱环境", agent: "未绑定", heartbeat: "2026-11-06 18:02" },
   ];
-  var hostHtml =
-    "<div class=\"stack\">" +
-    C.section("云主机", String(HOSTS.length) + " 台", C.list(HOSTS.map(function (item) {
-      return card(item, [
-        ["规格", C.escapeHtml(item.spec)],
-        ["绑定", C.escapeHtml(item.agent)],
-        ["最近心跳", C.escapeHtml(item.heartbeat)],
-      ]);
-    }).join(""))) +
-    C.section("已释放", "", C.emptyState("没有已释放的云主机", "释放后的实例会留在这里，直到记录被清掉")) +
-    "</div>";
-
   var WORKERS = [
     { id: "wk_hivemos", name: "hivemos", status: "active", lede: "本控制面", ver: "最新提交", updated: "2026-11-08 03:50" },
     { id: "wk_mail", name: "cloud-mail", status: "active", lede: "mail.outtw.com", ver: "最新提交", updated: "2026-11-08 00:03" },
     { id: "wk_sms", name: "smsinbox", status: "active", lede: "SMSinBox", ver: "最新提交", updated: "2026-11-07 22:10" },
   ];
-  var workerHtml =
-    "<div class=\"stack\">" +
-    C.section("Workers", String(WORKERS.length) + " 个", C.list(WORKERS.map(function (item) {
-      return card(item, [
-        ["版本", C.escapeHtml(item.ver)],
-        ["更新时间", C.escapeHtml(item.updated)],
-      ]);
-    }).join(""))) +
-    "</div>";
 
-  C.mount(
-    C.layout(
-      "",
-      "<div class=\"page-tabs\" role=\"tablist\">" +
-        "<button class=\"page-tab\" type=\"button\" role=\"tab\" data-tab=\"servers\" aria-selected=\"true\">服务器</button>" +
-        "<button class=\"page-tab\" type=\"button\" role=\"tab\" data-tab=\"hosts\" aria-selected=\"false\">云主机</button>" +
-        "<button class=\"page-tab\" type=\"button\" role=\"tab\" data-tab=\"workers\" aria-selected=\"false\">Workers</button>" +
-        "</div>" +
-        "<div data-panel=\"servers\">" + serverHtml + "</div>" +
-        "<div data-panel=\"hosts\" hidden>" + hostHtml + "</div>" +
-        "<div data-panel=\"workers\" hidden>" + workerHtml + "</div>",
-    ),
-  );
+  function render() {
+    var serverHtml =
+      "<div class=\"stack\">" +
+      "<button type=\"button\" class=\"add-button\" data-add=\"server\">添加服务器</button>" +
+      C.section("服务器", String(SERVERS.length) + " 台", C.list(SERVERS.map(function (item) {
+        return card(item, [["配置", C.escapeHtml(item.spec)], ["绑定", C.escapeHtml(item.agent)], ["最近心跳", C.escapeHtml(item.heartbeat)]]);
+      }).join(""))) +
+      "</div>";
+    var hostHtml =
+      "<div class=\"stack\">" +
+      "<button type=\"button\" class=\"add-button\" data-add=\"host\">添加云主机</button>" +
+      C.section("云主机", String(HOSTS.length) + " 台", C.list(HOSTS.map(function (item) {
+        return card(item, [["规格", C.escapeHtml(item.spec)], ["绑定", C.escapeHtml(item.agent)], ["最近心跳", C.escapeHtml(item.heartbeat)]]);
+      }).join(""))) +
+      C.section("已释放", "", C.emptyState("没有已释放的云主机", "释放后的实例会留在这里，直到记录被清掉")) +
+      "</div>";
+    var workerHtml =
+      "<div class=\"stack\">" +
+      "<button type=\"button\" class=\"add-button\" data-add=\"worker\">添加 Worker</button>" +
+      C.section("Workers", String(WORKERS.length) + " 个", C.list(WORKERS.map(function (item) {
+        return card(item, [["版本", C.escapeHtml(item.ver)], ["更新时间", C.escapeHtml(item.updated)]]);
+      }).join(""))) +
+      "</div>";
+    C.mount(
+      C.layout(
+        "",
+        "<div class=\"page-tabs\" role=\"tablist\">" +
+          "<button class=\"page-tab\" type=\"button\" role=\"tab\" data-tab=\"servers\" aria-selected=\"" + (activeTab === "servers" ? "true" : "false") + "\">服务器</button>" +
+          "<button class=\"page-tab\" type=\"button\" role=\"tab\" data-tab=\"hosts\" aria-selected=\"" + (activeTab === "hosts" ? "true" : "false") + "\">云主机</button>" +
+          "<button class=\"page-tab\" type=\"button\" role=\"tab\" data-tab=\"workers\" aria-selected=\"" + (activeTab === "workers" ? "true" : "false") + "\">Workers</button>" +
+          "</div>" +
+          "<div data-panel=\"servers\"" + (activeTab === "servers" ? "" : " hidden") + ">" + serverHtml + "</div>" +
+          "<div data-panel=\"hosts\"" + (activeTab === "hosts" ? "" : " hidden") + ">" + hostHtml + "</div>" +
+          "<div data-panel=\"workers\"" + (activeTab === "workers" ? "" : " hidden") + ">" + workerHtml + "</div>"
+      )
+    );
+  }
 
-  function activate(name) {
-    document.querySelectorAll(".page-tab").forEach(function (btn) {
-      btn.setAttribute("aria-selected", btn.getAttribute("data-tab") === name ? "true" : "false");
-    });
-    document.querySelectorAll("[data-panel]").forEach(function (panel) {
-      panel.hidden = panel.getAttribute("data-panel") !== name;
+  function openAdd(kind) {
+    var isWorker = kind === "worker";
+    C.openFormDialog({
+      title: kind === "server" ? "添加服务器" : kind === "host" ? "添加云主机" : "添加 Worker",
+      bodyHtml:
+        "<label>名称<input name=\"name\" maxlength=\"60\" autocomplete=\"off\" /></label>" +
+        (isWorker
+          ? "<label>说明<input name=\"lede\" maxlength=\"60\" autocomplete=\"off\" placeholder=\"例如 本控制面\" /></label>"
+          : "<label>地域<input name=\"lede\" maxlength=\"30\" autocomplete=\"off\" /></label><label>" + (kind === "server" ? "配置" : "规格") + "<input name=\"spec\" maxlength=\"60\" autocomplete=\"off\" placeholder=\"例如 2 核 / 4 GB / 40 GB\" /></label>"),
+      submitLabel: "添加",
+      onSubmit: function (ctrl) {
+        var name = val(ctrl, "name");
+        if (!name) { ctrl.setError("请填写名称"); return; }
+        if (isWorker) WORKERS.push({ id: "wk_" + Date.now(), name: name, status: "active", lede: val(ctrl, "lede"), ver: "最新提交", updated: now() });
+        else if (kind === "server") SERVERS.push({ id: "sv_" + Date.now(), name: name, status: "running", lede: val(ctrl, "lede"), spec: val(ctrl, "spec") || "未填写配置", agent: "未绑定", heartbeat: now() });
+        else HOSTS.push({ id: "pc_" + Date.now(), name: name, status: "running", lede: val(ctrl, "lede"), spec: val(ctrl, "spec") || "未填写规格", agent: "未绑定", heartbeat: now() });
+        ctrl.close();
+        render();
+      },
     });
   }
-  document.querySelectorAll(".page-tab").forEach(function (btn) {
-    btn.addEventListener("click", function () {
-      var name = btn.getAttribute("data-tab");
-      activate(name);
-      history.replaceState(null, "", "#" + name);
-    });
+
+  var page = document.getElementById("page");
+  page.addEventListener("click", function (event) {
+    var target = event.target;
+    if (!(target instanceof Element)) return;
+    var tab = target.closest(".page-tab");
+    if (tab) {
+      activeTab = tab.getAttribute("data-tab");
+      history.replaceState(null, "", "#" + activeTab);
+      render();
+      return;
+    }
+    var add = target.closest("[data-add]");
+    if (add) openAdd(add.getAttribute("data-add"));
   });
-  var initial = location.hash === "#hosts" ? "hosts" : location.hash === "#workers" ? "workers" : "servers";
-  activate(initial);
+  render();
 })();
