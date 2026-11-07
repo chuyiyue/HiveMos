@@ -21,6 +21,7 @@ const MAX_CREDENTIAL_CHARS = 1024;
 const PUBLIC_ASSETS = new Set([
   "/login.html",
   "/login",
+  "/logo.jpg",
   "/style.css",
   "/theme-boot.js",
   "/common.js",
