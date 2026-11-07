@@ -289,7 +289,7 @@
     );
   }
 
-  var activeTab = location.hash === "#skills" ? "skills" : "mcp";
+  var activeTab = location.hash === "#skills" ? "skills" : location.hash === "#api" ? "api" : "mcp";
 
   function skillsHtml() {
     var SKILLS = [
@@ -317,6 +317,30 @@
     );
   }
 
+  function apiHtml() {
+    var APIS = [
+      { id: "api_mails", name: "mails.dev", base: "https://api.mails.dev", auth: "Bearer API Key", note: "邮箱服务 API，没有 MCP", status: "active" },
+      { id: "api_mistgate", name: "Mistgate 管理 API", base: "http://127.0.0.1:18446", auth: "Admin Token", note: "面板管理接口，没有 MCP", status: "active" },
+    ];
+    var cards = APIS.map(function (item) {
+      return C.record({
+        id: item.id,
+        title: item.name,
+        status: item.status,
+        lede: item.note,
+        facts: [
+          ["端点", C.escapeHtml(item.base)],
+          ["鉴权", C.escapeHtml(item.auth)],
+        ],
+      });
+    }).join("");
+    return (
+      "<div class=\"stack\">" +
+      C.section("已登记", String(APIS.length) + " 个", C.list(cards)) +
+      "</div>"
+    );
+  }
+
   function activateTab(name) {
     activeTab = name;
     document.querySelectorAll(".page-tab").forEach(function (btn) {
@@ -325,7 +349,7 @@
     document.querySelectorAll("[data-panel]").forEach(function (panel) {
       panel.hidden = panel.getAttribute("data-panel") !== name;
     });
-    history.replaceState(null, "", name === "skills" ? "#skills" : "#mcp");
+    history.replaceState(null, "", "#" + name);
   }
 
   function render() {
@@ -351,6 +375,9 @@
           "<button class=\"page-tab\" type=\"button\" role=\"tab\" data-tab=\"skills\" aria-selected=\"" +
           (activeTab === "skills" ? "true" : "false") +
           "\">Skills</button>" +
+          "<button class=\"page-tab\" type=\"button\" role=\"tab\" data-tab=\"api\" aria-selected=\"" +
+          (activeTab === "api" ? "true" : "false") +
+          "\">API</button>" +
           "</div>" +
           "<div data-panel=\"mcp\"" +
           (activeTab === "mcp" ? "" : " hidden") +
@@ -361,6 +388,11 @@
           (activeTab === "skills" ? "" : " hidden") +
           ">" +
           skillsHtml() +
+          "</div>" +
+          "<div data-panel=\"api\"" +
+          (activeTab === "api" ? "" : " hidden") +
+          ">" +
+          apiHtml() +
           "</div>"
       )
     );

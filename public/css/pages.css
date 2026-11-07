@@ -263,3 +263,8 @@ button.ghost:active, a.ghost:active, .ghost:active, .icon-btn:active, button.cop
 /* 全局比例一致性：网格子项可收缩、媒体不溢出，元素随容器平滑伸缩不突变 */
 .record > *, .cal-grid > *, .stat-grid > *, .list > * { min-width: 0; }
 img, svg, video, canvas { max-width: 100%; }
+
+/* 移动端统计卡一行两个 */
+@media (max-width: 767px) {
+  .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
