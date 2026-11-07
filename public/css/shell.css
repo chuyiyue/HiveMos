@@ -60,7 +60,7 @@
 .mark { background: none; border: 0; overflow: hidden; }
 .mark img { display: block; width: 100%; height: 100%; object-fit: cover; }
 
-.sidebar-nav { display: grid; gap: 4px; }
+.sidebar-nav { display: grid; gap: 4px; align-content: start; }
 
 .sidebar-nav a {
   position: relative;
@@ -567,8 +567,8 @@ button.account-logout:hover { background: var(--sidebar-bg-hover); color: var(--
 @media (max-width: 639px) {
   /* 移动端侧栏：底部账号区固定，pin 栏定高恰好完整放下两个设备、其余滑动，顶部占剩余 */
   .sidebar { overflow: hidden; }
-  .sidebar-nav { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
-  .sidebar-devices { flex: 0 0 120px; margin-top: 0; max-height: none; min-height: 0; overflow-y: auto; }
+  .sidebar-nav { flex: 0 1 auto; min-height: 0; overflow-y: auto; }
+  .sidebar-devices { flex: 1 1 auto; margin-top: 0; max-height: none; min-height: 0; overflow-y: auto; }
   .sidebar-footer { flex: none; }
   .sidebar {
     width: min(84vw, 320px);
