@@ -26,6 +26,8 @@ export interface Env {
   ADMIN_PASSWORD?: string;
   // Optional Worker var/secret. Blank falls back to the built-in model.
   AI_MODEL?: string;
+  // Seals TOTP secrets in a later step. Unused until that step lands.
+  CONTENT_KEY?: string;
 }
 
 export interface WaitCtx {
