@@ -296,8 +296,8 @@
 }
 
 .account-avatar {
-  width: 30px;
-  height: 30px;
+  width: 36px;
+  height: 36px;
   flex: none;
   display: grid;
   place-items: center;
@@ -307,6 +307,8 @@
   font-weight: 600;
   font-size: var(--fs-sm);
 }
+
+.account-name { font-size: 15px; }
 
 .account-avatar img {
   display: block;
@@ -563,6 +565,11 @@ button.account-logout:hover { background: var(--sidebar-bg-hover); color: var(--
 }
 
 @media (max-width: 639px) {
+  /* 移动端侧栏：底部账号区固定占用，其余空间 pin 栏与顶部按 3:7 分 */
+  .sidebar { overflow: hidden; }
+  .sidebar-nav { flex: 7 1 0; min-height: 0; overflow-y: auto; }
+  .sidebar-devices { flex: 3 1 0; margin-top: 0; max-height: none; min-height: 0; overflow-y: auto; }
+  .sidebar-footer { flex: none; }
   .sidebar {
     width: min(84vw, 320px);
     padding: 16px 12px 12px;
