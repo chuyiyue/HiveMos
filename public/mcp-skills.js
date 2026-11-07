@@ -348,7 +348,7 @@
     body += formHtml();
     C.mount(
       C.layout(
-        "MCP 注册表与技能注册表在一个板块，页签切换",
+        "",
         "<div class=\"page-tabs\" role=\"tablist\">" +
           "<button class=\"page-tab\" type=\"button\" role=\"tab\" data-tab=\"mcp\" aria-selected=\"" +
           (activeTab === "mcp" ? "true" : "false") +

@@ -118,7 +118,7 @@
   }
 
   function layout(lede, body) {
-    return '<p class="lede">' + escapeHtml(lede) + "</p>" + body;
+    return (lede ? '<p class="lede">' + escapeHtml(lede) + "</p>" : "") + body;
   }
 
   function mount(html) {

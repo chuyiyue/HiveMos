@@ -49,7 +49,7 @@
 
   C.mount(
     C.layout(
-      "记忆与每个 Agent 的 Soul 在一个板块，页签切换",
+      "",
       "<div class=\"page-tabs\" role=\"tablist\">" +
         "<button class=\"page-tab\" type=\"button\" role=\"tab\" data-tab=\"memory\" aria-selected=\"true\">记忆</button>" +
         "<button class=\"page-tab\" type=\"button\" role=\"tab\" data-tab=\"soul\" aria-selected=\"false\">Soul</button>" +

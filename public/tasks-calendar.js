@@ -53,7 +53,7 @@
 
   C.mount(
     C.layout(
-      "任务传递与日程聚合在一个板块，页签切换",
+      "",
       "<div class=\"page-tabs\" role=\"tablist\">" +
         "<button class=\"page-tab\" type=\"button\" role=\"tab\" data-tab=\"tasks\" aria-selected=\"true\">任务</button>" +
         "<button class=\"page-tab\" type=\"button\" role=\"tab\" data-tab=\"calendar\" aria-selected=\"false\">日历</button>" +
