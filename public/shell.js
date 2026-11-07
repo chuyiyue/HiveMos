@@ -255,10 +255,6 @@
     button.setAttribute("aria-label", "退出登录");
     var icon = action.querySelector("svg");
     if (icon) button.append(icon.cloneNode(true));
-    var label = document.createElement("span");
-    label.className = "btn-label";
-    label.textContent = "退出登录";
-    button.append(label);
     button.addEventListener("click", function () {
       if (button.disabled) return;
       button.disabled = true;
@@ -269,7 +265,7 @@
       }
       common.logout().catch(function () {
         button.disabled = false;
-        label.textContent = "退出失败，请重试";
+        button.title = "退出失败，请重试";
       });
     });
     action.replaceWith(button);

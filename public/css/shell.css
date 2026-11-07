@@ -326,6 +326,8 @@
 
 a.account-logout,
 button.account-logout {
+  justify-content: center;
+  min-width: 40px;
   display: inline-flex;
   align-items: center;
   gap: 8px;
