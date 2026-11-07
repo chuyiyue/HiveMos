@@ -62,11 +62,14 @@ async function readProfile(request: Request, env: Env): Promise<Response> {
   const user = await requireAdminUser(request, env);
   if (user instanceof Response) return user;
   const profileUsername = await getProfileUsername(env.DB);
+  const record = await findUserRecordById(env.DB, user.id);
   return json({
     ok: true,
     username: user.username,
     profile_username: profileUsername,
     role: user.role === "admin" ? "admin" : "member",
+    disabled: (record?.disabled_at ?? user.disabled_at) != null,
+    created_at: record?.created_at ?? null,
   });
 }
 
@@ -195,13 +198,17 @@ function readPasswordChange(value: unknown): { currentPassword: string; password
   const record = value as Record<string, unknown>;
   const currentPassword = readCurrentPassword(record);
   if (typeof currentPassword !== "string") return currentPassword;
-  if (typeof record.password !== "string" || record.password.length === 0) {
-    return { error: "请填写新密码" };
-  }
-  if (record.password.length < 8 || record.password.length > 256) {
-    return { error: "新密码需要 8 到 256 个字符" };
-  }
-  return { currentPassword, password: record.password };
+  // The settings page sends newPassword. password stays accepted.
+  const next = readNewPassword(record);
+  if (typeof next !== "string") return next;
+  return { currentPassword, password: next };
+}
+
+function readNewPassword(record: Record<string, unknown>): string | { error: string } {
+  const raw = "newPassword" in record ? record.newPassword : record.password;
+  if (typeof raw !== "string" || raw.length === 0) return { error: "请填写新密码" };
+  if (raw.length < 8 || raw.length > 256) return { error: "新密码需要 8 到 256 个字符" };
+  return raw;
 }
 
 function readProfileUsername(value: unknown): { username: string } | { error: string } {

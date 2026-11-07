@@ -142,6 +142,13 @@ async function login(request: Request, env: Env): Promise<Response> {
   if (isCrossSite(request)) return json({ ok: false, error: "跨站请求被拒绝" }, 403);
   const body = await readJsonLimited(request, LOGIN_BODY_BYTES);
   if (!body.ok) return json({ ok: false, error: body.error }, body.status);
+  // login.html probes with {}. SMSinBox rejects a missing password first, so
+  // that probe never reaches the empty-table 503. HiveMos has to answer 503
+  // before the missing-password 400. The rest of this function is unchanged.
+  const users = await listUserRecords(env.DB);
+  const adminPassword = env.ADMIN_PASSWORD ?? "";
+  const hasEnvPassword = adminPassword.length > 0;
+  if (users.length === 0 && !hasEnvPassword) return json({ ok: false, error: UNCONFIGURED }, 503);
   // The login page sends username and password. Password is required.
   // Username is checked only after a designated admin row exists.
   const password = readLoginPassword(body.value);
@@ -155,9 +162,6 @@ async function login(request: Request, env: Env): Promise<Response> {
   const ipKey = ip ? await loginRateKey("ip", ip) : null;
   if (await loginIsLimited(env.DB, userKey, ipKey, now)) return loginLimited(now);
 
-  const users = await listUserRecords(env.DB);
-  const adminPassword = env.ADMIN_PASSWORD ?? "";
-  const hasEnvPassword = adminPassword.length > 0;
   if (users.length === 0) {
     if (!hasEnvPassword) return json({ ok: false, error: UNCONFIGURED }, 503);
     const envPasswordOk = await secretsEqual(password, adminPassword);

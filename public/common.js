@@ -43,16 +43,29 @@
     return '<div class="empty-state"><p class="empty-title">' + escapeHtml(title) + "</p><p>" + escapeHtml(text) + "</p></div>";
   }
 
-  function section(title, hint, body) {
+  function section(title, hint, body, actions) {
+    var aside = "";
+    if (actions) aside = '<div class="section-actions">' + actions + "</div>";
+    else if (hint) aside = '<p class="subtle">' + escapeHtml(hint) + "</p>";
     return (
       '<section class="panel"><div class="section-head"><h2>' +
       escapeHtml(title) +
       "</h2>" +
-      (hint ? '<p class="subtle">' + escapeHtml(hint) + "</p>" : "") +
+      aside +
       "</div>" +
       body +
       "</section>"
     );
+  }
+
+  function badge(label, tone) {
+    return '<span class="badge' + (tone ? " is-" + tone : "") + '">' + escapeHtml(label) + "</span>";
+  }
+
+  // Prefer the server's error string. fallback is only for an empty body.
+  function explain(value, fallback) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+    return fallback || "操作失败，请稍后重试";
   }
 
   function facts(pairs) {
@@ -296,6 +309,8 @@
     statusPill: statusPill,
     emptyState: emptyState,
     section: section,
+    badge: badge,
+    explain: explain,
     facts: facts,
     record: record,
     list: list,
