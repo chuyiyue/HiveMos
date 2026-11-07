@@ -92,10 +92,9 @@
 }
 
 .copy-line {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
+  display: grid;
   gap: 8px;
+  justify-items: start;
   min-width: 0;
 }
 
