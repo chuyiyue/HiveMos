@@ -59,7 +59,7 @@
 
   C.mount(
     C.layout(
-      "密钥与令牌只显示末四位。完整值不进入页面",
+      "",
       "<div class=\"page-tabs\" role=\"tablist\">" +
         "<button class=\"page-tab\" type=\"button\" role=\"tab\" data-tab=\"vault\" aria-selected=\"true\">保险库</button>" +
         "<button class=\"page-tab\" type=\"button\" role=\"tab\" data-tab=\"gateway\" aria-selected=\"false\">模型网关</button>" +

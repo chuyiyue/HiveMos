@@ -34,7 +34,7 @@
   }).join("");
   C.mount(
     C.layout(
-      "工作区、MCP 与已授权设备。改动会在接口接通后保存",
+      "",
       '<div class="stack">' +
         C.section(
           "工作区",

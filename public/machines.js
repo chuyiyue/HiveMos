@@ -54,7 +54,7 @@
 
   C.mount(
     C.layout(
-      "云端与本机的电脑，心跳和绑定关系摊在列表里",
+      "",
       "<div class=\"page-tabs\" role=\"tablist\">" +
         "<button class=\"page-tab\" type=\"button\" role=\"tab\" data-tab=\"servers\" aria-selected=\"true\">服务器</button>" +
         "<button class=\"page-tab\" type=\"button\" role=\"tab\" data-tab=\"hosts\" aria-selected=\"false\">云主机</button>" +

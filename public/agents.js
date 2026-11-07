@@ -80,7 +80,7 @@
       '<div class="row-actions"><button type="submit">生成令牌</button></div></form></section>';
     C.mount(
       C.layout(
-        "可以调用注册表的 Agent。令牌只在生成时出现一次",
+        "",
         '<div class="stack">' + noticeHtml() + C.section("已登记", state.agents.length ? state.agents.length + " 个" : "", list) + form + "</div>",
       ),
     );
