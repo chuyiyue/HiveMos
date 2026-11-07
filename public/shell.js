@@ -332,6 +332,7 @@
     });
   }
 
+  window.addEventListener("hivemos:sidebar-refresh", loadSidebarAgents);
   renderNav();
   renderAgents();
   loadSidebarAgents();

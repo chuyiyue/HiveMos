@@ -450,6 +450,7 @@
       state.pinLimitInput = String(result.data.preferences.sidebar_pin_limit);
       state.pinLimitError = "";
       render();
+      window.dispatchEvent(new CustomEvent("hivemos:sidebar-refresh"));
       toast("侧边栏上限已保存");
     });
   }

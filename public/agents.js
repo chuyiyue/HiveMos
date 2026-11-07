@@ -511,6 +511,7 @@
         }
         state.notice = agent.pinned_at ? "已取消固定" : "已固定到侧边栏";
         state.noticeKind = "ok";
+        window.dispatchEvent(new CustomEvent("hivemos:sidebar-refresh"));
         loadAll();
       })
       .catch(function () {
