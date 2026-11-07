@@ -28,6 +28,7 @@ export interface ServerRow {
   config_json: string | null;
   tags_json: string;
   category: string;
+  group_id: string | null;
   summary: string | null;
   summary_source: string | null;
   status: string;
@@ -54,6 +55,7 @@ export interface PublicServer {
   config_json: string | null;
   tags: Tag[];
   category: string;
+  group_id: string | null;
   summary: string | null;
   summary_source: string | null;
   status: string;
@@ -71,8 +73,36 @@ export interface PublicAgent {
   id: string;
   name: string;
   status: string;
+  group_id: string | null;
+  permissions: string[];
   last_seen_at: number | null;
   created_at: number;
+}
+
+export interface PublicGroup {
+  id: string;
+  scope: string;
+  name: string;
+  created_at: number;
+  member_count: number;
+}
+
+interface GroupRow {
+  id: string;
+  scope: string;
+  name: string;
+  created_at: number | string;
+  member_count?: number | string | null;
+}
+
+interface AgentRow {
+  id: string;
+  name: string;
+  status: string;
+  group_id: string | null;
+  permissions: string | null;
+  last_seen_at: number | string | null;
+  created_at: number | string;
 }
 
 export interface AuditItem {
@@ -330,6 +360,7 @@ function toPublic(row: ServerRow): PublicServer {
     config_json: row.config_json,
     tags: parseStoredTags(row.tags_json),
     category: row.category ?? "",
+    group_id: row.group_id ?? null,
     summary: row.summary,
     summary_source: row.summary_source,
     status: row.status,
@@ -415,6 +446,7 @@ interface ServerInput {
   config_json: string | null;
   tags: Tag[];
   category: string;
+  group_id: string | null;
   summary: string | null;
   summary_source: string | null;
   status: string;
@@ -481,6 +513,8 @@ function readServerInput(value: unknown, existing: ServerRow | null): { ok: true
   if (hasControl(title) || hasControl(endpoint) || hasControl(category)) {
     return { ok: false, status: 400, error: "文本里不能包含控制字符" };
   }
+  const groupId = typeof body.group_id === "string" ? body.group_id.trim() : "";
+  if (groupId.length > 64) return { ok: false, status: 400, error: "分组不正确" };
   const summaryText = typeof body.summary === "string" ? body.summary.trim() : "";
   if (summaryText.length > 200) return { ok: false, status: 400, error: "简介过长" };
   let summary: string | null = null;
@@ -514,6 +548,7 @@ function readServerInput(value: unknown, existing: ServerRow | null): { ok: true
       config_json: config.text,
       tags: tags.tags,
       category,
+      group_id: groupId || null,
       summary,
       summary_source: summarySource,
       status,
@@ -854,6 +889,10 @@ export async function createServer(env: Env, ctx: WaitCtx, value: unknown): Prom
   const parsed = readServerInput(value, null);
   if (!parsed.ok) return parsed;
   const input = parsed.input;
+  if (input.group_id) {
+    const group = await getGroup(env.DB, input.group_id);
+    if (!group || group.scope !== "mcp") return { ok: false, status: 400, error: "分组不存在" };
+  }
   const now = Date.now();
   const id = newId("mcp_");
   const hash = await hashIdentity(contentIdentity(input.name, input.title, input.description, input.config_json, []));
@@ -863,8 +902,8 @@ export async function createServer(env: Env, ctx: WaitCtx, value: unknown): Prom
       `INSERT INTO mcp_servers (
         id, name, title, description, endpoint_url, transport, launch_config_json, auth_type, config_json,
         tags_json, category, summary, summary_source, status, version, ttl_seconds, snapshot_json, snapshot_at,
-        snapshot_status, content_hash, ai_status, embedding, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NULL, NULL, 'none', ?, 'pending', NULL, ?, ?)`,
+        snapshot_status, content_hash, ai_status, embedding, created_at, updated_at, group_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NULL, NULL, 'none', ?, 'pending', NULL, ?, ?, ?)`,
       [
         id,
         input.name,
@@ -884,6 +923,7 @@ export async function createServer(env: Env, ctx: WaitCtx, value: unknown): Prom
         hash,
         now,
         now,
+        input.group_id,
       ],
     ).run();
   } catch (error) {
@@ -907,6 +947,10 @@ export async function updateServer(env: Env, ctx: WaitCtx, id: string, value: un
   const parsed = readServerInput(value, existing);
   if (!parsed.ok) return parsed;
   const input = parsed.input;
+  if (input.group_id) {
+    const group = await getGroup(env.DB, input.group_id);
+    if (!group || group.scope !== "mcp") return { ok: false, status: 400, error: "分组不存在" };
+  }
   let tagsToStore = input.tags;
   if (tagsToStore.length === 0) {
     const stored = parseStoredTags(existing.tags_json);
@@ -923,7 +967,7 @@ export async function updateServer(env: Env, ctx: WaitCtx, id: string, value: un
       `UPDATE mcp_servers SET
         name = ?, title = ?, description = ?, endpoint_url = ?, transport = ?, launch_config_json = ?,
         auth_type = ?, config_json = ?, tags_json = ?, category = ?, summary = ?, summary_source = ?,
-        status = ?, version = ?, ttl_seconds = ?, content_hash = ?, updated_at = ?
+        status = ?, version = ?, ttl_seconds = ?, content_hash = ?, updated_at = ?, group_id = ?
       WHERE id = ?`,
       [
         input.name,
@@ -943,6 +987,7 @@ export async function updateServer(env: Env, ctx: WaitCtx, id: string, value: un
         input.ttl_seconds,
         hash,
         now,
+        input.group_id,
         id,
       ],
     ).run();
@@ -1028,18 +1073,159 @@ export async function listAudit(db: D1Database): Promise<AuditItem[]> {
   }));
 }
 
+// ---- Groups (scope: agent | mcp) ----
+
+function toPublicGroup(row: GroupRow): PublicGroup {
+  return {
+    id: row.id,
+    scope: row.scope,
+    name: row.name,
+    created_at: asNumber(row.created_at) ?? 0,
+    member_count: asNumber(row.member_count) ?? 0,
+  };
+}
+
+export async function getGroup(db: D1Database, id: string): Promise<GroupRow | null> {
+  return prepare(db, "SELECT id, scope, name, created_at FROM groups WHERE id = ?", [id]).first<GroupRow>();
+}
+
+async function countGroupMembers(db: D1Database, scope: string, groupId: string): Promise<number> {
+  const table = scope === "agent" ? "agents" : "mcp_servers";
+  const row = await prepare(db, "SELECT COUNT(*) AS n FROM " + table + " WHERE group_id = ?", [groupId]).first<{ n: number | string }>();
+  return asNumber(row?.n) ?? 0;
+}
+
+export async function listGroups(db: D1Database, scope: string): Promise<PublicGroup[]> {
+  const table = scope === "agent" ? "agents" : "mcp_servers";
+  const listed = await prepare(
+    db,
+    "SELECT g.id, g.scope, g.name, g.created_at, (SELECT COUNT(*) FROM " +
+      table +
+      " AS m WHERE m.group_id = g.id) AS member_count FROM groups AS g WHERE g.scope = ? ORDER BY g.created_at ASC, g.name ASC",
+    [scope],
+  ).all<GroupRow>();
+  return rowsOf(listed).map(toPublicGroup);
+}
+
+function readGroupName(value: unknown): { ok: true; name: string } | Failure {
+  if (!value || typeof value !== "object") return { ok: false, status: 400, error: "请求格式不正确" };
+  const name = typeof (value as { name?: unknown }).name === "string" ? (value as { name: string }).name.trim() : "";
+  if (!name) return { ok: false, status: 400, error: "请填写分组名" };
+  if (name.length > 64 || hasControl(name)) return { ok: false, status: 400, error: "分组名过长" };
+  return { ok: true, name };
+}
+
+export async function createGroup(db: D1Database, scope: string, value: unknown): Promise<{ ok: true; group: PublicGroup } | Failure> {
+  const parsed = readGroupName(value);
+  if (!parsed.ok) return parsed;
+  const id = newId("grp_");
+  const now = Date.now();
+  try {
+    await prepare(db, "INSERT INTO groups (id, scope, name, created_at) VALUES (?, ?, ?, ?)", [id, scope, parsed.name, now]).run();
+  } catch (error) {
+    if (isUniqueError(error)) return { ok: false, status: 409, error: "这个分组名已存在" };
+    return dbFailure();
+  }
+  return { ok: true, group: { id, scope, name: parsed.name, created_at: now, member_count: 0 } };
+}
+
+export async function renameGroup(db: D1Database, id: string, value: unknown): Promise<{ ok: true; group: PublicGroup } | Failure> {
+  const existing = await getGroup(db, id);
+  if (!existing) return { ok: false, status: 404, error: "未找到" };
+  const parsed = readGroupName(value);
+  if (!parsed.ok) return parsed;
+  try {
+    await prepare(db, "UPDATE groups SET name = ? WHERE id = ?", [parsed.name, id]).run();
+  } catch (error) {
+    if (isUniqueError(error)) return { ok: false, status: 409, error: "这个分组名已存在" };
+    return dbFailure();
+  }
+  const count = await countGroupMembers(db, existing.scope, id);
+  return {
+    ok: true,
+    group: { id, scope: existing.scope, name: parsed.name, created_at: asNumber(existing.created_at) ?? 0, member_count: count },
+  };
+}
+
+// Deleting a group only ungroups its members; members themselves are kept.
+export async function deleteGroup(db: D1Database, id: string): Promise<{ ok: true } | Failure> {
+  const existing = await getGroup(db, id);
+  if (!existing) return { ok: false, status: 404, error: "未找到" };
+  try {
+    await prepare(db, "UPDATE agents SET group_id = NULL WHERE group_id = ?", [id]).run();
+    await prepare(db, "UPDATE mcp_servers SET group_id = NULL WHERE group_id = ?", [id]).run();
+    await prepare(db, "DELETE FROM groups WHERE id = ?", [id]).run();
+  } catch {
+    return dbFailure();
+  }
+  return { ok: true };
+}
+
+// System feature domains an agent can be granted, one per board. Stored on
+// the agent as a JSON array; anything not listed is denied at the MCP edge.
+export const PERMISSION_DOMAINS = ["registry", "memory", "soul", "tasks", "calendar", "vault", "machines"];
+
+// Stored JSON that is missing or unreadable falls back to the historical
+// capability set: registry only.
+export function parsePermissions(raw: string | null | undefined): string[] {
+  let parsed: unknown = null;
+  if (typeof raw === "string" && raw.trim()) {
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      parsed = null;
+    }
+  }
+  if (!Array.isArray(parsed)) return ["registry"];
+  const wanted = new Set(parsed.filter((item): item is string => typeof item === "string"));
+  return PERMISSION_DOMAINS.filter((domain) => wanted.has(domain));
+}
+
+// PATCH input must be a wholesale replacement drawn from the known domains.
+function readPermissionsInput(value: unknown): { ok: true; permissions: string[] } | Failure {
+  if (!Array.isArray(value)) return { ok: false, status: 400, error: "权限格式不正确" };
+  for (const item of value) {
+    if (typeof item !== "string" || !PERMISSION_DOMAINS.includes(item)) {
+      return { ok: false, status: 400, error: "权限包含未知项" };
+    }
+  }
+  return { ok: true, permissions: PERMISSION_DOMAINS.filter((domain) => value.includes(domain)) };
+}
+
+function toPublicAgent(row: AgentRow): PublicAgent {
+  return {
+    id: row.id,
+    name: row.name,
+    status: row.status,
+    group_id: row.group_id ?? null,
+    permissions: parsePermissions(row.permissions),
+    last_seen_at: asNumber(row.last_seen_at),
+    created_at: asNumber(row.created_at) ?? 0,
+  };
+}
+
+async function getAgentRow(db: D1Database, id: string): Promise<AgentRow | null> {
+  return prepare(db, "SELECT id, name, status, group_id, permissions, last_seen_at, created_at FROM agents WHERE id = ?", [id]).first<AgentRow>();
+}
+
+// Resolves an optional group reference for the agent scope. Absent or blank
+// means ungrouped; a present id must exist in the same scope.
+async function resolveAgentGroupId(db: D1Database, value: unknown): Promise<{ ok: true; groupId: string | null } | Failure> {
+  if (value == null || value === "") return { ok: true, groupId: null };
+  if (typeof value !== "string") return { ok: false, status: 400, error: "分组不正确" };
+  const groupId = value.trim();
+  if (!groupId) return { ok: true, groupId: null };
+  const group = await getGroup(db, groupId);
+  if (!group || group.scope !== "agent") return { ok: false, status: 400, error: "分组不存在" };
+  return { ok: true, groupId };
+}
+
 export async function listAgents(db: D1Database): Promise<PublicAgent[]> {
   const listed = await prepare(
     db,
-    "SELECT id, name, status, last_seen_at, created_at FROM agents ORDER BY created_at DESC",
-  ).all<PublicAgent & { last_seen_at: number | string | null; created_at: number | string }>();
-  return rowsOf(listed).map((agent) => ({
-    id: agent.id,
-    name: agent.name,
-    status: agent.status,
-    last_seen_at: asNumber(agent.last_seen_at),
-    created_at: asNumber(agent.created_at) ?? 0,
-  }));
+    "SELECT id, name, status, group_id, permissions, last_seen_at, created_at FROM agents ORDER BY created_at DESC",
+  ).all<AgentRow>();
+  return rowsOf(listed).map(toPublicAgent);
 }
 
 export async function createAgent(db: D1Database, value: unknown): Promise<{ ok: true; agent: PublicAgent & { token: string } } | Failure> {
@@ -1047,21 +1233,73 @@ export async function createAgent(db: D1Database, value: unknown): Promise<{ ok:
   const name = typeof (value as { name?: unknown }).name === "string" ? (value as { name: string }).name.trim() : "";
   if (!name) return { ok: false, status: 400, error: "请填写 Agent 名字" };
   if (name.length > 64 || hasControl(name)) return { ok: false, status: 400, error: "名字过长" };
+  const resolved = await resolveAgentGroupId(db, (value as { group_id?: unknown }).group_id);
+  if (!resolved.ok) return resolved;
   const token = randomAgentToken();
   const now = Date.now();
   const id = newId("agt_");
   try {
-    await prepare(db, "INSERT INTO agents (id, name, token_hash, status, last_seen_at, created_at) VALUES (?, ?, ?, 'active', NULL, ?)", [
+    await prepare(db, "INSERT INTO agents (id, name, token_hash, status, group_id, permissions, last_seen_at, created_at) VALUES (?, ?, ?, 'active', ?, ?, NULL, ?)", [
       id,
       name,
       await sha256Hex(token),
+      resolved.groupId,
+      JSON.stringify(["registry"]),
       now,
     ]).run();
   } catch (error) {
     if (isUniqueError(error)) return { ok: false, status: 409, error: "这个名字已存在" };
     return dbFailure();
   }
-  return { ok: true, agent: { id, name, status: "active", last_seen_at: null, created_at: now, token } };
+  return { ok: true, agent: { id, name, status: "active", group_id: resolved.groupId, permissions: ["registry"], last_seen_at: null, created_at: now, token } };
+}
+
+export async function updateAgent(db: D1Database, id: string, value: unknown): Promise<{ ok: true; agent: PublicAgent } | Failure> {
+  const existing = await getAgentRow(db, id);
+  if (!existing) return { ok: false, status: 404, error: "未找到" };
+  if (!value || typeof value !== "object") return { ok: false, status: 400, error: "请求格式不正确" };
+  const body = value as Record<string, unknown>;
+  let name = existing.name;
+  if ("name" in body) {
+    name = typeof body.name === "string" ? body.name.trim() : "";
+    if (!name) return { ok: false, status: 400, error: "请填写 Agent 名字" };
+    if (name.length > 64 || hasControl(name)) return { ok: false, status: 400, error: "名字过长" };
+  }
+  let groupId = existing.group_id ?? null;
+  if ("group_id" in body) {
+    const resolved = await resolveAgentGroupId(db, body.group_id);
+    if (!resolved.ok) return resolved;
+    groupId = resolved.groupId;
+  }
+  let permissions = parsePermissions(existing.permissions);
+  if ("permissions" in body) {
+    const parsedPermissions = readPermissionsInput(body.permissions);
+    if (!parsedPermissions.ok) return parsedPermissions;
+    permissions = parsedPermissions.permissions;
+  }
+  try {
+    await prepare(db, "UPDATE agents SET name = ?, group_id = ?, permissions = ? WHERE id = ?", [name, groupId, JSON.stringify(permissions), id]).run();
+  } catch (error) {
+    if (isUniqueError(error)) return { ok: false, status: 409, error: "这个名字已存在" };
+    return dbFailure();
+  }
+  const fresh = await getAgentRow(db, id);
+  if (!fresh) return { ok: false, status: 404, error: "未找到" };
+  return { ok: true, agent: toPublicAgent(fresh) };
+}
+
+// Rotation swaps the stored hash, so the old token stops working the moment
+// this returns; the new plaintext is exposed exactly once, in this response.
+export async function rotateAgentToken(db: D1Database, id: string): Promise<{ ok: true; agent: PublicAgent; token: string } | Failure> {
+  const existing = await getAgentRow(db, id);
+  if (!existing) return { ok: false, status: 404, error: "未找到" };
+  const token = randomAgentToken();
+  try {
+    await prepare(db, "UPDATE agents SET token_hash = ? WHERE id = ?", [await sha256Hex(token), id]).run();
+  } catch {
+    return dbFailure();
+  }
+  return { ok: true, agent: toPublicAgent(existing), token };
 }
 
 export async function disableAgent(db: D1Database, id: string): Promise<{ ok: true } | Failure> {
@@ -1079,15 +1317,16 @@ export async function authenticateAgent(
   db: D1Database,
   token: string,
   now: number,
-): Promise<{ ok: true; agentId: string } | Failure> {
-  const row = await prepare(db, "SELECT id, status FROM agents WHERE token_hash = ?", [await sha256Hex(token)]).first<{
+): Promise<{ ok: true; agentId: string; permissions: string[] } | Failure> {
+  const row = await prepare(db, "SELECT id, status, permissions FROM agents WHERE token_hash = ?", [await sha256Hex(token)]).first<{
     id: string;
     status: string;
+    permissions: string | null;
   }>();
   if (!row) return { ok: false, status: 401, error: "令牌无效" };
   if (row.status !== "active") return { ok: false, status: 401, error: "令牌已停用" };
   await prepare(db, "UPDATE agents SET last_seen_at = ? WHERE id = ?", [now, row.id]).run();
-  return { ok: true, agentId: row.id };
+  return { ok: true, agentId: row.id, permissions: parsePermissions(row.permissions) };
 }
 
 export async function searchServers(db: D1Database, query: string, tag: string, withMatches: boolean): Promise<SearchHit[]> {
