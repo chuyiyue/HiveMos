@@ -370,14 +370,15 @@
 a.account-logout,
 button.account-logout {
   justify-content: center;
-  min-width: 40px;
+  width: 32px;
+  min-width: 32px;
   display: inline-flex;
   align-items: center;
   gap: 8px;
   flex: none;
-  justify-content: flex-start;
-  min-height: 40px;
-  padding: 0 10px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0;
   background: transparent;
   border-color: transparent;
   color: var(--sidebar-text-muted);
@@ -712,5 +713,4 @@ button.account-logout:hover { background: var(--sidebar-bg-hover); color: var(--
 /* Expanded sidebar: the collapse button (top) and the logout button
    (bottom) share one column — same 32px box, same right edge. */
 .sidebar-collapse { width: 32px; height: 32px; }
-.account-logout { width: 32px; height: 32px; flex: none; }
 :root:not([data-sidebar="collapsed"]) .sidebar-footer { padding-right: 4px; }
