@@ -471,10 +471,11 @@
     html +=
       "<label>IP<input name=\"ip\" maxlength=\"120\" autocomplete=\"off\" placeholder=\"例如 203.0.113.10\" value=\"" + C.escapeHtml(v.ip || "") + "\" /></label>" +
       "<label>用户名<input name=\"ssh_user\" maxlength=\"60\" autocomplete=\"off\" placeholder=\"" + (item ? "留空表示不修改" : "例如 root") + "\" /></label>" +
-      "<fieldset class=\"auth-type\"><legend>认证方式</legend>" +
-      "<label><input type=\"radio\" name=\"auth_type\" value=\"password\"" + (authType === "password" ? " checked" : "") + " /> 密码</label>" +
-      "<label><input type=\"radio\" name=\"auth_type\" value=\"key\"" + (authType === "key" ? " checked" : "") + " /> 密钥</label>" +
-      "</fieldset>" +
+      "<div class=\"auth-type\"><span>认证方式</span>" +
+      "<div class=\"page-tabs auth-tabs\" role=\"tablist\" aria-label=\"认证方式\">" +
+      "<button type=\"button\" class=\"page-tab\" data-auth=\"password\" aria-selected=\"" + (authType === "password") + "\">密码</button>" +
+      "<button type=\"button\" class=\"page-tab\" data-auth=\"key\" aria-selected=\"" + (authType === "key") + "\">密钥</button>" +
+      "</div><input type=\"hidden\" name=\"auth_type\" value=\"" + authType + "\" /></div>" +
       "<div data-secret-slot>" + secretFieldHtml(authType, !!item) + "</div>" +
       "<label>备注<input name=\"note\" maxlength=\"200\" autocomplete=\"off\" value=\"" + C.escapeHtml(v.note || "") + "\" /></label>" +
       "<details><summary>高级</summary>" +
@@ -493,8 +494,8 @@
       submitLabel: editing ? "保存" : "添加",
       onSubmit: function (c) {
         var ip = val(c, "ip");
-        var checked = c.form.querySelector("[name=\"auth_type\"]:checked");
-        var authType = checked && checked.value === "key" ? "key" : "password";
+        var authInput = c.form.querySelector("[name=\"auth_type\"]");
+        var authType = authInput && authInput.value === "key" ? "key" : "password";
         var secret = val(c, "ssh_secret");
         var sshUser = val(c, "ssh_user");
         if (!editing) {
@@ -534,11 +535,16 @@
       },
     });
     var slot = ctrl.form.querySelector("[data-secret-slot]");
-    ctrl.form.addEventListener("change", function (event) {
-      var t = event.target;
-      if (t && t.name === "auth_type" && slot) {
-        slot.innerHTML = secretFieldHtml(t.value === "key" ? "key" : "password", editing);
-      }
+    ctrl.form.addEventListener("click", function (event) {
+      var t = event.target && event.target.closest ? event.target.closest("[data-auth]") : null;
+      if (!t || !slot) return;
+      var next = t.getAttribute("data-auth") === "key" ? "key" : "password";
+      var hidden = ctrl.form.querySelector("[name=\"auth_type\"]");
+      if (hidden) hidden.value = next;
+      ctrl.form.querySelectorAll("[data-auth]").forEach(function (b) {
+        b.setAttribute("aria-selected", b === t ? "true" : "false");
+      });
+      slot.innerHTML = secretFieldHtml(next, editing);
     });
   }
 

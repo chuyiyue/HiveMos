@@ -667,12 +667,6 @@
           openManage("agent:" + agent.id, "perms");
         },
       },
-      {
-        label: agent.pinned_at ? "取消固定" : "固定到侧边栏",
-        onSelect: function () {
-          togglePin(agent);
-        },
-      },
     ];
     if (agent.status === "active") {
       items.push({
