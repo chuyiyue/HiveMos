@@ -1011,8 +1011,7 @@
       return;
     }
     var zone = target.closest("[data-manage]");
-    if (zone) {
-      if (target.closest("button, a, input, select, textarea")) return;
+    if (zone && !target.closest("button, a, input, select, textarea")) {
       openManage(zone.getAttribute("data-manage"));
       return;
     }
