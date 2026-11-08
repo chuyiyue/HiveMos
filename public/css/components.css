@@ -167,6 +167,7 @@ dialog.modal {
   position: fixed;
   inset: 0;
   width: min(60vw, 880px);
+  max-width: none;
   height: fit-content;
   max-height: min(88dvh, 760px);
   margin: auto;
@@ -528,6 +529,7 @@ dialog.side-panel {
   inset: 0 0 0 auto;
   margin: 0;
   width: min(50vw, 520px);
+  max-width: none;
   height: 100dvh;
   max-height: 100dvh;
 }
