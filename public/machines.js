@@ -120,7 +120,7 @@
     if (kind === "server") {
       facts =
         row("备注", C.escapeHtml(item.note || "无")) +
-        row("主机名", C.escapeHtml(item.hostname || "未填写") + (item.status ? " " + C.statusPill(item.status) : "")) +
+        row("主机名", C.escapeHtml(item.hostname || "未填写")) +
         row("系统", C.escapeHtml(item.os || "未填写")) +
         row(
           "主机 IP",
@@ -168,12 +168,13 @@
         C.manageInfoHead({
           icon: kind === "worker" ? "layout" : "monitor",
           title: kind === "worker" ? item.name : deviceTitle(item),
+          titleSuffix: kind === "server" && item.status ? " " + C.statusPill(item.status) : "",
           sub: kindLabel + (item.region && kind !== "worker" ? " · " + item.region : ""),
         }) +
         "<div class=\"manage-info-card\"><dl class=\"kv\">" +
         facts +
         "</dl></div>" +
-        (kind === "server" ? C.record({ id: item.id, title: "探活信息", facts: probeFactsRows(item) }) : "") +
+        (kind === "server" ? C.record({ id: item.id, title: "服务器信息", facts: probeFactsRows(item) }) : "") +
         "<div class=\"manage-actions\">" +
         btns +
         "</div>",
@@ -219,6 +220,63 @@
   }
 
 
+  var REGION_PLACES = [
+    ["shanghai", "上海", "🇨🇳", "上海"],
+    ["singapore", "新加坡", "🇸🇬", "新加坡"],
+    ["hong kong", "香港", "🇭🇰", "香港"],
+    ["china", "中国", "🇨🇳", "中国"],
+    ["beijing", "北京", "🇨🇳", "北京"],
+    ["shenzhen", "深圳", "🇨🇳", "深圳"],
+    ["guangzhou", "广州", "🇨🇳", "广州"],
+    ["tokyo", "东京", "🇯🇵", "东京"],
+    ["japan", "日本", "🇯🇵", "日本"],
+    ["osaka", "大阪", "🇯🇵", "大阪"],
+    ["seoul", "首尔", "🇰🇷", "首尔"],
+    ["korea", "韩国", "🇰🇷", "韩国"],
+    ["taiwan", "台湾", "🇹🇼", "台湾"],
+    ["taipei", "台北", "🇹🇼", "台北"],
+    ["united states", "美国", "🇺🇸", "美国"],
+    ["oregon", "俄勒冈", "🇺🇸", "俄勒冈"],
+    ["virginia", "弗吉尼亚", "🇺🇸", "弗吉尼亚"],
+    ["california", "加利福尼亚", "🇺🇸", "加利福尼亚"],
+    ["germany", "德国", "🇩🇪", "德国"],
+    ["frankfurt", "法兰克福", "🇩🇪", "法兰克福"],
+    ["united kingdom", "英国", "🇬🇧", "英国"],
+    ["london", "伦敦", "🇬🇧", "伦敦"],
+    ["france", "法国", "🇫🇷", "法国"],
+    ["paris", "巴黎", "🇫🇷", "巴黎"],
+    ["canada", "加拿大", "🇨🇦", "加拿大"],
+    ["australia", "澳大利亚", "🇦🇺", "澳大利亚"],
+    ["sydney", "悉尼", "🇦🇺", "悉尼"],
+    ["india", "印度", "🇮🇳", "印度"],
+    ["mumbai", "孟买", "🇮🇳", "孟买"],
+    ["netherlands", "荷兰", "🇳🇱", "荷兰"],
+  ];
+
+  function locationOf(item) {
+    var region = String((item && item.region) || "").trim();
+    if (!region) return null;
+    var lower = region.toLowerCase();
+    for (var i = 0; i < REGION_PLACES.length; i++) {
+      var place = REGION_PLACES[i];
+      if (lower.indexOf(place[0]) !== -1 || region.indexOf(place[1]) !== -1) {
+        return { flag: place[2], label: place[3] };
+      }
+    }
+    return { flag: "🌐", label: region };
+  }
+
+  // Plain-text form (callers escape as needed) and card-fact form.
+  function locationText(item) {
+    var loc = locationOf(item);
+    return loc ? loc.flag + " " + loc.label : "—";
+  }
+
+  function locationFact(item) {
+    var loc = locationOf(item);
+    return loc ? loc.flag + " " + C.escapeHtml(loc.label) : "—";
+  }
+
   function cardFor(uiKind, item) {
     if (uiKind === "worker") {
       var facts = [["平台", item.platform === "vercel" ? "Vercel" : "Cloudflare"], ["版本", C.escapeHtml(item.version || "未记录")], ["更新时间", C.escapeHtml(C.formatMinute(item.updated_at) || "—")]];
@@ -239,7 +297,7 @@
     if (item.connection_id) {
       var connFacts = [
         ["主机名", C.escapeHtml(item.name || "—")],
-        ["主机 IP", C.escapeHtml(item.ip || "—")],
+        ["所在地", locationFact(item)],
         ["规格", C.escapeHtml(item.spec || "未同步")],
         ["系统", C.escapeHtml(item.os || "—")],
       ];
@@ -256,7 +314,7 @@
     }
     var facts = [
       ["主机名", C.escapeHtml(item.name || "—")],
-      ["主机 IP", C.escapeHtml(item.ip || "—")],
+      ["所在地", locationFact(item)],
       ["规格", C.escapeHtml(item.spec || "—")],
       ["系统", C.escapeHtml(item.os || "—")],
     ];
@@ -525,11 +583,11 @@
 
   function probeFactsRows(item) {
     var rows = [
-      ["探活状态", item.probe_status === "ok" ? "在线" : item.probe_status === "error" ? "离线" : "尚未探活"],
       ["主机名", item.hostname || "尚未探活"],
       ["系统", item.os || "尚未探活"],
       ["内核", item.kernel || "尚未探活"],
       ["架构", item.arch || "尚未探活"],
+      ["所属地区", locationText(item)],
       ["最近同步", item.probe_at ? C.formatMinute(item.probe_at) || "—" : "尚未同步"],
     ];
     if (item.host_fingerprint) rows.push(["主机指纹", item.host_fingerprint]);
@@ -584,7 +642,7 @@
     var v = item || {};
     var authType = v.auth_type === "key" ? "key" : "password";
     var html = "";
-    if (item) html += C.record({ id: item.id, title: "探活信息", facts: probeFactsRows(item) });
+    if (item) html += C.record({ id: item.id, title: "服务器信息", facts: probeFactsRows(item) });
     html +=
       '<div class="form-cols-2">' +
       "<label>IP<input name=\"ip\" maxlength=\"120\" autocomplete=\"off\" placeholder=\"例如 203.0.113.10\" value=\"" + C.escapeHtml(v.ip || "") + "\" /></label>" +

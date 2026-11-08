@@ -779,6 +779,36 @@ const PROBE_ERROR_MESSAGES: Record<string, string> = {
   protocol: "SSH 协议交互失败",
 };
 
+// Best-effort GeoIP for the probed server's region label. Public IPs only;
+// a short timeout and any failure return "" so probing never depends on it.
+async function lookupRegionByIp(ip: string): Promise<string> {
+  const value = String(ip || "").trim();
+  if (!value) return "";
+  const ipv4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(value);
+  if (ipv4) {
+    const a = Number(ipv4[1]);
+    const b = Number(ipv4[2]);
+    if (a === 0 || a === 10 || a === 127 || a >= 224) return "";
+    if (a === 172 && b >= 16 && b <= 31) return "";
+    if (a === 192 && b === 168) return "";
+    if (a === 169 && b === 254) return "";
+    if (a === 100 && b >= 64 && b <= 127) return "";
+  } else if (/^(::1|fe80:|fc|fd)/i.test(value)) {
+    return "";
+  }
+  try {
+    const response = await fetch("http://ip-api.com/json/" + encodeURIComponent(value) + "?fields=status,country", {
+      signal: AbortSignal.timeout(4000),
+    });
+    if (!response.ok) return "";
+    const data = (await response.json()) as { status?: string; country?: string } | null;
+    if (!data || data.status !== "success") return "";
+    return typeof data.country === "string" ? data.country.trim() : "";
+  } catch {
+    return "";
+  }
+}
+
 export async function probeMachineById(
   db: D1Database,
   id: string,
@@ -821,9 +851,10 @@ export async function probeMachineById(
     if ((name === row.ip || name === row.hostname) && (row.note || result.hostname)) {
       name = row.note || result.hostname;
     }
+    const region = (await lookupRegionByIp(host)) || row.region;
     await prepare(
       db,
-      "UPDATE machines SET name = ?, hostname = ?, os = ?, spec = ?, kernel = ?, arch = ?, host_fingerprint = ?, status = 'running', probe_status = 'ok', probe_at = ?, probe_error = '', last_heartbeat_at = ?, updated_at = ? WHERE id = ?",
+      "UPDATE machines SET name = ?, hostname = ?, os = ?, spec = ?, kernel = ?, arch = ?, region = ?, host_fingerprint = ?, status = 'running', probe_status = 'ok', probe_at = ?, probe_error = '', last_heartbeat_at = ?, updated_at = ? WHERE id = ?",
       [
         name,
         result.hostname || row.hostname,
@@ -831,6 +862,7 @@ export async function probeMachineById(
         result.spec || row.spec,
         result.kernel,
         result.arch,
+        region,
         result.fingerprint,
         now,
         now,

@@ -31,6 +31,7 @@ export interface ProviderDevice {
   os: string;
   spec: string;
   ip: string;
+  region?: string;
 }
 
 export type ProviderConfig = Record<string, string>;
@@ -216,6 +217,21 @@ async function instaboxFetch(config: ProviderConfig, path: string): Promise<unkn
   return response.json().catch(() => null);
 }
 
+// InstaBox does not document a region field; pick it up opportunistically
+// from the raw object when present and leave it empty otherwise.
+function instaboxRegionOf(raw: Record<string, unknown>): string {
+  const text = (value: unknown): string => (typeof value === "string" ? value.trim() : "");
+  const fromLocation = (value: unknown): string => {
+    if (typeof value === "string") return value.trim();
+    if (value && typeof value === "object") {
+      const loc = value as Record<string, unknown>;
+      return text(loc.city) || text(loc.name) || text(loc.region);
+    }
+    return "";
+  };
+  return text(raw.region) || text(raw.zone) || fromLocation(raw.location) || text(raw.country);
+}
+
 async function instaboxListDevices(config: ProviderConfig): Promise<ProviderDevice[]> {
   const devices: ProviderDevice[] = [];
   let cursor: string | null = null;
@@ -242,6 +258,7 @@ async function instaboxListDevices(config: ProviderConfig): Promise<ProviderDevi
         os: "",
         spec: vcpus || memGiB ? vcpus + " 核 / " + (Number.isInteger(memGiB) ? String(memGiB) : memGiB.toFixed(1)) + " GB" : "",
         ip: "",
+        region: instaboxRegionOf(raw),
       });
     }
     if (!data.nextCursor) break;
@@ -570,7 +587,7 @@ async function insertImportedDevice(
   await prepare(db, MACHINE_INSERT, [
     machineId,
     device.name || device.remoteId,
-    args.provider === "huawei" ? args.config["region"] ?? "" : "",
+    device.region || (args.provider === "huawei" ? args.config["region"] ?? "" : ""),
     device.spec,
     device.status,
     device.os,
@@ -758,9 +775,9 @@ export async function importConnectionDevices(
 
 export async function syncOneMachine(db: D1Database, key: ContentKey, machineId: string, now: number): Promise<{ missing: boolean }> {
   const machine = await db
-    .prepare("SELECT id, connection_id, remote_id FROM machines WHERE id = ?")
+    .prepare("SELECT id, connection_id, remote_id, region FROM machines WHERE id = ?")
     .bind(machineId)
-    .first<{ id: string; connection_id: string | null; remote_id: string | null }>();
+    .first<{ id: string; connection_id: string | null; remote_id: string | null; region: string }>();
   if (!machine) throw new MachineError(404, "云主机不存在");
   if (!machine.connection_id || !machine.remote_id) throw new MachineError(400, "这台主机不是接入设备，没有可同步的来源");
   const conn = await getConnection(db, machine.connection_id);
@@ -779,7 +796,7 @@ export async function syncOneMachine(db: D1Database, key: ContentKey, machineId:
     await prepare(db, "UPDATE machines SET last_sync_at = ?, updated_at = ? WHERE id = ?", [now, now, machineId]);
     return { missing: true };
   }
-  await prepare(db, "UPDATE machines SET name = ?, os = ?, spec = ?, ip = ?, status = ?, remote_name = ?, remote_state = ?, last_sync_at = ?, updated_at = ? WHERE id = ?", [
+  await prepare(db, "UPDATE machines SET name = ?, os = ?, spec = ?, ip = ?, status = ?, remote_name = ?, remote_state = ?, region = ?, last_sync_at = ?, updated_at = ? WHERE id = ?", [
     remote.name,
     remote.os,
     remote.spec,
@@ -787,6 +804,7 @@ export async function syncOneMachine(db: D1Database, key: ContentKey, machineId:
     remote.status,
     remote.name,
     remote.state ?? null,
+    remote.region || machine.region,
     now,
     now,
     machineId,
@@ -807,8 +825,8 @@ export async function syncConnection(db: D1Database, key: ContentKey, id: string
     throw error;
   }
   const byRemote = new Map(devices.map((device) => [device.remoteId, device]));
-  const locals = rowsOf<{ id: string; remote_id: string }>(
-    await prepare(db, "SELECT id, remote_id FROM machines WHERE connection_id = ?", [id]).all<{ id: string; remote_id: string }>(),
+  const locals = rowsOf<{ id: string; remote_id: string; region: string }>(
+    await prepare(db, "SELECT id, remote_id, region FROM machines WHERE connection_id = ?", [id]).all<{ id: string; remote_id: string; region: string }>(),
   );
   let updated = 0;
   let missing = 0;
@@ -821,7 +839,7 @@ export async function syncConnection(db: D1Database, key: ContentKey, id: string
     // The display name is auto-fetched: sync keeps machines.name equal to
     // the remote name. A user-set note (machines.note) is what personalizes
     // the card title instead, and sync never touches it.
-    await prepare(db, "UPDATE machines SET name = ?, os = ?, spec = ?, ip = ?, status = ?, remote_name = ?, remote_state = ?, last_sync_at = ?, updated_at = ? WHERE id = ?", [
+    await prepare(db, "UPDATE machines SET name = ?, os = ?, spec = ?, ip = ?, status = ?, remote_name = ?, remote_state = ?, region = ?, last_sync_at = ?, updated_at = ? WHERE id = ?", [
       remote.name,
       remote.os,
       remote.spec,
@@ -829,6 +847,7 @@ export async function syncConnection(db: D1Database, key: ContentKey, id: string
       remote.status,
       remote.name,
       remote.state ?? null,
+      remote.region || local.region,
       now,
       now,
       local.id,
