@@ -661,14 +661,6 @@
       (partial ? "读取中" : escapeHtml(formatMinute(agent.created_at) || "未知")) +
       "</dd></div>" +
       "</dl>" +
-      "<div class=\"manage-actions\">" +
-      "<button type=\"button\" class=\"secondary\" data-copy=\"" +
-      escapeHtml(agent.id) +
-      "\" data-label=\"复制标识\">复制标识</button>" +
-      "<button type=\"button\" class=\"secondary\" data-copy=\"" +
-      escapeHtml(endpoint) +
-      "\" data-label=\"复制接入地址\">复制接入地址</button>" +
-      "</div>" +
       "<div class=\"agent-records\">" +
       "<h3>访问记录</h3>" +
       "<div data-agent-records-body>" +
