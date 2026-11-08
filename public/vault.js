@@ -465,12 +465,16 @@
 
   var PROTO_OPTIONS = ["OpenAI 兼容", "Anthropic", "Gemini", "Azure OpenAI", "Ollama"];
 
-  // 协议标签云单选：预置选项 + 存量自定义值（历史自由文本）追加为额外 chip；
-  // 隐藏的 proto 输入与选中 chip 同步，提交逻辑仍按 name 取值。
+  // 协议标签云多选：预置选项 + 存量自定义值（历史自由文本）追加为额外 chip；
+  // 隐藏的 proto 输入与所有选中 chip 同步（", " 连接），提交逻辑仍按 name 取值。
   function protoField(proto) {
-    var selected = String(proto || "");
+    var selected = String(proto || "")
+      .split(/\s*[,、]\s*/)
+      .filter(function (part) { return !!part; });
     var options = PROTO_OPTIONS.slice();
-    if (selected && options.indexOf(selected) === -1) options.push(selected);
+    selected.forEach(function (part) {
+      if (options.indexOf(part) === -1) options.push(part);
+    });
     return (
       "<div class=\"tag-field\" data-proto-field>" +
       "<span>协议</span>" +
@@ -478,11 +482,11 @@
       options.map(function (option) {
         return (
           "<button type=\"button\" class=\"perm-item\" data-proto-option=\"" + C.escapeHtml(option) + "\" aria-pressed=\"" +
-          (option === selected ? "true" : "false") + "\">" + C.escapeHtml(option) + "</button>"
+          (selected.indexOf(option) !== -1 ? "true" : "false") + "\">" + C.escapeHtml(option) + "</button>"
         );
       }).join("") +
       "</div>" +
-      "<input type=\"hidden\" name=\"proto\" value=\"" + C.escapeHtml(selected) + "\" />" +
+      "<input type=\"hidden\" name=\"proto\" value=\"" + C.escapeHtml(selected.join(", ")) + "\" />" +
       "</div>"
     );
   }
@@ -496,10 +500,12 @@
       var chip = target.closest("[data-proto-option]");
       if (!chip) return;
       var wasOn = chip.getAttribute("aria-pressed") === "true";
+      chip.setAttribute("aria-pressed", wasOn ? "false" : "true");
+      var values = [];
       Array.prototype.forEach.call(field.querySelectorAll("[data-proto-option]"), function (peer) {
-        peer.setAttribute("aria-pressed", peer === chip && !wasOn ? "true" : "false");
+        if (peer.getAttribute("aria-pressed") === "true") values.push(peer.getAttribute("data-proto-option"));
       });
-      hidden.value = wasOn ? "" : chip.getAttribute("data-proto-option");
+      hidden.value = values.join(", ");
     });
   }
 
