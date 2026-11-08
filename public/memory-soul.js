@@ -320,6 +320,7 @@
       '<div class="page-head-actions">' +
       (activeTab === "memory"
         ? '<button type="button" class="secondary" data-mem-act="tag-all">AI 补全标签</button>' +
+          '<button type="button" class="secondary" data-mem-act="merge-tags">合并近义标签</button>' +
           '<button type="button" class="add-button" data-add="memory">添加记忆</button>'
         : '<button type="button" class="add-button" data-add="soul">添加 Soul</button>') +
       "</div></div>";
@@ -677,6 +678,39 @@
       });
   }
 
+  function mergeMemoryTags(srcEl) {
+    if (srcEl) srcEl.disabled = true;
+    var anchor = srcEl && srcEl.closest ? srcEl.closest(".page-head-actions") : null;
+    C.askConfirm({
+      anchor: anchor || srcEl,
+      title: "合并近义标签",
+      text:
+        "AI 会把意思相近的标签合并成一个，所有记忆的标签都会被改写；完整映射会记入系统日志。要继续吗？",
+    }).then(function (yes) {
+      if (srcEl) srcEl.disabled = false;
+      if (!yes) return;
+      api("POST", "/api/memory/tags/merge", {})
+        .then(function (result) {
+          if (result.data && result.data.ok) {
+            var merged = Object.keys(result.data.mapping || {}).length;
+            var updated = result.data.updated || 0;
+            setMemNotice(
+              merged ? "已合并 " + merged + " 个标签，更新 " + updated + " 条记忆" : "没有需要合并的标签",
+              "ok"
+            );
+            refreshMemories();
+          } else {
+            setMemNotice((result.data && result.data.error) || "合并失败，请重试", "danger");
+            render();
+          }
+        })
+        .catch(function () {
+          setMemNotice("合并失败，请重试", "danger");
+          render();
+        });
+    });
+  }
+
   function removeMemory(item, srcEl) {
     var dlg = srcEl && srcEl.closest ? srcEl.closest("[data-manage-dialog]") : null;
     
@@ -796,6 +830,7 @@
     var memAct = target.closest("[data-mem-act]");
     if (memAct) {
       if (memAct.getAttribute("data-mem-act") === "tag-all") tagAllMemories(memAct);
+      else if (memAct.getAttribute("data-mem-act") === "merge-tags") mergeMemoryTags(memAct);
       return;
     }
     var zone = target.closest("[data-manage]");

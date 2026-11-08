@@ -17,7 +17,7 @@ import {
   renameMemoryGroup,
   updateMemory,
 } from "./memory";
-import { ingestMemories, tagOneMemory, tagUntaggedMemories } from "./memory-ai";
+import { ingestMemories, mergeSimilarTags, tagOneMemory, tagUntaggedMemories } from "./memory-ai";
 import { logOp, panelActor } from "./oplog";
 
 const MAX_BODY_BYTES = 256 * 1024;
@@ -34,6 +34,8 @@ export async function handleMemoryRequest(request: Request, env: Env, ctx: WaitC
     // tag-untagged 会被当成记忆 id 吃掉。
     if (path === "/api/memory/ingest") return await ingest(request, env);
     if (path === "/api/memory/tag-untagged") return await tagUntagged(request, env);
+    // 存量近义合并。单数写法是本模块的路由约定，双数别名对角兼容旧写法。
+    if (path === "/api/memory/tags/merge" || path === "/api/memories/tags/merge") return await mergeTags(request, env);
     if (path === "/api/memory/groups") return await groups(request, env);
     const groupOne = /^\/api\/memory\/groups\/([A-Za-z0-9_-]+)$/.exec(path);
     if (groupOne && groupOne[1]) return await groupOneHandler(request, env, groupOne[1]);
@@ -118,6 +120,26 @@ async function tagUntagged(request: Request, env: Env): Promise<Response> {
     });
   }
   return json({ ok: true, ...result });
+}
+
+async function mergeTags(request: Request, env: Env): Promise<Response> {
+  if (request.method.toUpperCase() !== "POST") {
+    return json({ ok: false, error: "方法不允许" }, 405, { allow: "POST" });
+  }
+  const result = await mergeSimilarTags(env, CHANNEL, Date.now());
+  const merged = Object.keys(result.mapping).length;
+  if (merged > 0) {
+    // 完整映射进系统日志，方便事后核对哪几个标签被并到了哪里。
+    await logOp(env.DB, {
+      actor: await panelActor(request, env),
+      module: "记忆",
+      action: "合并标签",
+      targetId: null,
+      targetName: null,
+      text: `合并近义标签：并掉 ${merged} 个标签，更新 ${result.updated} 条记忆。映射：${JSON.stringify(result.mapping)}`,
+    });
+  }
+  return json({ ok: true, mapping: result.mapping, updated: result.updated });
 }
 
 async function tagOne(request: Request, env: Env, id: string): Promise<Response> {
