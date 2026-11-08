@@ -667,3 +667,21 @@ button.account-logout:hover { background: var(--sidebar-bg-hover); color: var(--
 @media (prefers-reduced-motion: reduce) {
   .live-dot { animation: none !important; }
 }
+
+/* Collapsed rail: logo and the expand button stack on their own rows.
+   Side by side they overflow the 64px rail and overlap. */
+:root[data-sidebar="collapsed"] .sidebar-brand-row {
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0 0;
+}
+:root[data-sidebar="collapsed"] .sidebar-brand-row .brand {
+  flex: none;
+  justify-content: center;
+}
+:root[data-sidebar="collapsed"] .sidebar-collapse {
+  width: 32px;
+  height: 32px;
+  opacity: 1;
+}
