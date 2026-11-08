@@ -461,6 +461,7 @@ article.record {
 .card-actions { display: flex; gap: 8px; }
 
 .card-actions > button { flex: 1 1 0; min-width: 0; min-height: 38px; }
+.card-actions > button.accent { background: var(--accent); border-color: var(--accent); color: #fff; }
 
 /* The info zone is the management entry: pointer + hover wash on devices
    that can hover, inset focus ring for keyboards. The negative margins

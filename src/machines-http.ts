@@ -19,7 +19,6 @@ import {
   renameConnection,
   replaceConnectionCredentials,
   revealConnectionCredential,
-  runKeepaliveSweep,
   syncConnection,
   syncOneMachine,
   testAdHocConnection,
@@ -401,7 +400,6 @@ async function providerActionRun(request: Request, env: Env, id: string, action:
   }
   return wrap(async () => {
     const result = await syncConnection(env.DB, vaultKeyOf(env), id, Date.now());
-    await runKeepaliveSweep(env.DB, vaultKeyOf(env), Date.now(), id).catch(() => undefined);
     const conn = (await listConnections(env.DB)).find((row) => row.id === id);
     const name = conn?.name ?? id;
     await logOp(env.DB, {

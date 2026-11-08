@@ -316,12 +316,12 @@
   }
 
   function card(kind, item, facts, actionsOverride) {
-    var lede = kind === "worker" ? item.description : item.region;
+    var lede = kind === "worker" ? item.description : kind === "server" ? "" : item.region;
     var id = C.escapeHtml(item.id);
     var actions = "";
     if (kind === "server") {
       actions += "<button type=\"button\" class=\"secondary\" data-mact=\"probe\" data-kind=\"server\" data-id=\"" + id + "\">测试连接</button>";
-      actions += "<button type=\"button\" class=\"secondary\" data-mact=\"reveal\" data-kind=\"server\" data-id=\"" + id + "\">查看密码</button>";
+      actions += "<button type=\"button\" class=\"secondary\" data-mact=\"copyconfig\" data-kind=\"server\" data-id=\"" + id + "\">复制配置</button>";
     } else if (kind === "worker") {
       actions += "<button type=\"button\" class=\"secondary\" data-mact=\"workers\" data-kind=\"worker\" data-id=\"" + id + "\">" + (item.platform === "vercel" ? "查看项目" : "查看 Workers") + "</button>";
     } else if (actionsOverride !== undefined) {
@@ -334,7 +334,7 @@
       icon: kind === "server" ? undefined : kind === "worker" ? "layout" : "monitor",
       iconHtml: kind === "server" ? serverIconHtml(item) : undefined,
       title: kind === "worker" ? item.name : deviceTitle(item),
-      pill: kind === "host" ? connName(item) || undefined : undefined,
+      pill: kind === "server" ? serverBadge(item) : kind === "host" ? connName(item) || undefined : undefined,
       corner: C.statusPill(item.connection_id ? remoteStateOf(item) : item.status),
       lede: lede || "",
       facts: facts,
@@ -401,6 +401,52 @@
     return loc ? loc.flag + " " + C.escapeHtml(loc.label) : "—";
   }
 
+  // Server cards carry a flag + ISO country-code badge next to the name,
+  // derived from the probed region (ip-api country names, English).
+  var COUNTRY_CODES = [
+    ["singapore", "新加坡", "🇸🇬", "SG"], ["hong kong", "香港", "🇭🇰", "HK"],
+    ["china", "中国", "🇨🇳", "CN"], ["shanghai", "上海", "🇨🇳", "CN"],
+    ["beijing", "北京", "🇨🇳", "CN"], ["shenzhen", "深圳", "🇨🇳", "CN"],
+    ["guangzhou", "广州", "🇨🇳", "CN"], ["japan", "日本", "🇯🇵", "JP"],
+    ["tokyo", "东京", "🇯🇵", "JP"], ["osaka", "大阪", "🇯🇵", "JP"],
+    ["korea", "韩国", "🇰🇷", "KR"], ["seoul", "首尔", "🇰🇷", "KR"],
+    ["taiwan", "台湾", "🇹🇼", "TW"], ["taipei", "台北", "🇹🇼", "TW"],
+    ["united states", "美国", "🇺🇸", "US"], ["united kingdom", "英国", "🇬🇧", "GB"],
+    ["germany", "德国", "🇩🇪", "DE"], ["france", "法国", "🇫🇷", "FR"],
+    ["canada", "加拿大", "🇨🇦", "CA"], ["australia", "澳大利亚", "🇦🇺", "AU"],
+    ["india", "印度", "🇮🇳", "IN"], ["netherlands", "荷兰", "🇳🇱", "NL"],
+    ["russia", "俄罗斯", "🇷🇺", "RU"], ["brazil", "巴西", "🇧🇷", "BR"],
+    ["indonesia", "印尼", "🇮🇩", "ID"], ["vietnam", "越南", "🇻🇳", "VN"],
+    ["thailand", "泰国", "🇹🇭", "TH"], ["malaysia", "马来西亚", "🇲🇾", "MY"],
+    ["philippines", "菲律宾", "🇵🇭", "PH"], ["italy", "意大利", "🇮🇹", "IT"],
+    ["spain", "西班牙", "🇪🇸", "ES"], ["poland", "波兰", "🇵🇱", "PL"],
+    ["sweden", "瑞典", "🇸🇪", "SE"], ["norway", "挪威", "🇳🇴", "NO"],
+    ["finland", "芬兰", "🇫🇮", "FI"], ["denmark", "丹麦", "🇩🇰", "DK"],
+    ["austria", "奥地利", "🇦🇹", "AT"], ["switzerland", "瑞士", "🇨🇭", "CH"],
+    ["ireland", "爱尔兰", "🇮🇪", "IE"], ["israel", "以色列", "🇮🇱", "IL"],
+    ["turkey", "土耳其", "🇹🇷", "TR"], ["ukraine", "乌克兰", "🇺🇦", "UA"],
+    ["south africa", "南非", "🇿🇦", "ZA"], ["mexico", "墨西哥", "🇲🇽", "MX"],
+    ["argentina", "阿根廷", "🇦🇷", "AR"], ["chile", "智利", "🇨🇱", "CL"],
+    ["new zealand", "新西兰", "🇳🇿", "NZ"], ["pakistan", "巴基斯坦", "🇵🇰", "PK"],
+    ["bangladesh", "孟加拉", "🇧🇩", "BD"], ["egypt", "埃及", "🇪🇬", "EG"],
+    ["saudi arabia", "沙特", "🇸🇦", "SA"], ["united arab emirates", "阿联酋", "🇦🇪", "AE"],
+    ["iran", "伊朗", "🇮🇷", "IR"], ["kazakhstan", "哈萨克斯坦", "🇰🇿", "KZ"],
+    ["myanmar", "缅甸", "🇲🇲", "MM"], ["cambodia", "柬埔寨", "🇰🇭", "KH"],
+    ["laos", "老挝", "🇱🇦", "LA"], ["nepal", "尼泊尔", "🇳🇵", "NP"],
+    ["sri lanka", "斯里兰卡", "🇱🇰", "LK"], ["mongolia", "蒙古", "🇲🇳", "MN"]
+  ];
+
+  function serverBadge(item) {
+    var region = String((item && item.region) || "").trim();
+    if (!region) return undefined;
+    var lower = region.toLowerCase();
+    for (var i = 0; i < COUNTRY_CODES.length; i++) {
+      var row = COUNTRY_CODES[i];
+      if (lower.indexOf(row[0]) !== -1 || region.indexOf(row[1]) !== -1) return row[2] + " " + row[3];
+    }
+    return undefined;
+  }
+
   function cardFor(uiKind, item) {
     if (uiKind === "worker") {
       var facts = [["平台", item.platform === "vercel" ? "Vercel" : "Cloudflare"], ["版本", C.escapeHtml(item.version || "未记录")], ["更新时间", C.escapeHtml(C.formatMinute(item.updated_at) || "—")]];
@@ -426,10 +472,11 @@
         ["系统", C.escapeHtml(item.os || "—")],
       ];
       var pw = powerFor(item);
+      var pwClass = pw.action === "start" || pw.action === "resume" ? "secondary accent" : "secondary";
       var pid = C.escapeHtml(item.id);
       var quick =
         (pw.action
-          ? "<button type=\"button\" class=\"secondary\" data-mpower=\"" + pw.action + "\" data-id=\"" + pid + "\">" + pw.label + "</button>"
+          ? "<button type=\"button\" class=\"" + pwClass + "\" data-mpower=\"" + pw.action + "\" data-id=\"" + pid + "\">" + pw.label + "</button>"
           : "<button type=\"button\" class=\"secondary\" disabled>" + pw.label + "</button>") +
         "<button type=\"button\" class=\"secondary\" data-mports data-id=\"" + pid + "\">端口转发</button>" +
         "<button type=\"button\" class=\"secondary\" data-mkeep data-id=\"" + pid + "\">保活</button>" +
@@ -1941,6 +1988,30 @@
   }
 
   // 查看 SSH 密码：走 reveal 接口拿明文（服务端记审计），与保险库同口径
+  // 复制配置：经审计的 reveal 接口取回用户名与密码/密钥，拼成逐项
+  // 写全称的纯文本整份复制；取不到机密就整份不复制。
+  function copyServerConfig(item, btn) {
+    btn.disabled = true;
+    api("POST", "/api/machines/" + encodeURIComponent(item.id) + "/reveal")
+      .then(function (result) {
+        if (!result.data || !result.data.ok || !result.data.reveal || !result.data.reveal.secret) {
+          C.toast("还没有保存密码或密钥，未复制");
+          return;
+        }
+        var reveal = result.data.reveal;
+        var lines = [];
+        lines.push(item.note ? "服务器备注名：" + item.note : "服务器名称：" + deviceTitle(item));
+        lines.push("服务器 IP 地址：" + (item.ip || item.ssh_host || "未填写"));
+        lines.push("连接端口：" + (item.ssh_port || 22));
+        lines.push("登录用户名：" + (reveal.ssh_user || "未填写"));
+        if (item.auth_type === "key") lines.push("登录密钥：\n" + reveal.secret);
+        else lines.push("登录密码：" + reveal.secret);
+        return C.copyText(lines.join("\n")).then(function () { C.toast("连接配置已复制"); });
+      })
+      .catch(function () { C.toast("复制失败，请稍后重试"); })
+      .then(function () { btn.disabled = false; });
+  }
+
   function openRevealDialog(item) {
     var ctrl = C.openFormDialog({
       title: "查看 SSH 密码",
@@ -2169,6 +2240,7 @@
         var act = mact.getAttribute("data-mact");
         if (act === "probe") probeServer(found, mact);
         else if (act === "reveal") openRevealDialog(found);
+        else if (act === "copyconfig") copyServerConfig(found, mact);
         else if (act === "workers") openWorkersDialog(found);
         else if (act === "group") openGroupMoveDialog(found);
         else if (act === "edit") {
