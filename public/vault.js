@@ -99,39 +99,92 @@
     return C.list(renderItems(items));
   }
 
-  // 账号密码是列表行：一行只呈现名称与行尾「高级」按钮，
-  // 其余字段只在编辑弹窗与查看密码弹窗里出现。行样式复用设置页的 session-row
+  // 账号密码是列表行：一行只呈现名称与「查看密码」，点行打开管理弹窗，
+  // 其余字段与管理动作都在弹窗里。行样式复用 session-row
   function vaultFact(label, value) {
     return "<div><dt>" + C.escapeHtml(label) + "</dt><dd>" + C.escapeHtml(value) + "</dd></div>";
   }
 
-  function entryExpandBody(item) {
+  function entryManageBody(item) {
     var id = C.escapeHtml(item.id);
     return (
-      '<dl class="kv">' +
+      "<dl class=\"kv\">" +
       vaultFact("网址", item.url || "未填写") +
       vaultFact("账号", item.username || "未填写") +
       vaultFact("密码", item.tail ? "末四位 " + item.tail : "已保存") +
       vaultFact("备注", item.note || "无") +
       "</dl>" +
-      C.expandActions(
-        '<button type="button" class="secondary" data-vact="edit" data-kind="secret" data-id="' + id + '">编辑</button>' +
-          '<button type="button" class="secondary" data-vact="reveal" data-kind="secret" data-id="' + id + '">查看密码</button>' +
-          '<button type="button" class="danger" data-vact="delete" data-kind="secret" data-id="' + id + '">删除</button>',
-      )
+      "<div class=\"manage-actions\">" +
+      "<button type=\"button\" class=\"secondary\" data-vact=\"edit\" data-kind=\"secret\" data-id=\"" + id + "\">编辑</button>" +
+      "<button type=\"button\" class=\"secondary\" data-vact=\"reveal\" data-kind=\"secret\" data-id=\"" + id + "\">查看密码</button>" +
+      "<button type=\"button\" class=\"danger\" data-vact=\"delete\" data-kind=\"secret\" data-id=\"" + id + "\">删除</button>" +
+      "</div>"
     );
   }
 
   function entryRow(item) {
-    var key = "vault-entry:" + item.id;
+    var id = C.escapeHtml(item.id);
     return (
-      '<div class="entry-row"><article class="session-row"><div class="session-main"><div class="session-title"><h3>' +
-      C.escapeHtml(item.name) +
-      "</h3></div></div>" +
-      C.expandToggle(key) +
-      "</article>" +
-      C.expandPanel(key, entryExpandBody(item)) +
-      "</div>"
+      "<div class=\"entry-row\"><article class=\"session-row\" data-manage=\"entry:" + id + "\" tabindex=\"0\" role=\"button\" aria-haspopup=\"dialog\" aria-label=\"管理：" + C.escapeHtml(item.name) + "\">" +
+      "<div class=\"session-main\"><div class=\"session-title\"><h3>" + C.escapeHtml(item.name) + "</h3></div></div>" +
+      "<button type=\"button\" class=\"secondary\" data-vact=\"reveal\" data-kind=\"secret\" data-id=\"" + id + "\">查看密码</button>" +
+      "<span class=\"row-chev\" aria-hidden=\"true\">›</span>" +
+      "</article></div>"
+    );
+  }
+
+  // ---- 管理弹窗（点行/卡信息区打开） ----
+
+  function openManage(key) {
+    if (!key) return;
+    var sep = key.indexOf(":");
+    var kind = key.slice(0, sep);
+    var id = key.slice(sep + 1);
+    var pool = kind === "entry" ? ENTRIES : kind === "gateway" ? GATEWAYS : EMAILS;
+    var found = null;
+    (pool || []).forEach(function (entry) {
+      if (entry.id === id) found = entry;
+    });
+    if (!found) return;
+    if (kind === "entry") openEntryManage(found);
+    else if (kind === "gateway") openGatewayManage(found);
+    else openEmailManage(found);
+  }
+
+  function wireManage(ctrl) {
+    ctrl.dialog.addEventListener("click", handleClick);
+  }
+
+  function openEntryManage(item) {
+    wireManage(C.openManageDialog({ title: item.name, bodyHtml: entryManageBody(item) }));
+  }
+
+  function openGatewayManage(item) {
+    var id = C.escapeHtml(item.id);
+    wireManage(
+      C.openManageDialog({
+        title: item.name,
+        bodyHtml:
+          "<div class=\"manage-actions\">" +
+          "<button type=\"button\" class=\"secondary\" data-vact=\"edit\" data-kind=\"gateway\" data-id=\"" + id + "\">编辑</button>" +
+          "<button type=\"button\" class=\"secondary\" data-vact=\"reveal\" data-kind=\"gateway\" data-id=\"" + id + "\">查看密钥</button>" +
+          "<button type=\"button\" class=\"danger\" data-vact=\"delete\" data-kind=\"gateway\" data-id=\"" + id + "\">删除</button>" +
+          "</div>",
+      })
+    );
+  }
+
+  function openEmailManage(item) {
+    var id = C.escapeHtml(item.id);
+    wireManage(
+      C.openManageDialog({
+        title: item.address,
+        bodyHtml:
+          "<div class=\"manage-actions\">" +
+          "<button type=\"button\" class=\"secondary\" data-vact=\"edit\" data-kind=\"email\" data-id=\"" + id + "\">编辑</button>" +
+          "<button type=\"button\" class=\"danger\" data-vact=\"delete\" data-kind=\"email\" data-id=\"" + id + "\">删除</button>" +
+          "</div>",
+      })
     );
   }
 
@@ -144,6 +197,7 @@
         var what = row.target_kind === "entry" ? "查看密码" : "查看密钥";
         return C.record({
           id: row.id,
+          icon: "eye",
           title: row.target_name || row.target_id,
           lede: what,
           facts: [["时间", C.escapeHtml(C.formatMinute(row.created_at))]],
@@ -160,10 +214,12 @@
       return items.map(function (item) {
         return C.record({
           id: item.id,
+          icon: "gateway",
           title: item.name,
           status: item.status,
           facts: [["协议", C.escapeHtml(item.proto || "未填写")], ["地址", C.escapeHtml(item.base_url || "未填写")], ["模型", C.escapeHtml(item.models || "0 个模型")], ["密钥末四位", C.escapeHtml(item.tail)]],
-          expandKey: "gateway:" + item.id, expandBody: C.expandActions('<button type="button" class="secondary" data-vact="edit" data-kind="gateway" data-id="' + C.escapeHtml(item.id) + '">编辑</button><button type="button" class="secondary" data-vact="reveal" data-kind="gateway" data-id="' + C.escapeHtml(item.id) + '">查看密钥</button><button type="button" class="danger" data-vact="delete" data-kind="gateway" data-id="' + C.escapeHtml(item.id) + '">删除</button>'),
+          actions: "<button type=\"button\" class=\"secondary\" data-vact=\"reveal\" data-kind=\"gateway\" data-id=\"" + C.escapeHtml(item.id) + "\">查看密钥</button>",
+          manage: "gateway:" + item.id,
         });
       }).join("");
     });
@@ -177,7 +233,14 @@
       return items.map(function (item) {
         var facts = [["用途", C.escapeHtml(item.purpose || "未标注")], ["入口", C.escapeHtml(item.portal || "未填写")]];
         if (item.note) facts.push(["备注", C.escapeHtml(item.note)]);
-        return C.record({ id: item.id, title: item.address, facts: facts, expandKey: "email:" + item.id, expandBody: C.expandActions('<button type="button" class="secondary" data-vact="edit" data-kind="email" data-id="' + C.escapeHtml(item.id) + '">编辑</button><button type="button" class="danger" data-vact="delete" data-kind="email" data-id="' + C.escapeHtml(item.id) + '">删除</button>') });
+        return C.record({
+          id: item.id,
+          icon: "lock",
+          title: item.address,
+          facts: facts,
+          actions: "<button type=\"button\" class=\"secondary\" data-vact=\"edit\" data-kind=\"email\" data-id=\"" + C.escapeHtml(item.id) + "\">编辑</button>",
+          manage: "email:" + item.id,
+        });
       }).join("");
     });
     var emailHtml =
@@ -356,13 +419,15 @@
     });
   }
 
-  function confirmDelete(kind, item) {
+  function confirmDelete(kind, item, srcEl) {
     var label = kind === "secret" ? "条目" : kind === "gateway" ? "网关" : "邮箱";
     var title = kind === "email" ? item.address : item.name;
     var url = kind === "secret" ? "/api/vault/entries/" : kind === "gateway" ? "/api/vault/gateways/" : "/api/vault/emails/";
     var reload = kind === "secret" ? loadEntries : kind === "gateway" ? loadGateways : loadEmails;
+    var dlg = srcEl && srcEl.closest ? srcEl.closest("[data-manage-dialog]") : null;
+    var anchor = (dlg && dlg.querySelector("[data-manage-confirm]")) || document.getElementById("vault-confirm");
     C.askConfirm({
-      anchor: document.getElementById("vault-confirm"),
+      anchor: anchor,
       title: "删除" + label,
       text: "确认删除「" + title + "」吗？删除后无法恢复",
       confirmLabel: "删除",
@@ -370,13 +435,15 @@
     }).then(function (yes) {
       if (!yes) return;
       api("DELETE", url + encodeURIComponent(item.id)).then(function (result) {
-        if (result.data && result.data.ok) reload();
+        if (result.data && result.data.ok) { C.closeCurrentOverlay(); reload(); }
       });
     });
   }
 
   var page = document.getElementById("page");
-  page.addEventListener("click", function (event) {
+  page.addEventListener("click", handleClick);
+
+  function handleClick(event) {
     var target = event.target;
     if (!(target instanceof Element)) return;
     var tab = target.closest(".page-tab");
@@ -394,6 +461,12 @@
       else openEmailDialog(null);
       return;
     }
+    var zone = target.closest("[data-manage]");
+    if (zone) {
+      if (target.closest("button, a, input, select, textarea")) return;
+      openManage(zone.getAttribute("data-manage"));
+      return;
+    }
     var vact = target.closest("[data-vact]");
     if (vact) {
       var vkind = vact.getAttribute("data-kind");
@@ -408,10 +481,10 @@
           else if (vkind === "gateway") openGatewayDialog(vfound);
           else openEmailDialog(vfound);
         } else if (act === "reveal") openReveal(vkind, vfound);
-        else if (act === "delete") confirmDelete(vkind, vfound);
+        else if (act === "delete") confirmDelete(vkind, vfound, vact);
       }
     }
-  });
+  }
   render();
   loadEntries();
   loadGateways();
