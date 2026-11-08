@@ -290,6 +290,39 @@ button.ghost:active, a.ghost:active, .ghost:active, .icon-btn:active, button.cop
 .record > *, .cal-grid > *, .stat-grid > *, .list > * { min-width: 0; }
 img, svg, video, canvas { max-width: 100%; }
 
+/* Board head row (desktop): tab track on the left, the active tab's add
+   actions on the right, one row, buttons as tall as the tab track (40px),
+   right edge flush with the content container below. */
+.page-head { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+.page-head .page-tabs { margin-bottom: 0; flex: none; }
+.page-head-actions { margin-left: auto; display: flex; align-items: center; }
+.page-head-actions[hidden] { display: none; }
+.page-head .add-bar { gap: 8px; }
+.page-head .add-button,
+.page-head .add-group-button {
+  width: auto;
+  flex: none;
+  height: 40px;
+  min-height: 40px;
+  padding: 0 18px;
+  border-radius: var(--r-md);
+}
+.page-head .add-bar .add-button { flex: none; width: auto; }
+
+@media (max-width: 639px) {
+  .page-head { flex-direction: column; align-items: stretch; gap: 0; }
+  .page-head-actions { margin-left: 0; margin-top: 12px; }
+  .page-head .add-bar { width: 100%; }
+  .page-head .add-bar .add-button { flex: 1 1 auto; width: auto; }
+  .page-head .add-button,
+  .page-head .add-group-button {
+    height: auto;
+    min-height: 52px;
+    border-radius: var(--r-lg);
+  }
+  .page-head > .page-head-actions .add-button { width: 100%; }
+}
+
 /* 移动端统计卡一行两个 */
 @media (max-width: 767px) {
   .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -368,37 +401,4 @@ img, svg, video, canvas { max-width: 100%; }
 @media (max-width: 639px) {
   .session-row { align-items: stretch; flex-direction: column; }
   .session-row > button { width: 100%; }
-}
-
-/* Board head row (desktop): tab track on the left, the active tab's add
-   actions on the right, one row, buttons as tall as the tab track (40px),
-   right edge flush with the content container below. */
-.page-head { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
-.page-head .page-tabs { margin-bottom: 0; flex: none; }
-.page-head-actions { margin-left: auto; display: flex; align-items: center; }
-.page-head-actions[hidden] { display: none; }
-.page-head .add-bar { gap: 8px; }
-.page-head .add-button,
-.page-head .add-group-button {
-  width: auto;
-  flex: none;
-  height: 40px;
-  min-height: 40px;
-  padding: 0 18px;
-  border-radius: var(--r-md);
-}
-.page-head .add-bar .add-button { flex: none; width: auto; }
-
-@media (max-width: 639px) {
-  .page-head { flex-direction: column; align-items: stretch; gap: 0; }
-  .page-head-actions { margin-left: 0; margin-top: 12px; }
-  .page-head .add-bar { width: 100%; }
-  .page-head .add-bar .add-button { flex: 1 1 auto; width: auto; }
-  .page-head .add-button,
-  .page-head .add-group-button {
-    height: auto;
-    min-height: 52px;
-    border-radius: var(--r-lg);
-  }
-  .page-head > .page-head-actions .add-button { width: 100%; }
 }
