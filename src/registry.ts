@@ -181,6 +181,15 @@ function newId(prefix: string): string {
   return prefix + hex;
 }
 
+// Agent ids stay short by request: agt_ plus 12 hex characters.
+function newAgentId(): string {
+  const bytes = new Uint8Array(6);
+  crypto.getRandomValues(bytes);
+  let hex = "";
+  for (const byte of bytes) hex += byte.toString(16).padStart(2, "0");
+  return "agt_" + hex;
+}
+
 export function randomAgentToken(): string {
   const bytes = new Uint8Array(32);
   crypto.getRandomValues(bytes);
@@ -1242,7 +1251,8 @@ export interface SidebarAgent {
 // The sidebar rail is assembled here so every client shows the same list:
 // pinned agents first (in pin order, never capped by the limit), then the
 // most recently active agents fill the remaining slots up to the limit.
-// Only enabled agents appear; a disabled agent drops out of the rail.
+// Pinned agents always appear (an explicit pin wins, even while disabled);
+// the recent-activity fill below only draws from enabled agents.
 export async function listSidebarAgents(db: D1Database, limit: number): Promise<SidebarAgent[]> {
   const toItem = (row: AgentRow, pinned: boolean): SidebarAgent => ({
     id: row.id,
@@ -1253,7 +1263,7 @@ export async function listSidebarAgents(db: D1Database, limit: number): Promise<
   });
   const pinnedListed = await prepare(
     db,
-    "SELECT id, name, status, group_id, permissions, last_seen_at, pinned_at, created_at FROM agents WHERE status = 'active' AND pinned_at IS NOT NULL ORDER BY pinned_at ASC, created_at ASC",
+    "SELECT id, name, status, group_id, permissions, last_seen_at, pinned_at, created_at FROM agents WHERE pinned_at IS NOT NULL ORDER BY pinned_at ASC, created_at ASC",
   ).all<AgentRow>();
   const pinned = rowsOf(pinnedListed).map((row) => toItem(row, true));
   if (pinned.length >= limit) return pinned;
@@ -1274,7 +1284,8 @@ export async function createAgent(db: D1Database, value: unknown): Promise<{ ok:
   if (!resolved.ok) return resolved;
   const token = randomAgentToken();
   const now = Date.now();
-  const id = newId("agt_");
+  let id = newAgentId();
+  for (let attempt = 0; attempt < 5 && (await getAgentById(db, id)); attempt++) id = newAgentId();
   try {
     await prepare(db, "INSERT INTO agents (id, name, token_hash, status, group_id, permissions, last_seen_at, created_at) VALUES (?, ?, ?, 'active', ?, ?, NULL, ?)", [
       id,

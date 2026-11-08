@@ -497,12 +497,12 @@
       '<div class="page-head-actions" data-head-actions="mcp"' +
       (activeTab === "mcp" ? "" : " hidden") +
       ">" +
-      C.addBar({ addLabel: "添加条目", addAction: "add", groupAction: "add-group" }) +
+      C.addBar({ addLabel: "添加 MCP", addAction: "add", groupAction: "add-group" }) +
       "</div>" +
       '<div class="page-head-actions" data-head-actions="skills"' +
       (activeTab === "skills" ? "" : " hidden") +
       ">" +
-      C.addBar({ addLabel: "添加技能", addAction: "local-add", groupAction: "add-group" }) +
+      C.addBar({ addLabel: "添加 Skill", addAction: "local-add", groupAction: "add-group" }) +
       "</div>" +
       '<div class="page-head-actions" data-head-actions="api"' +
       (activeTab === "api" ? "" : " hidden") +

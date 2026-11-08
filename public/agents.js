@@ -1,5 +1,5 @@
 /* Agent 集群板块，两页签。Agents：按设备管理的方式组织，列表走
-   GET /api/agents + GET /api/groups?scope=agent，按分组分区展示；添加设备/
+   GET /api/agents + GET /api/groups?scope=agent，按分组分区展示；添加 Agent/
    添加分组走弹窗，卡片高级操作（改名、移动分组、高级设置、轮换令牌、停用）
    走中央菜单，高级设置里是 per-Agent 的系统功能权限开关（PATCH 保存）。
    应用：接入 MCP 的应用条目，走 /api/extras/apps；分组没有独立的后端
@@ -130,9 +130,9 @@
         renderItem: card,
         groupActions: groupActions,
         ungroupedTitle: "未分组",
-        emptyGroupText: "添加设备时选择这个分组即可归入",
+        emptyGroupText: "添加 Agent时选择这个分组即可归入",
         emptyTitle: "还没有设备",
-        emptyText: "点上方「添加设备」创建第一个",
+        emptyText: "点上方「添加 Agent」创建第一个",
       });
     }
     var agentsPanel = '<div class="stack">' + noticeHtml() + body + "</div>";
@@ -148,7 +148,7 @@
       '<div class="page-head-actions" data-head-actions="agents"' +
       (state.activeTab === "agents" ? "" : " hidden") +
       ">" +
-      C.addBar({ addLabel: "添加设备", addAction: "open-create", groupAction: "add-group" }) +
+      C.addBar({ addLabel: "添加 Agent", addAction: "open-create", groupAction: "add-group" }) +
       "</div>" +
       '<div class="page-head-actions" data-head-actions="apps"' +
       (state.activeTab === "apps" ? "" : " hidden") +
@@ -299,11 +299,11 @@
     return window.CSS && CSS.escape ? CSS.escape(value) : value;
   }
 
-  // ---- 添加设备 ----
+  // ---- 添加 Agent ----
 
   function openCreate() {
     C.openFormDialog({
-      title: "添加设备",
+      title: "添加 Agent",
       bodyHtml:
         "<label>名字" +
         '<input data-field="name" name="name" maxlength="64" autocomplete="off" />' +
@@ -311,7 +311,7 @@
         "<label>分组" +
         C.groupSelect("group_id", state.groups, "") +
         "</label>",
-      submitLabel: "添加设备",
+      submitLabel: "添加 Agent",
       onSubmit: function (ctrl) {
         create(ctrl);
       },

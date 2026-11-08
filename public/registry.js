@@ -11,7 +11,7 @@
 window.HIVEMOS_MODULES = Object.freeze([
   Object.freeze({ key: "overview", title: "总览", href: "/", icon: "icon-layout", script: "/index.js" }),
   Object.freeze({ key: "agents", title: "Agents 与应用", href: "/agents.html", icon: "icon-bot", script: "/agents.js" }),
-  Object.freeze({ key: "machines", title: "云主机", href: "/machines.html", icon: "icon-monitor", script: "/machines.js" }),
+  Object.freeze({ key: "machines", title: "云计算资源", href: "/machines.html", icon: "icon-monitor", script: "/machines.js" }),
   Object.freeze({ key: "memory-soul", title: "记忆与 Soul", href: "/memory-soul.html", icon: "icon-memory", script: "/memory-soul.js" }),
   Object.freeze({ key: "mcp-skills", title: "MCP 与 Skills", href: "/mcp-skills.html", icon: "icon-plug", script: "/mcp-skills.js" }),
   Object.freeze({ key: "tasks-calendar", title: "任务与日历", href: "/tasks-calendar.html", icon: "icon-tasks", script: "/tasks-calendar.js" }),
