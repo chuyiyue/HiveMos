@@ -558,6 +558,74 @@ export async function testStoredConnection(db: D1Database, key: ContentKey, id: 
 const MACHINE_INSERT =
   "INSERT INTO machines (id, kind, name, region, spec, description, version, status, binding, last_heartbeat_at, note, hostname, os, ip, ssh_host, ssh_port, ssh_user, auth_type, ssh_secret_enc, ssh_tail, vendor, access_note, cf_account_id, api_token_enc, api_token_tail, connection_id, remote_id, remote_name, remote_state, last_sync_at, group_id, created_at, updated_at) VALUES (?, 'cloud', ?, ?, ?, '', '', ?, '未绑定', NULL, '', '', ?, ?, '', 22, '', 'password', '', '', ?, '', '', '', '', ?, ?, ?, ?, ?, ?, ?, ?)";
 
+// Shared by the create-connection wizard and by importing into a connection
+// that already exists. Local name starts as the remote name.
+async function insertImportedDevice(
+  db: D1Database,
+  device: ProviderDevice,
+  args: { provider: string; config: ProviderConfig; connectionId: string; groupId: string | null; actor: string; now: number },
+): Promise<PublicMachine | null> {
+  const machineId = newId("pc_");
+  const label = PROVIDER_LABELS[args.provider] ?? args.provider;
+  await prepare(db, MACHINE_INSERT, [
+    machineId,
+    device.name || device.remoteId,
+    args.provider === "huawei" ? args.config["region"] ?? "" : "",
+    device.spec,
+    device.status,
+    device.os,
+    device.ip,
+    label,
+    args.connectionId,
+    device.remoteId,
+    device.name,
+    device.state ?? null,
+    args.now,
+    args.groupId,
+    args.now,
+    args.now,
+  ]).run();
+  await prepare(db, "INSERT INTO machines_audit (id, machine_id, actor, source, action, detail, created_at) VALUES (?, ?, ?, 'panel', 'create', ?, ?)", [
+    crypto.randomUUID(),
+    machineId,
+    args.actor,
+    JSON.stringify({ via: "provider_import", provider: args.provider, remote_id: device.remoteId }),
+    args.now,
+  ]).run();
+  const rows = rowsOf<Record<string, unknown>>(await prepare(db, "SELECT * FROM machines WHERE id = ?", [machineId]).all());
+  return rows[0] ? machinePublic(rows[0] as never) : null;
+}
+
+async function publicConnectionById(db: D1Database, id: string): Promise<PublicConnection> {
+  const connection = (await listConnections(db)).find((entry) => entry.id === id);
+  if (!connection) throw new MachineError(500, "连接保存后读取失败");
+  return connection;
+}
+
+function readConnectionName(value: unknown): string {
+  if (typeof value !== "string") throw new MachineError(400, "请填写名称");
+  const name = value.trim();
+  if (!name) throw new MachineError(400, "请填写名称");
+  if (Array.from(name).length > 60) throw new MachineError(400, "名称最多 60 个字");
+  return name;
+}
+
+function readImportDeviceIds(value: unknown): string[] {
+  if (!Array.isArray(value)) throw new MachineError(400, "请选择要接入的设备");
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  for (const item of value) {
+    if (typeof item !== "string") continue;
+    const id = item.trim();
+    if (!id || seen.has(id)) continue;
+    if (ids.length >= 500) throw new MachineError(400, "一次最多接入 500 台设备");
+    seen.add(id);
+    ids.push(id);
+  }
+  if (!ids.length) throw new MachineError(400, "请至少勾选一台设备");
+  return ids;
+}
+
 export async function createConnectionWithDevices(
   db: D1Database,
   key: ContentKey,
@@ -574,7 +642,6 @@ export async function createConnectionWithDevices(
   const wanted = new Set(input.deviceIds);
   const selected = devices.filter((device) => wanted.has(device.remoteId));
   if (!selected.length) throw new MachineError(400, "请至少勾选一台设备");
-  const label = PROVIDER_LABELS[provider] ?? provider;
   const name = (input.name ?? "").trim() || defaultConnectionName(provider, config);
   const connectionId = newId("cn_");
   const configEnc = await sealMachineSecret(key, JSON.stringify(config));
@@ -586,39 +653,107 @@ export async function createConnectionWithDevices(
   ).run();
   const created: PublicMachine[] = [];
   for (const device of selected) {
-    const machineId = newId("pc_");
-    await prepare(db, MACHINE_INSERT, [
-      machineId,
-      device.name || device.remoteId,
-      provider === "huawei" ? config["region"] ?? "" : "",
-      device.spec,
-      device.status,
-      device.os,
-      device.ip,
-      label,
-      connectionId,
-      device.remoteId,
-      device.name,
-      device.state ?? null,
-      now,
-      groupId,
-      now,
-      now,
-    ]).run();
-    await prepare(db, "INSERT INTO machines_audit (id, machine_id, actor, source, action, detail, created_at) VALUES (?, ?, ?, 'panel', 'create', ?, ?)", [
-      crypto.randomUUID(),
-      machineId,
-      actor,
-      JSON.stringify({ via: "provider_import", provider, remote_id: device.remoteId }),
-      now,
-    ]).run();
-    const rows = rowsOf<Record<string, unknown>>(await prepare(db, "SELECT * FROM machines WHERE id = ?", [machineId]).all());
-    if (rows[0]) created.push(machinePublic(rows[0] as never));
+    const machine = await insertImportedDevice(db, device, { provider, config, connectionId, groupId, actor, now });
+    if (machine) created.push(machine);
   }
   const connections = await listConnections(db);
   const connection = connections.find((entry) => entry.id === connectionId);
   if (!connection) throw new MachineError(500, "连接保存后读取失败");
   return { connection, machines: created };
+}
+
+export async function renameConnection(db: D1Database, id: string, nameInput: unknown, now: number): Promise<PublicConnection> {
+  const row = await getConnection(db, id);
+  if (!row) throw new MachineError(404, "连接不存在");
+  const name = readConnectionName(nameInput);
+  await prepare(db, "UPDATE provider_connections SET name = ?, updated_at = ? WHERE id = ?", [name, now, id]).run();
+  return publicConnectionById(db, id);
+}
+
+// Replaces the sealed config only after a live device list succeeds.
+// A provider error throws and leaves config_enc / config_tail untouched.
+export async function replaceConnectionCredentials(
+  db: D1Database,
+  key: ContentKey,
+  id: string,
+  configInput: Record<string, unknown>,
+  now: number,
+): Promise<PublicConnection> {
+  const row = await getConnection(db, id);
+  if (!row) throw new MachineError(404, "连接不存在");
+  const config = readProviderConfig(row.provider, configInput);
+  await fetchProviderDevices(row.provider, config);
+  const configEnc = await sealMachineSecret(key, JSON.stringify(config));
+  const tail = mainSecretOf(row.provider, config).slice(-4);
+  await prepare(
+    db,
+    "UPDATE provider_connections SET config_enc = ?, config_tail = ?, last_test_at = ?, last_test_ok = ?, last_error = ?, updated_at = ? WHERE id = ?",
+    [configEnc, tail, now, 1, "", now, id],
+  ).run();
+  return publicConnectionById(db, id);
+}
+
+export interface ConnectionDevice extends ProviderDevice {
+  imported: boolean;
+}
+
+export async function listConnectionDevices(db: D1Database, key: ContentKey, id: string): Promise<ConnectionDevice[]> {
+  const row = await getConnection(db, id);
+  if (!row) throw new MachineError(404, "连接不存在");
+  const config = await storedConfig(db, key, row);
+  const devices = await fetchProviderDevices(row.provider, config);
+  const existing = rowsOf<{ remote_id: string }>(
+    await prepare(db, "SELECT remote_id FROM machines WHERE connection_id = ? AND remote_id != ''", [id]).all<{ remote_id: string }>(),
+  );
+  const have = new Set(existing.map((entry) => entry.remote_id));
+  return devices.map((device) => ({ ...device, imported: have.has(device.remoteId) }));
+}
+
+export async function importConnectionDevices(
+  db: D1Database,
+  key: ContentKey,
+  id: string,
+  deviceIdsInput: unknown,
+  groupIdInput: unknown,
+  actor: string,
+  now: number,
+): Promise<{ machines: PublicMachine[]; skipped: number }> {
+  const row = await getConnection(db, id);
+  if (!row) throw new MachineError(404, "连接不存在");
+  const deviceIds = readImportDeviceIds(deviceIdsInput);
+  const groupId = await readGroupId(db, groupIdInput);
+  const config = await storedConfig(db, key, row);
+  const devices = await fetchProviderDevices(row.provider, config);
+  const byRemote = new Map(devices.map((device) => [device.remoteId, device]));
+  const existing = rowsOf<{ remote_id: string }>(
+    await prepare(db, "SELECT remote_id FROM machines WHERE connection_id = ? AND remote_id != ''", [id]).all<{ remote_id: string }>(),
+  );
+  const have = new Set(existing.map((entry) => entry.remote_id));
+  const machines: PublicMachine[] = [];
+  let skipped = 0;
+  for (const remoteId of deviceIds) {
+    if (have.has(remoteId)) {
+      skipped++;
+      continue;
+    }
+    const device = byRemote.get(remoteId);
+    if (!device) continue;
+    const machine = await insertImportedDevice(db, device, { provider: row.provider, config, connectionId: id, groupId, actor, now });
+    if (!machine) continue;
+    machines.push(machine);
+    have.add(remoteId);
+  }
+  if (!machines.length && !skipped) throw new MachineError(400, "没有可接入的设备");
+  if (machines.length) {
+    try {
+      await syncConnection(db, key, id, now);
+    } catch {
+      // The insert already verified the credentials. Don't let a second
+      // fetch failure rewrite that success into a stored test error.
+      await recordTest(db, id, true, "", now);
+    }
+  }
+  return { machines, skipped };
 }
 
 export async function syncOneMachine(db: D1Database, key: ContentKey, machineId: string, now: number): Promise<{ missing: boolean }> {

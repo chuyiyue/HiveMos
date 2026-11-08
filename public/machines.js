@@ -99,6 +99,13 @@
     return found ? found.name : "";
   }
 
+  function providerLabel(provider) {
+    if (provider === "instabox") return "InstaBox";
+    if (provider === "huawei") return "华为云";
+    if (provider === "mcp") return "MCP 通用";
+    return provider || "";
+  }
+
   function openMachineManage(kind, item) {
     var id = C.escapeHtml(item.id);
     function row(label, valueHtml) {
@@ -306,7 +313,7 @@
       '">Workers</button>' +
       "</div>" +
       '<div class="page-head-actions">' +
-      (activeTab === "hosts" ? '<button type="button" class="secondary" data-providers>服务商管理</button>' : "") +
+      (activeTab === "hosts" ? '<button type="button" class="secondary add-group-button" data-providers>服务商管理</button>' : "") +
       '<button type="button" class="secondary add-group-button" data-add-group>添加分组</button>' +
       (activeTab === "servers"
         ? '<button type="button" class="add-button" data-add="server">添加服务器</button>'
@@ -728,13 +735,36 @@
     var original = btn.textContent;
     btn.textContent = act === "sync" ? "正在同步…" : "正在测试…";
     api("POST", "/api/machines/providers/" + encodeURIComponent(conn.id) + "/" + act)
-      .then(function () { load(); })
-      .catch(function () { btn.disabled = false; btn.textContent = original; load(); });
+      .then(function (res) {
+        var failed = !res.data || !res.data.ok;
+        if (connPanelState) {
+          connPanelState.notice = {
+            text: failed
+              ? (res.data && res.data.error) || (act === "sync" ? "同步失败" : "测试失败")
+              : act === "sync"
+                ? "已同步，更新 " + (res.data.updated || 0) + " 台"
+                : "测试成功",
+            error: failed,
+          };
+          connPanelState.devicesStale = !failed;
+        }
+        return load();
+      })
+      .catch(function () {
+        setConnStatus("网络异常，请重试", true);
+      })
+      .then(function () {
+        if (btn.isConnected) {
+          btn.disabled = false;
+          btn.textContent = original;
+        }
+      });
   }
 
   function deleteConnection(conn, anchor) {
+    var mount = connPanelCtrl && connPanelCtrl.dialog.open && connPanelCtrl.confirmSlot ? connPanelCtrl.confirmSlot : anchor;
     C.askConfirm({
-      anchor: anchor,
+      anchor: mount,
       title: "删除服务商连接",
       text: "确认删除连接「" + conn.name + "」吗？已接入的设备会保留为普通云主机条目，不会被删除",
       confirmLabel: "删除连接",
@@ -742,7 +772,23 @@
     }).then(function (yes) {
       if (!yes) return;
       api("DELETE", "/api/machines/providers/" + encodeURIComponent(conn.id)).then(function (res) {
-        if (res.data && res.data.ok) load();
+        if (!res.data || !res.data.ok) {
+          setConnStatus((res.data && res.data.error) || "删除失败", true);
+          return;
+        }
+        if (connPanelState) {
+          if (connPanelState.selectedId === conn.id) {
+            connPanelState.selectedId = "";
+            connPanelState.devices = null;
+            connPanelState.devicesError = "";
+            connPanelState.devicesLoading = false;
+          }
+          connPanelState.devicesStale = false;
+          connPanelState.notice = { text: "连接已删除，已接入的设备仍留在云主机列表", error: false };
+        }
+        load();
+      }).catch(function () {
+        setConnStatus("网络异常，请重试", true);
       });
     });
   }
@@ -1016,8 +1062,74 @@
     });
   }
 
-  // 服务商管理悬浮面板：连接以与云主机相同的卡片呈现
+  // 服务商管理：点卡片选中连接，在同一面板里改名、换凭据、接入设备
   var connPanelCtrl = null;
+  var connPanelState = null;
+
+  function freshConnPanelState() {
+    return {
+      selectedId: "",
+      devices: null,
+      devicesError: "",
+      devicesLoading: false,
+      devicesStale: false,
+      importing: false,
+      importGroupId: "",
+      notice: null,
+    };
+  }
+
+  function findConn(id) {
+    var found = null;
+    state.connections.forEach(function (entry) { if (entry.id === id) found = entry; });
+    return found;
+  }
+
+  function setConnStatus(text, isError) {
+    var el = connPanelCtrl && connPanelCtrl.bodyEl.querySelector("[data-conn-status]");
+    if (!el) return;
+    el.textContent = text || "";
+    el.classList.toggle("is-error", !!isError);
+  }
+
+  function rememberImportGroup() {
+    if (!connPanelCtrl || !connPanelState) return;
+    var el = connPanelCtrl.bodyEl.querySelector('[name="import_group_id"]');
+    if (el) connPanelState.importGroupId = el.value;
+  }
+
+  function testSummary(conn) {
+    if (!conn.last_test_at) return "尚未测试";
+    var when = C.formatMinute(conn.last_test_at) || "";
+    var result = conn.last_test_ok ? "成功" : "失败";
+    return when ? result + " · " + when : result;
+  }
+
+  function deviceStateText(device) {
+    if (device.state && REMOTE_STATE_LABELS[device.state]) return REMOTE_STATE_LABELS[device.state];
+    return device.status === "running" ? "运行中" : "已停止";
+  }
+
+  function credentialFields(provider) {
+    if (provider === "huawei") {
+      return (
+        "<label>Access Key<input data-wiz-field=\"accessKey\" maxlength=\"200\" autocomplete=\"off\" /></label>" +
+        "<label>Secret Key<input data-wiz-field=\"secretKey\" type=\"password\" maxlength=\"500\" autocomplete=\"off\" /></label>" +
+        "<label>区域<input data-wiz-field=\"region\" maxlength=\"60\" autocomplete=\"off\" /></label>" +
+        "<label>Project ID<input data-wiz-field=\"projectId\" maxlength=\"200\" autocomplete=\"off\" /></label>" +
+        "<label>接口地址（选填）<input data-wiz-field=\"endpoint\" maxlength=\"300\" autocomplete=\"off\" /></label>"
+      );
+    }
+    if (provider === "mcp") {
+      return (
+        "<label>MCP 端点<input data-wiz-field=\"endpoint\" maxlength=\"500\" autocomplete=\"off\" /></label>" +
+        "<label>令牌（选填）<input data-wiz-field=\"token\" type=\"password\" maxlength=\"2000\" autocomplete=\"off\" /></label>" +
+        "<label>设备列表工具名<input data-wiz-field=\"toolName\" maxlength=\"200\" autocomplete=\"off\" /></label>"
+      );
+    }
+    return wizardConfigFields(provider);
+  }
+
   function connCardsHtml() {
     if (!state.connections.length) return C.emptyState("还没有服务商连接", "用「添加云主机」接入第一个来源");
     return (
@@ -1025,42 +1137,392 @@
       state.connections
         .map(function (conn) {
           var count = state.items.filter(function (it) { return it.connection_id === conn.id; }).length;
-          var cid = C.escapeHtml(conn.id);
+          var selected = connPanelState && connPanelState.selectedId === conn.id;
           return C.record({
             id: conn.id,
+            className: selected ? "is-selected" : "",
             icon: "layout",
             title: conn.name,
-            pill: providerLabel(conn.provider),
-            status: conn.last_test_at ? (conn.last_test_ok ? "running" : "error") : "unknown",
-            statusText: conn.last_test_at ? (conn.last_test_ok ? "测试成功" : "测试失败") : "未测试",
+            pill: conn.provider_label || providerLabel(conn.provider),
             facts: [
-              ["凭据", conn.secret_tail ? "末四位 " + C.escapeHtml(conn.secret_tail) : "已保存"],
-              ["已接入设备", count + " 台"],
-              ["最近测试", conn.last_test_at ? C.formatMinute(conn.last_test_at) || "—" : "尚未测试"],
+              ["凭据", conn.config_tail ? "末四位 " + C.escapeHtml(conn.config_tail) : "已保存"],
+              ["已接入", count + " 台"],
+              ["最近测试", C.escapeHtml(testSummary(conn))],
             ],
-            actions: [
-              { label: "测试连接", attrs: 'data-conn="test" data-id="' + cid + '"' },
-              { label: "同步", attrs: 'data-conn="sync" data-id="' + cid + '"' },
-              { label: "删除连接", danger: true, attrs: 'data-conn="delete" data-id="' + cid + '"' },
-            ],
+            manage: "provider:" + conn.id,
           });
         })
         .join("") +
       "</div>"
     );
   }
+
+  function connInfoHtml(conn) {
+    var rows = [
+      ["服务商", C.escapeHtml(conn.provider_label || providerLabel(conn.provider))],
+      ["凭据", conn.config_tail ? "末四位 " + C.escapeHtml(conn.config_tail) : "已保存"],
+      ["创建时间", C.escapeHtml(C.formatMinute(conn.created_at) || "—")],
+      ["最近测试", C.escapeHtml(testSummary(conn))],
+    ];
+    if (conn.last_test_at && !conn.last_test_ok && conn.last_error) rows.push(["失败原因", C.escapeHtml(conn.last_error)]);
+    return (
+      '<div class="manage-info-card"><dl class="kv">' +
+      rows
+        .map(function (pair) {
+          return "<div><dt>" + C.escapeHtml(pair[0]) + "</dt><dd>" + pair[1] + "</dd></div>";
+        })
+        .join("") +
+      "</dl></div>"
+    );
+  }
+
+  function connDevicesHtml() {
+    if (!connPanelState) return "";
+    if (connPanelState.devicesLoading && !connPanelState.devices) return C.emptyState("正在读取设备", "向服务商拉取最新列表");
+    if (connPanelState.devicesError && !(connPanelState.devices && connPanelState.devices.length)) {
+      return '<p class="callout danger" role="alert">' + C.escapeHtml(connPanelState.devicesError) + "</p>";
+    }
+    var devices = connPanelState.devices || [];
+    if (!devices.length) return C.emptyState("服务商那边没有设备", "这个账号下还没有可接入的主机");
+    var pending = devices.filter(function (device) { return !device.imported; }).length;
+    var rows = devices
+      .map(function (device) {
+        var id = C.escapeHtml(device.remoteId);
+        var name = C.escapeHtml(device.name || device.remoteId);
+        var meta = C.escapeHtml([deviceStateText(device), device.spec].filter(Boolean).join(" · "));
+        var main =
+          '<span class="wiz-device-main"><span class="wiz-device-name">' +
+          name +
+          "</span>" +
+          (meta ? '<span class="wiz-device-meta">' + meta + "</span>" : "") +
+          "</span>";
+        if (device.imported) {
+          return '<div class="conn-device is-imported"><div class="wiz-device">' + main + C.badge("已接入", "accent") + "</div></div>";
+        }
+        return (
+          '<div class="conn-device"><label class="wiz-device"><input type="checkbox" data-conn-device="' +
+          id +
+          '" />' +
+          main +
+          C.badge("未接入") +
+          '</label><button type="button" class="secondary" data-conn-import-one="' +
+          id +
+          '">接入</button></div>'
+        );
+      })
+      .join("");
+    var bar = pending
+      ? '<div class="conn-import-bar"><label>接入到分组' +
+        C.groupSelect("import_group_id", state.groups, connPanelState.importGroupId || "") +
+        '</label><button type="button" class="secondary" data-conn-import disabled>接入选中</button></div>'
+      : "";
+    return (
+      (connPanelState.devicesLoading ? '<p class="subtle">正在刷新设备列表</p>' : "") +
+      '<p class="subtle">共 ' +
+      devices.length +
+      " 台，未接入 " +
+      pending +
+      " 台</p>" +
+      '<div class="conn-devices">' +
+      rows +
+      "</div>" +
+      bar
+    );
+  }
+
+  function connDetailHtml(conn) {
+    var cid = C.escapeHtml(conn.id);
+    return (
+      '<div class="conn-detail">' +
+      C.manageInfoHead({
+        icon: "layout",
+        title: conn.name,
+        sub: (conn.provider_label || providerLabel(conn.provider)) + " · 来源徽章用这个名称",
+      }) +
+      connInfoHtml(conn) +
+      '<h3 class="manage-subhead">改名</h3>' +
+      '<form data-conn-rename novalidate>' +
+      '<label>连接名称<input name="name" maxlength="60" autocomplete="off" value="' +
+      C.escapeHtml(conn.name) +
+      '" /></label>' +
+      '<p class="subtle">这个名称显示在云主机卡片的来源徽章上</p>' +
+      '<div class="manage-actions"><button type="submit">保存名称</button></div>' +
+      "</form>" +
+      '<h3 class="manage-subhead">更新凭据</h3>' +
+      '<form data-conn-cred novalidate>' +
+      credentialFields(conn.provider) +
+      '<p class="subtle">填写新的配置。保存前会拉取一次设备列表，通过后才替换现有凭据，页面只显示末四位</p>' +
+      '<div class="manage-actions"><button type="submit">保存凭据</button></div>' +
+      "</form>" +
+      '<h3 class="manage-subhead">名下设备</h3>' +
+      '<div data-conn-devices>' +
+      connDevicesHtml() +
+      "</div>" +
+      '<div class="manage-actions">' +
+      '<button type="button" class="secondary" data-conn="test" data-id="' +
+      cid +
+      '">测试连接</button>' +
+      '<button type="button" class="secondary" data-conn="sync" data-id="' +
+      cid +
+      '">同步</button>' +
+      '<button type="button" class="danger" data-conn="delete" data-id="' +
+      cid +
+      '">删除连接</button>' +
+      "</div></div>"
+    );
+  }
+
+  function noticeHtml() {
+    var notice = connPanelState && connPanelState.notice;
+    if (connPanelState) connPanelState.notice = null;
+    if (!notice) return '<p class="manage-status" data-conn-status role="status"></p>';
+    return '<p class="manage-status' + (notice.error ? " is-error" : "") + '" data-conn-status role="status">' + C.escapeHtml(notice.text) + "</p>";
+  }
+
+  function connPanelHtml() {
+    var selected = connPanelState && connPanelState.selectedId ? findConn(connPanelState.selectedId) : null;
+    if (connPanelState && connPanelState.selectedId && !selected) connPanelState.selectedId = "";
+    return (
+      noticeHtml() +
+      '<div class="conn-admin' +
+      (selected ? " has-detail" : "") +
+      '"><div>' +
+      connCardsHtml() +
+      (selected ? "" : '<p class="subtle">点一张连接卡片，可以改名、更新凭据、接入设备，也可以测试、同步或删除</p>') +
+      "</div>" +
+      (selected ? connDetailHtml(selected) : "") +
+      "</div>"
+    );
+  }
+
+  function syncImportButton() {
+    if (!connPanelCtrl) return;
+    var btn = connPanelCtrl.bodyEl.querySelector("[data-conn-import]");
+    if (!btn) return;
+    var n = connPanelCtrl.bodyEl.querySelectorAll("[data-conn-device]:checked").length;
+    btn.disabled = !n || !!(connPanelState && connPanelState.importing);
+    btn.textContent = n ? "接入选中（" + n + "）" : "接入选中";
+  }
+
+  function paintConnDevices() {
+    if (!connPanelCtrl) return;
+    rememberImportGroup();
+    var slot = connPanelCtrl.bodyEl.querySelector("[data-conn-devices]");
+    if (!slot) return;
+    slot.innerHTML = connDevicesHtml();
+    syncImportButton();
+  }
+
+  function paintConnPanel() {
+    if (!connPanelCtrl || !connPanelState) return;
+    rememberImportGroup();
+    var slot = connPanelCtrl.bodyEl.querySelector("[data-conn-panel]");
+    if (!slot) return;
+    slot.innerHTML = connPanelHtml();
+    syncImportButton();
+  }
+
+  function fetchConnDevices(id) {
+    if (!connPanelState) return;
+    connPanelState.devicesLoading = true;
+    connPanelState.devicesError = "";
+    paintConnDevices();
+    api("GET", "/api/machines/providers/" + encodeURIComponent(id) + "/devices")
+      .then(function (res) {
+        if (!connPanelState || connPanelState.selectedId !== id) return;
+        connPanelState.devicesLoading = false;
+        if (!res.data || !res.data.ok) {
+          connPanelState.devices = null;
+          connPanelState.devicesError = (res.data && res.data.error) || "设备列表读取失败";
+        } else {
+          connPanelState.devices = res.data.devices || [];
+          connPanelState.devicesError = "";
+        }
+        paintConnDevices();
+      })
+      .catch(function () {
+        if (!connPanelState || connPanelState.selectedId !== id) return;
+        connPanelState.devicesLoading = false;
+        connPanelState.devices = null;
+        connPanelState.devicesError = "网络异常，请重试";
+        paintConnDevices();
+      });
+  }
+
+  function selectConnection(id) {
+    if (!connPanelState || !findConn(id)) return;
+    if (connPanelState.selectedId === id) {
+      fetchConnDevices(id);
+      return;
+    }
+    connPanelState.selectedId = id;
+    connPanelState.devices = null;
+    connPanelState.devicesError = "";
+    connPanelState.devicesLoading = true;
+    connPanelState.notice = null;
+    paintConnPanel();
+    fetchConnDevices(id);
+  }
+
+  function afterConnWrite(text, isError) {
+    if (connPanelState) {
+      connPanelState.notice = text ? { text: text, error: !!isError } : null;
+      connPanelState.devicesStale = true;
+    }
+    return load();
+  }
+
+  function importDevices(ids, btn) {
+    if (!connPanelState || !connPanelState.selectedId) return;
+    var clean = (ids || []).filter(Boolean);
+    if (!clean.length) {
+      setConnStatus("请先勾选要接入的设备", true);
+      return;
+    }
+    if (connPanelState.importing) return;
+    connPanelState.importing = true;
+    if (btn) btn.disabled = true;
+    rememberImportGroup();
+    var groupId = connPanelState.importGroupId || null;
+    api("POST", "/api/machines/providers/" + encodeURIComponent(connPanelState.selectedId) + "/import", {
+      deviceIds: clean,
+      groupId: groupId,
+    })
+      .then(function (res) {
+        if (connPanelState) connPanelState.importing = false;
+        if (!res.data || !res.data.ok) {
+          if (btn && btn.isConnected) btn.disabled = false;
+          setConnStatus((res.data && res.data.error) || "接入失败", true);
+          syncImportButton();
+          return;
+        }
+        var n = res.data.imported || 0;
+        var skipped = res.data.skipped || 0;
+        var text = n ? "已接入 " + n + " 台" : "所选设备都已接入";
+        if (n && skipped) text += "，跳过 " + skipped + " 台已接入的";
+        afterConnWrite(text, false);
+      })
+      .catch(function () {
+        if (connPanelState) connPanelState.importing = false;
+        if (btn && btn.isConnected) btn.disabled = false;
+        setConnStatus("网络异常，请重试", true);
+        syncImportButton();
+      });
+  }
+
+  function submitConnRename(form) {
+    if (!connPanelState || !connPanelState.selectedId) return;
+    var input = form.querySelector('[name="name"]');
+    var name = input ? input.value.trim() : "";
+    if (!name) {
+      setConnStatus("请填写连接名称", true);
+      return;
+    }
+    if (Array.from(name).length > 60) {
+      setConnStatus("名称最多 60 个字", true);
+      return;
+    }
+    var btn = form.querySelector('[type="submit"]');
+    if (btn) btn.disabled = true;
+    api("PATCH", "/api/machines/providers/" + encodeURIComponent(connPanelState.selectedId), { name: name })
+      .then(function (res) {
+        if (!res.data || !res.data.ok) {
+          if (btn) btn.disabled = false;
+          setConnStatus((res.data && res.data.error) || "保存失败，请重试", true);
+          return;
+        }
+        afterConnWrite("名称已保存", false);
+      })
+      .catch(function () {
+        if (btn) btn.disabled = false;
+        setConnStatus("网络异常，请重试", true);
+      });
+  }
+
+  function readConnConfig(form) {
+    var config = {};
+    form.querySelectorAll("[data-wiz-field]").forEach(function (el) {
+      config[el.getAttribute("data-wiz-field")] = el.value.trim();
+    });
+    return config;
+  }
+
+  function submitConnCredentials(form) {
+    if (!connPanelState || !connPanelState.selectedId) return;
+    var btn = form.querySelector('[type="submit"]');
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "正在验证…";
+    }
+    api("POST", "/api/machines/providers/" + encodeURIComponent(connPanelState.selectedId) + "/credentials", { config: readConnConfig(form) })
+      .then(function (res) {
+        if (!res.data || !res.data.ok) {
+          if (btn) {
+            btn.disabled = false;
+            btn.textContent = "保存凭据";
+          }
+          setConnStatus((res.data && res.data.error) || "凭据未更新", true);
+          return;
+        }
+        afterConnWrite("凭据已更新", false);
+      })
+      .catch(function () {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = "保存凭据";
+        }
+        setConnStatus("网络异常，请重试", true);
+      });
+  }
+
+  function handleConnSubmit(event) {
+    var form = event.target;
+    if (!(form instanceof HTMLFormElement)) return;
+    if (form.hasAttribute("data-conn-rename")) {
+      event.preventDefault();
+      submitConnRename(form);
+      return;
+    }
+    if (form.hasAttribute("data-conn-cred")) {
+      event.preventDefault();
+      submitConnCredentials(form);
+    }
+  }
+
+  function handleConnChange(event) {
+    var target = event.target;
+    if (target instanceof Element && target.matches("[data-conn-device]")) syncImportButton();
+  }
+
   function openProvidersPanel() {
+    connPanelState = freshConnPanelState();
     connPanelCtrl = C.openManageDialog({
       title: "服务商管理",
-      size: "md",
-      bodyHtml: '<div data-conn-panel>' + connCardsHtml() + "</div>",
+      size: "lg",
+      bodyHtml: '<div data-conn-panel></div>',
     });
+    paintConnPanel();
     connPanelCtrl.dialog.addEventListener("click", handleClick);
+    connPanelCtrl.dialog.addEventListener("submit", handleConnSubmit);
+    connPanelCtrl.dialog.addEventListener("change", handleConnChange);
   }
+
   function refreshConnPanel() {
-    if (!connPanelCtrl || !connPanelCtrl.dialog.open) return;
-    var slot = connPanelCtrl.bodyEl.querySelector("[data-conn-panel]");
-    if (slot) slot.innerHTML = connCardsHtml();
+    if (!connPanelCtrl || !connPanelCtrl.dialog.open || !connPanelState) return;
+    if (connPanelState.selectedId && !findConn(connPanelState.selectedId)) {
+      connPanelState.selectedId = "";
+      connPanelState.devices = null;
+      connPanelState.devicesError = "";
+      connPanelState.devicesLoading = false;
+      connPanelState.devicesStale = false;
+    }
+    var refetch = !!(connPanelState.selectedId && connPanelState.devicesStale);
+    if (refetch) {
+      connPanelState.devicesStale = false;
+      connPanelState.devicesLoading = true;
+    }
+    paintConnPanel();
+    if (refetch) fetchConnDevices(connPanelState.selectedId);
   }
 
   function openCloudWizard() {
@@ -1272,9 +1734,30 @@
       return;
     }
     if (target.closest("[data-copy]")) return;
+    var importOne = target.closest("[data-conn-import-one]");
+    if (importOne) {
+      importDevices([importOne.getAttribute("data-conn-import-one")], importOne);
+      return;
+    }
+    var importBatch = target.closest("[data-conn-import]");
+    if (importBatch && !importBatch.disabled) {
+      var picked = [];
+      if (connPanelCtrl) {
+        connPanelCtrl.bodyEl.querySelectorAll("[data-conn-device]:checked").forEach(function (box) {
+          picked.push(box.getAttribute("data-conn-device"));
+        });
+      }
+      importDevices(picked, importBatch);
+      return;
+    }
     var zone = target.closest("[data-manage]");
     if (zone && !target.closest("button, a, input, select, textarea")) {
-      openManage(zone.getAttribute("data-manage"));
+      var manageKey = zone.getAttribute("data-manage") || "";
+      if (manageKey.indexOf("provider:") === 0) {
+        selectConnection(manageKey.slice("provider:".length));
+        return;
+      }
+      openManage(manageKey);
       return;
     }
     var pwBtn = target.closest("[data-mpower]");

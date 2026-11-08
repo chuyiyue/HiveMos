@@ -8,12 +8,16 @@ import {
   createConnectionWithDevices,
   deleteConnection,
   getKeepalive,
+  importConnectionDevices,
+  listConnectionDevices,
   listConnections,
   providerPortAdd,
   providerPortRemove,
   providerPortsList,
   providerPower,
   putKeepalive,
+  renameConnection,
+  replaceConnectionCredentials,
   runKeepaliveSweep,
   syncConnection,
   syncOneMachine,
@@ -45,7 +49,7 @@ const ACTOR = "user";
 export async function handleMachinesRequest(request: Request, env: Env, ctx: WaitCtx, path: string): Promise<Response | null> {
   if (path === "/api/machines/providers/test") return providerTest(request);
   if (path === "/api/machines/providers") return providerCollection(request, env);
-  const providerAction = /^\/api\/machines\/providers\/([A-Za-z0-9_-]+)\/(test|sync)$/.exec(path);
+  const providerAction = /^\/api\/machines\/providers\/([A-Za-z0-9_-]+)\/(test|sync|devices|import|credentials)$/.exec(path);
   if (providerAction && providerAction[1] && providerAction[2]) return providerActionRun(request, env, providerAction[1], providerAction[2]);
   const providerOne = /^\/api\/machines\/providers\/([A-Za-z0-9_-]+)$/.exec(path);
   if (providerOne && providerOne[1]) return providerOneRun(request, env, providerOne[1]);
@@ -286,9 +290,55 @@ async function providerCollection(request: Request, env: Env): Promise<Response>
 }
 
 async function providerActionRun(request: Request, env: Env, id: string, action: string): Promise<Response> {
-  if (request.method.toUpperCase() !== "POST") return methodNotAllowed("POST");
+  const method = request.method.toUpperCase();
+  if (action === "devices") {
+    if (method !== "GET") return methodNotAllowed("GET");
+    return wrap(async () => {
+      const devices = await listConnectionDevices(env.DB, vaultKeyOf(env), id);
+      return json({ ok: true, devices });
+    });
+  }
+  if (method !== "POST") return methodNotAllowed("POST");
   const gate = await mutationGate(request);
   if (gate) return gate;
+  if (action === "import") {
+    const body = await readBody(request);
+    if (!body.ok) return body.response;
+    return wrap(async () => {
+      const result = await importConnectionDevices(env.DB, vaultKeyOf(env), id, body.value["deviceIds"], body.value["groupId"], ACTOR, Date.now());
+      const conn = (await listConnections(env.DB)).find((row) => row.id === id);
+      const name = conn?.name ?? id;
+      const text = result.machines.length
+        ? `从服务商连接「${name}」接入了 ${result.machines.length} 台设备`
+        : `服务商连接「${name}」的所选设备都已接入，未新增`;
+      await logOp(env.DB, {
+        actor: await panelActor(request, env),
+        module: "云主机",
+        action: "添加",
+        targetId: id,
+        targetName: name,
+        text,
+      });
+      return json({ ok: true, imported: result.machines.length, skipped: result.skipped, machines: result.machines }, result.machines.length ? 201 : 200);
+    });
+  }
+  if (action === "credentials") {
+    const body = await readBody(request);
+    if (!body.ok) return body.response;
+    const config = (body.value["config"] ?? {}) as Record<string, unknown>;
+    return wrap(async () => {
+      const connection = await replaceConnectionCredentials(env.DB, vaultKeyOf(env), id, config, Date.now());
+      await logOp(env.DB, {
+        actor: await panelActor(request, env),
+        module: "云主机",
+        action: "修改",
+        targetId: id,
+        targetName: connection.name,
+        text: `更新了服务商连接「${connection.name}」的凭据`,
+      });
+      return json({ ok: true, connection });
+    });
+  }
   if (action === "test") {
     return wrap(async () => {
       const outcome = await testStoredConnection(env.DB, vaultKeyOf(env), id, Date.now());
@@ -324,7 +374,27 @@ async function providerActionRun(request: Request, env: Env, id: string, action:
 }
 
 async function providerOneRun(request: Request, env: Env, id: string): Promise<Response> {
-  if (request.method.toUpperCase() !== "DELETE") return methodNotAllowed("DELETE");
+  const method = request.method.toUpperCase();
+  if (method === "PATCH") {
+    const gate = await mutationGate(request);
+    if (gate) return gate;
+    const body = await readBody(request);
+    if (!body.ok) return body.response;
+    return wrap(async () => {
+      const before = (await listConnections(env.DB)).find((row) => row.id === id);
+      const connection = await renameConnection(env.DB, id, body.value["name"], Date.now());
+      await logOp(env.DB, {
+        actor: await panelActor(request, env),
+        module: "云主机",
+        action: "修改",
+        targetId: id,
+        targetName: connection.name,
+        text: `把服务商连接「${before?.name ?? id}」改名为「${connection.name}」`,
+      });
+      return json({ ok: true, connection });
+    });
+  }
+  if (method !== "DELETE") return methodNotAllowed("PATCH, DELETE");
   const gate = await mutationGate(request);
   if (gate) return gate;
   return wrap(async () => {
