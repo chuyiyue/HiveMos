@@ -63,14 +63,14 @@
   function addBar(options) {
     options = options || {};
     return (
-      '<div class="add-bar"><button type="button" class="add-button" data-action="' +
-      escapeHtml(options.addAction || "add") +
-      '">' +
-      escapeHtml(options.addLabel || "添加") +
-      '</button><button type="button" class="secondary add-group-button" data-action="' +
+      '<div class="add-bar"><button type="button" class="secondary add-group-button" data-action="' +
       escapeHtml(options.groupAction || "add-group") +
       '">' +
       escapeHtml(options.groupLabel || "添加分组") +
+      '</button><button type="button" class="add-button" data-action="' +
+      escapeHtml(options.addAction || "add") +
+      '">' +
+      escapeHtml(options.addLabel || "添加") +
       "</button></div>"
     );
   }

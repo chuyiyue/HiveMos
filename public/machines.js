@@ -247,12 +247,12 @@
       '">Workers</button>' +
       "</div>" +
       '<div class="page-head-actions">' +
+      '<button type="button" class="secondary add-group-button" data-add-group>添加分组</button>' +
       (activeTab === "servers"
         ? '<button type="button" class="add-button" data-add="server">添加服务器</button>'
         : activeTab === "hosts"
           ? '<button type="button" class="add-button" data-add="host">添加云主机</button>'
           : '<button type="button" class="add-button" data-add="worker">添加 Worker</button>') +
-      '<button type="button" class="secondary add-group-button" data-add-group>添加分组</button>' +
       "</div></div>";
     C.mount(
       C.layout(
