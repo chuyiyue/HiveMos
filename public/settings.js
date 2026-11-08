@@ -1,4 +1,4 @@
-/* 管理员账号、两步验证、登录记录、系统信息、侧边栏。
+/* 管理员账号、两步验证、会话管理、系统信息、侧边栏。
    版式照 SMSinBox /users：页内设置导航 + 分区面板。数据来自 /api/account/* 与 /api/system/info */
 (function () {
   var C = window.HiveCommon;
@@ -482,27 +482,17 @@
       : /iPad|Tablet/.test(ua)
         ? "平板"
         : /Android|iPhone|iPod|Mobile/.test(ua)
-          ? "移动"
+          ? "手机"
           : os === "未知"
             ? "未知"
-            : "桌面";
+            : "桌面设备";
     if (isTool) os = "未知";
     return { os: os, browser: browser, type: type };
   }
 
-  function sessionFacts(session) {
+  function sessionMeta(session) {
     var d = parseDevice(session.user_agent);
-    function fact(label, value) {
-      return "<div><dt>" + label + "</dt><dd>" + C.escapeHtml(value) + "</dd></div>";
-    }
-    return (
-      '<dl class="session-facts">' +
-      fact("系统", d.os) +
-      fact("浏览器", d.browser) +
-      fact("设备类型", d.type) +
-      fact("IP", session.ip || "未记录") +
-      "</dl>"
-    );
+    return [sessionWhen(session), d.browser, d.os, d.type, "IP " + (session.ip || "未记录")].join(" · ");
   }
 
   function sessionWhen(session) {
@@ -517,13 +507,11 @@
       '<article class="session-row' +
       (current ? " is-current" : "") +
       '"><div class="session-main"><div class="session-title"><h3>' +
-      C.escapeHtml(deviceText(session.user_agent)) +
+      (current ? "当前会话" : "登录会话") +
       "</h3>" +
       (current ? C.badge("当前", "accent") : "") +
-      "</div>" +
-      sessionFacts(session) +
-      '<p class="subtle">' +
-      C.escapeHtml(sessionWhen(session)) +
+      '</div><p class="subtle">' +
+      C.escapeHtml(sessionMeta(session)) +
       "</p></div>" +
       '<button type="button" class="' +
       (current ? "secondary" : "ghost") +
@@ -557,7 +545,7 @@
       ">刷新列表</button></div>";
     return panel(
       "sessions-panel",
-      "登录记录",
+      "会话管理",
       '<div class="confirm-slot" data-confirm-for="revoke-others"></div>' + error + list + actions,
     );
   }
@@ -655,7 +643,7 @@
     });
   }
 
-  // 无左侧导航的堆叠版式（管理员账号 / 登录记录 / 侧边栏 / 系统信息）
+  // 无左侧导航的堆叠版式（管理员账号 / 会话管理 / 侧边栏 / 系统信息）
   function settingsLayout() {
     return (
       '<div class="settings"><div class="settings-body">' +
