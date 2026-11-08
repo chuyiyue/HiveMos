@@ -668,20 +668,36 @@ button.account-logout:hover { background: var(--sidebar-bg-hover); color: var(--
   .live-dot { animation: none !important; }
 }
 
-/* Collapsed rail: logo and the expand button stack on their own rows.
-   Side by side they overflow the 64px rail and overlap. */
+/* Collapsed rail: only the logo shows. The expand button lives in the
+   same slot and swaps in on hover/focus of the brand row. */
 :root[data-sidebar="collapsed"] .sidebar-brand-row {
-  flex-direction: column;
-  align-items: center;
-  gap: 6px;
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-height: 40px;
   padding: 4px 0 0;
 }
 :root[data-sidebar="collapsed"] .sidebar-brand-row .brand {
   flex: none;
   justify-content: center;
+  transition: opacity var(--dur-base) var(--ease);
 }
 :root[data-sidebar="collapsed"] .sidebar-collapse {
-  width: 32px;
-  height: 32px;
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 36px;
+  height: 36px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--dur-base) var(--ease);
+}
+:root[data-sidebar="collapsed"] .sidebar-brand-row:hover .brand,
+:root[data-sidebar="collapsed"] .sidebar-brand-row:focus-within .brand {
+  opacity: 0;
+}
+:root[data-sidebar="collapsed"] .sidebar-brand-row:hover .sidebar-collapse,
+:root[data-sidebar="collapsed"] .sidebar-brand-row:focus-within .sidebar-collapse {
   opacity: 1;
+  pointer-events: auto;
 }
