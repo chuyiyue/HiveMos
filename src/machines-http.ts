@@ -16,6 +16,7 @@ import {
   putKeepalive,
   runKeepaliveSweep,
   syncConnection,
+  syncOneMachine,
   testAdHocConnection,
   testStoredConnection,
 } from "./providers";
@@ -53,6 +54,8 @@ export async function handleMachinesRequest(request: Request, env: Env, ctx: Wai
   if (action && action[1] && action[2]) return machineAction(request, env, action[1], action[2]);
   const power = /^\/api\/machines\/([A-Za-z0-9_-]+)\/power$/.exec(path);
   if (power && power[1]) return machinePower(request, env, power[1]);
+  const syncOne = /^\/api\/machines\/([A-Za-z0-9_-]+)\/sync$/.exec(path);
+  if (syncOne && syncOne[1]) return machineSyncOne(request, env, syncOne[1]);
   const ports = /^\/api\/machines\/([A-Za-z0-9_-]+)\/ports$/.exec(path);
   if (ports && ports[1]) return machinePorts(request, env, ports[1]);
   const portOne = /^\/api\/machines\/([A-Za-z0-9_-]+)\/ports\/(\d+)$/.exec(path);
@@ -335,6 +338,27 @@ async function providerOneRun(request: Request, env: Env, id: string): Promise<R
 
 
 // ---------------------------------------------------------------------------
+async function machineSyncOne(request: Request, env: Env, id: string): Promise<Response> {
+  if (request.method.toUpperCase() !== "POST") return methodNotAllowed("POST");
+  const gate = await mutationGate(request);
+  if (gate) return gate;
+  return wrap(async () => {
+    const machine = await getMachine(env.DB, id);
+    if (!machine) return json({ ok: false, error: "云主机不存在" }, 404);
+    const result = await syncOneMachine(env.DB, vaultKeyOf(env), id, Date.now());
+    await logOp(env.DB, {
+      actor: await panelActor(request, env),
+      module: "云主机",
+      action: "同步",
+      targetId: machine.id,
+      targetName: machine.name,
+      text: `同步了云主机「${machine.name}」的状态`,
+    });
+    const fresh = await getMachine(env.DB, id);
+    return json({ ok: true, missing: result.missing, machine: fresh ? machinePublic(fresh) : null });
+  });
+}
+
 // Per-machine operations: power, public ports, keepalive (imported devices)
 
 const POWER_LABELS: Record<string, string> = { start: "启动", stop: "停止", suspend: "暂停", resume: "恢复" };

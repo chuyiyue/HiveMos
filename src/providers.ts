@@ -621,6 +621,44 @@ export async function createConnectionWithDevices(
   return { connection, machines: created };
 }
 
+export async function syncOneMachine(db: D1Database, key: ContentKey, machineId: string, now: number): Promise<{ missing: boolean }> {
+  const machine = await db
+    .prepare("SELECT id, connection_id, remote_id FROM machines WHERE id = ?")
+    .bind(machineId)
+    .first<{ id: string; connection_id: string | null; remote_id: string | null }>();
+  if (!machine) throw new MachineError(404, "云主机不存在");
+  if (!machine.connection_id || !machine.remote_id) throw new MachineError(400, "这台主机不是接入设备，没有可同步的来源");
+  const conn = await getConnection(db, machine.connection_id);
+  if (!conn) throw new MachineError(404, "来源连接不存在");
+  const config = await storedConfig(db, key, conn);
+  let devices: ProviderDevice[];
+  try {
+    devices = await fetchProviderDevices(conn.provider, config);
+    await recordTest(db, conn.id, true, "", now);
+  } catch (error) {
+    if (error instanceof MachineError) await recordTest(db, conn.id, false, error.message, now);
+    throw error;
+  }
+  const remote = devices.find((device) => device.remoteId === machine.remote_id);
+  if (!remote) {
+    await prepare(db, "UPDATE machines SET last_sync_at = ?, updated_at = ? WHERE id = ?", [now, now, machineId]);
+    return { missing: true };
+  }
+  await prepare(db, "UPDATE machines SET name = ?, os = ?, spec = ?, ip = ?, status = ?, remote_name = ?, remote_state = ?, last_sync_at = ?, updated_at = ? WHERE id = ?", [
+    remote.name,
+    remote.os,
+    remote.spec,
+    remote.ip,
+    remote.status,
+    remote.name,
+    remote.state ?? null,
+    now,
+    now,
+    machineId,
+  ]);
+  return { missing: false };
+}
+
 export async function syncConnection(db: D1Database, key: ContentKey, id: string, now: number): Promise<{ updated: number; missing: number; devices: ProviderDevice[] }> {
   const row = await getConnection(db, id);
   if (!row) throw new MachineError(404, "连接不存在");
