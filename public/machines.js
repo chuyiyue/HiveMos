@@ -1,60 +1,87 @@
-/* mock: 云主机板块三页签（服务器 / 云主机 / Workers）。接入后分别改为 GET /api/servers、/api/machines、/api/workers。添加先在页内生效 */
+/* 云主机板块三页签（服务器 / 云主机 / Workers），数据走 /api/machines。
+   状态、最近心跳是运行态字段（由 Agent 经 MCP 上报），表单里不出现；
+   绑定是普通文本字段，随添加/编辑一起保存。 */
 (function () {
   var C = window.HiveCommon;
   var activeTab = location.hash === "#hosts" ? "hosts" : location.hash === "#workers" ? "workers" : "servers";
-  function now() {
-    var d = new Date();
-    function p(n) { return (n < 10 ? "0" : "") + n; }
-    return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) + " " + p(d.getHours()) + ":" + p(d.getMinutes());
+  var API_KIND = { server: "server", host: "cloud", worker: "worker" };
+  var TITLE_FOR = { server: "服务器", host: "云主机", worker: "Worker" };
+
+  var state = { items: [], loaded: false, loadError: "" };
+
+  function api(method, url, body) {
+    var headers = { accept: "application/json" };
+    var options = { method: method, headers: headers, cache: "no-store" };
+    if (body !== undefined) {
+      headers["content-type"] = "application/json";
+      options.body = JSON.stringify(body);
+    }
+    return fetch(url, options).then(function (response) {
+      return response
+        .json()
+        .catch(function () { return {}; })
+        .then(function (data) { return { status: response.status, data: data || {} }; });
+    });
   }
+
   function val(ctrl, name) {
     var el = ctrl.form.querySelector("[name=\"" + name + "\"]");
     return el ? el.value.trim() : "";
   }
+
+  function byKind(uiKind) {
+    var kind = API_KIND[uiKind];
+    return state.items.filter(function (item) { return item.kind === kind; });
+  }
+
+  function heartbeatText(item) {
+    var text = C.formatMinute(item.last_heartbeat_at);
+    return text || "还没有心跳";
+  }
+
   // 与其它板块同一套卡片菜单入口：record 的 extra 里放「高级」按钮
   function manageBtn(kind, id) {
     return '<div class="row-actions"><button type="button" class="secondary" data-manage="' + kind + '" data-id="' + C.escapeHtml(id) + '">高级</button></div>';
   }
   function card(kind, item, facts) {
-    return C.record({ id: item.id, title: item.name, status: item.status, lede: item.lede || "", facts: facts, extra: manageBtn(kind, item.id) });
+    var lede = kind === "worker" ? item.description : item.region;
+    return C.record({ id: item.id, title: item.name, status: item.status, lede: lede || "", facts: facts, extra: manageBtn(kind, item.id) });
   }
 
-  var SERVERS = [
-    { id: "sv_sh", name: "上海-01", status: "running", lede: "华东", spec: "8 核 / 16 GB / 500 GB", agent: "编排、值守", heartbeat: "2026-11-07 09:24" },
-    { id: "sv_sg", name: "新加坡-02", status: "running", lede: "东南亚", spec: "4 核 / 8 GB / 200 GB", agent: "研究", heartbeat: "2026-11-07 09:18" },
-  ];
-  var HOSTS = [
-    { id: "pc_hk", name: "香港-01", status: "running", lede: "香港", spec: "2 核 / 4 GB / 40 GB", agent: "值守", heartbeat: "2026-11-07 09:21" },
-    { id: "pc_local", name: "本地沙箱", status: "paused", lede: "本机", spec: "沙箱环境", agent: "未绑定", heartbeat: "2026-11-06 18:02" },
-  ];
-  var WORKERS = [
-    { id: "wk_hivemos", name: "hivemos", status: "active", lede: "本控制面", ver: "最新提交", updated: "2026-11-08 03:50" },
-    { id: "wk_mail", name: "cloud-mail", status: "active", lede: "mail.outtw.com", ver: "最新提交", updated: "2026-11-08 00:03" },
-    { id: "wk_sms", name: "smsinbox", status: "active", lede: "SMSinBox", ver: "最新提交", updated: "2026-11-07 22:10" },
-  ];
+  function listSection(uiKind, title, unit) {
+    var items = byKind(uiKind);
+    if (!state.loaded) return C.section(title, "", C.emptyState("正在加载", "正在读取云主机数据"));
+    if (state.loadError) return C.section(title, "", '<p class="callout danger" role="alert">' + C.escapeHtml(state.loadError) + "</p>");
+    var cards;
+    if (uiKind === "worker") {
+      cards = items.map(function (item) {
+        return card("worker", item, [["版本", C.escapeHtml(item.version || "未记录")], ["更新时间", C.escapeHtml(C.formatMinute(item.updated_at) || "—")]]);
+      });
+    } else {
+      var specLabel = uiKind === "server" ? "配置" : "规格";
+      cards = items.map(function (item) {
+        return card(uiKind, item, [[specLabel, C.escapeHtml(item.spec)], ["绑定", C.escapeHtml(item.binding || "未绑定")], ["最近心跳", C.escapeHtml(heartbeatText(item))]]);
+      });
+    }
+    return C.section(title, String(items.length) + " " + unit, C.list(cards.join("")));
+  }
 
   function render() {
     var serverHtml =
       "<div class=\"stack\">" +
       "<button type=\"button\" class=\"add-button\" data-add=\"server\">添加服务器</button>" +
-      C.section("服务器", String(SERVERS.length) + " 台", C.list(SERVERS.map(function (item) {
-        return card("server", item, [["配置", C.escapeHtml(item.spec)], ["绑定", C.escapeHtml(item.agent)], ["最近心跳", C.escapeHtml(item.heartbeat)]]);
-      }).join(""))) +
+      listSection("server", "服务器", "台") +
       "</div>";
     var hostHtml =
       "<div class=\"stack\">" +
       "<button type=\"button\" class=\"add-button\" data-add=\"host\">添加云主机</button>" +
-      C.section("云主机", String(HOSTS.length) + " 台", C.list(HOSTS.map(function (item) {
-        return card("host", item, [["规格", C.escapeHtml(item.spec)], ["绑定", C.escapeHtml(item.agent)], ["最近心跳", C.escapeHtml(item.heartbeat)]]);
-      }).join(""))) +
+      listSection("host", "云主机", "台") +
       C.section("已释放", "", C.emptyState("没有已释放的云主机", "释放后的实例会留在这里，直到记录被清掉")) +
       "</div>";
     var workerHtml =
       "<div class=\"stack\">" +
       "<button type=\"button\" class=\"add-button\" data-add=\"worker\">添加 Worker</button>" +
-      C.section("Workers", String(WORKERS.length) + " 个", C.list(WORKERS.map(function (item) {
-        return card("worker", item, [["版本", C.escapeHtml(item.ver)], ["更新时间", C.escapeHtml(item.updated)]]);
-      }).join(""))) +
+      listSection("worker", "Workers", "个") +
       "</div>";
     C.mount(
       C.layout(
@@ -71,54 +98,110 @@
     );
   }
 
+  function load() {
+    return api("GET", "/api/machines")
+      .then(function (res) {
+        state.loaded = true;
+        if (res.data && res.data.ok) {
+          state.items = res.data.machines || [];
+          state.loadError = "";
+        } else {
+          state.loadError = (res.data && res.data.error) || "云主机数据读取失败";
+        }
+        render();
+      })
+      .catch(function () {
+        state.loaded = true;
+        state.loadError = "云主机数据读取失败";
+        render();
+      });
+  }
+
   // 添加与编辑共用同一套字段构建；item 为空是添加，传入条目是编辑并预填。
-  // 状态、绑定、心跳、版本是运行态字段，不在表单里，编辑时保持不变
+  // 状态、心跳、版本是运行态字段，不在表单里，编辑时保持不变
   function itemFields(kind, item) {
-    var v = item || { name: "", lede: "", spec: "" };
     var isWorker = kind === "worker";
-    return (
+    var v = item || { name: "", region: "", spec: "", description: "", binding: "" };
+    var ledeValue = isWorker ? v.description : v.region;
+    var html =
       "<label>名称<input name=\"name\" maxlength=\"60\" autocomplete=\"off\" value=\"" + C.escapeHtml(v.name) + "\" /></label>" +
       (isWorker
-        ? "<label>说明<input name=\"lede\" maxlength=\"60\" autocomplete=\"off\" placeholder=\"例如 本控制面\" value=\"" + C.escapeHtml(v.lede) + "\" /></label>"
-        : "<label>地域<input name=\"lede\" maxlength=\"30\" autocomplete=\"off\" value=\"" + C.escapeHtml(v.lede) + "\" /></label><label>" + (kind === "server" ? "配置" : "规格") + "<input name=\"spec\" maxlength=\"60\" autocomplete=\"off\" placeholder=\"例如 2 核 / 4 GB / 40 GB\" value=\"" + C.escapeHtml(v.spec || "") + "\" /></label>")
-    );
+        ? "<label>说明<input name=\"lede\" maxlength=\"60\" autocomplete=\"off\" placeholder=\"例如 本控制面\" value=\"" + C.escapeHtml(ledeValue || "") + "\" /></label>"
+        : "<label>地域<input name=\"lede\" maxlength=\"30\" autocomplete=\"off\" value=\"" + C.escapeHtml(ledeValue || "") + "\" /></label>" +
+          "<label>" + (kind === "server" ? "配置" : "规格") + "<input name=\"spec\" maxlength=\"60\" autocomplete=\"off\" placeholder=\"例如 2 核 / 4 GB / 40 GB\" value=\"" + C.escapeHtml(v.spec || "") + "\" /></label>" +
+          "<label>绑定<input name=\"binding\" maxlength=\"60\" autocomplete=\"off\" placeholder=\"例如 值守（留空为未绑定）\" value=\"" + C.escapeHtml(item ? v.binding || "" : "") + "\" /></label>");
+    return html;
   }
 
   function openItemDialog(kind, item) {
     var editing = !!item;
     var isWorker = kind === "worker";
-    var titleFor = { server: "服务器", host: "云主机", worker: "Worker" }[kind];
     C.openFormDialog({
-      title: (editing ? "编辑" : "添加") + titleFor,
+      title: (editing ? "编辑" : "添加") + TITLE_FOR[kind],
       bodyHtml: itemFields(kind, item),
       submitLabel: editing ? "保存" : "添加",
       onSubmit: function (ctrl) {
         var name = val(ctrl, "name");
         if (!name) { ctrl.setError("请填写名称"); return; }
-        if (editing) {
-          item.name = name;
-          item.lede = val(ctrl, "lede");
-          if (!isWorker) item.spec = val(ctrl, "spec") || (kind === "server" ? "未填写配置" : "未填写规格");
-        } else if (isWorker) {
-          WORKERS.push({ id: "wk_" + Date.now(), name: name, status: "active", lede: val(ctrl, "lede"), ver: "最新提交", updated: now() });
-        } else if (kind === "server") {
-          SERVERS.push({ id: "sv_" + Date.now(), name: name, status: "running", lede: val(ctrl, "lede"), spec: val(ctrl, "spec") || "未填写配置", agent: "未绑定", heartbeat: now() });
+        var payload;
+        if (isWorker) {
+          payload = { name: name, description: val(ctrl, "lede") };
         } else {
-          HOSTS.push({ id: "pc_" + Date.now(), name: name, status: "running", lede: val(ctrl, "lede"), spec: val(ctrl, "spec") || "未填写规格", agent: "未绑定", heartbeat: now() });
+          payload = {
+            name: name,
+            region: val(ctrl, "lede"),
+            spec: val(ctrl, "spec") || (kind === "server" ? "未填写配置" : "未填写规格"),
+            binding: val(ctrl, "binding"),
+          };
         }
-        ctrl.close();
-        render();
+        ctrl.setBusy(true);
+        var request = editing
+          ? api("PATCH", "/api/machines/" + encodeURIComponent(item.id), payload)
+          : api("POST", "/api/machines", Object.assign({ kind: API_KIND[kind] }, payload));
+        request
+          .then(function (res) {
+            ctrl.setBusy(false);
+            if (!res.data || !res.data.ok) {
+              ctrl.setError((res.data && res.data.error) || "保存失败，请重试");
+              return;
+            }
+            ctrl.close();
+            load();
+          })
+          .catch(function () {
+            ctrl.setBusy(false);
+            ctrl.setError("网络异常，请重试");
+          });
       },
     });
   }
 
-  function openManageMenu(kind, item) {
+  function openManageMenu(kind, item, anchor) {
     C.openActionMenu({
       title: item.name,
       items: [
         {
           label: "编辑",
           onSelect: function () { openItemDialog(kind, item); },
+        },
+        {
+          label: "删除",
+          hint: "删除后记录不再保留",
+          danger: true,
+          onSelect: function () {
+            C.askConfirm({
+              anchor: anchor,
+              title: "删除" + TITLE_FOR[kind],
+              text: "确认删除「" + item.name + "」吗？删除后无法恢复",
+              confirmLabel: "删除",
+              danger: true,
+            }).then(function (yes) {
+              if (!yes) return;
+              api("DELETE", "/api/machines/" + encodeURIComponent(item.id)).then(function (res) {
+                if (res.data && res.data.ok) load();
+              });
+            });
+          },
         },
       ],
     });
@@ -144,11 +227,11 @@
     if (manage) {
       var mkind = manage.getAttribute("data-manage");
       var mid = manage.getAttribute("data-id");
-      var pool = mkind === "server" ? SERVERS : mkind === "host" ? HOSTS : WORKERS;
       var found = null;
-      pool.forEach(function (entry) { if (entry.id === mid) found = entry; });
-      if (found) openManageMenu(mkind, found);
+      state.items.forEach(function (entry) { if (entry.id === mid) found = entry; });
+      if (found) openManageMenu(mkind, found, manage);
     }
   });
   render();
+  load();
 })();

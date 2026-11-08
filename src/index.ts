@@ -33,6 +33,7 @@ import { handleCalendarFeed, handleCalendarRequest } from "./calendar-http";
 import { handleMemoryRequest } from "./memory-http";
 import { handleSoulRequest } from "./soul-http";
 import { handleTasksRequest } from "./tasks-http";
+import { handleMachinesRequest } from "./machines-http";
 import { syncDueMirrors } from "./calendar";
 import { refreshActiveSnapshots } from "./registry";
 import { issueSession, publicUser, requireAdminUser } from "./session";
@@ -102,6 +103,8 @@ export default {
       if (soul) return soul;
       const tasks = await handleTasksRequest(request, env, wait, path);
       if (tasks) return tasks;
+      const machines = await handleMachinesRequest(request, env, wait, path);
+      if (machines) return machines;
       if (path === "/api" || path.startsWith("/api/")) return json({ ok: false, error: "未找到" }, 404);
       return env.ASSETS.fetch(request);
     } catch {
