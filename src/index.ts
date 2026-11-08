@@ -41,6 +41,7 @@ import { handleOplogRequest } from "./oplog-http";
 import { handleSystemRequest, recordCronRun } from "./system-http";
 import { handleSettingsRequest } from "./settings-http";
 import { handleBackupRequest } from "./backup-http";
+import { maybeRunScheduledBackup } from "./backup";
 import { cronSweepDue } from "./settings";
 import { handleVaultRequest } from "./vault-http";
 import { handleExtrasRequest } from "./extras-http";
@@ -170,6 +171,14 @@ export default {
       await runKeepaliveSweep(env.DB, vaultKeyOf(env), Date.now());
     } catch {
       // Connection sync and keepalive retry on the next sweep.
+    }
+    try {
+      // 自动备份：开关打开、已选目标，且距上次成功备份达到功能设置里的
+      // 定时任务间隔时才真正执行。成功会更新 backup_last_success_at，
+      // 失败由 runBackup 写入一条系统日志（模块「设置」）。
+      await maybeRunScheduledBackup(env, Date.now());
+    } catch {
+      // 备份失败不阻塞本轮其它任务；下一次定时任务按门控重试。
     }
     try {
       // Evidence stamp for the settings page: cron status there is read

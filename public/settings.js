@@ -34,6 +34,27 @@
     savedCronInterval: 6,
     savedPinLimit: 5,
     featuresError: "",
+    backup: null,
+    backupError: "",
+    backupSeeded: false,
+    ghOwner: "",
+    ghRepo: "",
+    ghBranch: "",
+    ghPath: "",
+    ghToken: "",
+    wdBase: "",
+    wdUser: "",
+    wdDir: "",
+    wdPass: "",
+    backupAuto: false,
+    savedBackupAuto: false,
+    backupTarget: "",
+    savedBackupTarget: "",
+    backupScheduleError: "",
+    backupTest: {
+      github: { ok: false, message: "", visibility: "", signature: "" },
+      webdav: { ok: false, message: "", visibility: "", signature: "" },
+    },
     busy: false,
     focus: "",
     focusSelect: false,
@@ -744,13 +765,544 @@
     });
   }
 
-  // 无左侧导航的堆叠版式（管理员账号 / 会话管理 / 功能设置 / 系统信息）
+  // ---- 同步与备份 ----
+
+  function backupTargetName(id) {
+    if (id === "github") return "GitHub 仓库";
+    if (id === "webdav") return "WebDAV 网盘";
+    return "未选择";
+  }
+
+  function backupTargetOf(id) {
+    var backup = state.backup;
+    if (!backup || !backup.targets) return null;
+    return backup.targets[id] || null;
+  }
+
+  function humanBytes(value) {
+    var bytes = Number(value);
+    if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+    if (bytes < 1024) return Math.round(bytes) + " B";
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+    return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+  }
+
+  function backupSignature(id) {
+    if (id === "github") {
+      return JSON.stringify([
+        String(state.ghOwner).trim(),
+        String(state.ghRepo).trim(),
+        String(state.ghBranch).trim(),
+        String(state.ghPath).trim(),
+        String(state.ghToken),
+      ]);
+    }
+    return JSON.stringify([
+      String(state.wdBase).trim(),
+      String(state.wdUser).trim(),
+      String(state.wdDir).trim(),
+      String(state.wdPass),
+    ]);
+  }
+
+  function backupPayload(id) {
+    if (id === "github") {
+      return {
+        target: "github",
+        owner: String(state.ghOwner).trim(),
+        repo: String(state.ghRepo).trim(),
+        branch: String(state.ghBranch).trim(),
+        path_prefix: String(state.ghPath).trim(),
+        token: String(state.ghToken),
+      };
+    }
+    return {
+      target: "webdav",
+      base_url: String(state.wdBase).trim(),
+      username: String(state.wdUser).trim(),
+      remote_dir: String(state.wdDir).trim(),
+      password: String(state.wdPass),
+    };
+  }
+
+  function backupTestPassed(id) {
+    var test = state.backupTest[id];
+    return !!(test && test.ok && test.signature === backupSignature(id));
+  }
+
+  function backupButton(label, action, id, variant, disabled) {
+    return (
+      '<button type="button"' +
+      (variant ? ' class="' + variant + '"' : "") +
+      ' data-action="' +
+      action +
+      '" data-target="' +
+      id +
+      '"' +
+      (disabled || state.busy ? " disabled" : "") +
+      ">" +
+      C.escapeHtml(label) +
+      "</button>"
+    );
+  }
+
+  function backupNote(id) {
+    var test = state.backupTest[id];
+    if (test && test.ok) {
+      return (
+        '<p id="backup-' +
+        id +
+        '-note" class="callout ok" role="status">' +
+        C.escapeHtml(test.message) +
+        "</p>"
+      );
+    }
+    if (test && test.message) {
+      return (
+        '<p id="backup-' +
+        id +
+        '-note" class="callout danger" role="alert">' +
+        C.escapeHtml(test.message) +
+        "</p>"
+      );
+    }
+    return '<p id="backup-' + id + '-note" class="callout" hidden></p>';
+  }
+
+  function backupGithubIsPublic() {
+    if (state.backupTest.github.ok && state.backupTest.github.visibility === "public") return true;
+    var target = backupTargetOf("github");
+    return !!(target && target.visibility === "public");
+  }
+
+  function backupSavedLine(id) {
+    var target = backupTargetOf(id);
+    if (!target) return '<p class="subtle">还没有保存这个目标</p>';
+    if (!target.enabled) return '<p class="subtle">这个目标已停用</p>';
+    if (id === "github") {
+      var where = (target.owner || "?") + "/" + (target.repo || "?") + "（" + (target.branch || "?") + "）";
+      if (target.path_prefix) where += "，路径 " + target.path_prefix;
+      return '<p class="subtle">已保存：' + C.escapeHtml(where) + "</p>";
+    }
+    var place = target.base_url || "?";
+    if (target.remote_dir) place += "，目录 " + target.remote_dir;
+    return '<p class="subtle">已保存：' + C.escapeHtml(place) + "</p>";
+  }
+
+  function githubCard() {
+    var target = backupTargetOf("github");
+    var tokenHint = target && target.has_token ? "已保存 " + C.maskTail(target.token_tail) + "，留空表示不修改" : "建议使用 repo 权限的细粒度令牌";
+    var tokenPlaceholder = target && target.has_token ? "留空表示不修改" : "粘贴访问令牌";
+    return (
+      '<div class="stack feature-item"><h3>GitHub 仓库</h3>' +
+      '<p class="subtle">备份会作为提交推送到仓库的指定分支</p>' +
+      '<label>仓库 owner<input data-field="ghOwner" name="ghOwner" type="text" maxlength="100" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="例如 octocat" value="' +
+      C.escapeHtml(state.ghOwner) +
+      '" /></label>' +
+      '<label>仓库名<input data-field="ghRepo" name="ghRepo" type="text" maxlength="100" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="例如 hivemos-backup" value="' +
+      C.escapeHtml(state.ghRepo) +
+      '" /></label>' +
+      '<label>分支<input data-field="ghBranch" name="ghBranch" type="text" maxlength="200" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="例如 main" value="' +
+      C.escapeHtml(state.ghBranch) +
+      '" /></label>' +
+      '<label>路径前缀<input data-field="ghPath" name="ghPath" type="text" maxlength="300" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="可留空，例如 backups" value="' +
+      C.escapeHtml(state.ghPath) +
+      '" /></label>' +
+      '<label>访问令牌<input data-field="ghToken" name="ghToken" type="password" maxlength="1000" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="' +
+      C.escapeHtml(tokenPlaceholder) +
+      '" value="' +
+      C.escapeHtml(state.ghToken) +
+      '" /><span class="subtle field-hint">' +
+      C.escapeHtml(tokenHint) +
+      "</span></label>" +
+      '<p class="subtle">公开仓库里的备份文件可能被其他人看到，建议使用私有仓库或改用 WebDAV</p>' +
+      '<p id="backup-github-visibility" class="callout warn"' +
+      (backupGithubIsPublic() ? "" : " hidden") +
+      ">这个 GitHub 目标看起来是公开仓库，备份内容可能被其他人看到</p>" +
+      backupNote("github") +
+      '<div class="row-actions">' +
+      backupButton("测试连接", "backup-test", "github", "secondary", false) +
+      backupButton("保存", "backup-save", "github", "", !backupTestPassed("github")) +
+      (target && target.enabled ? backupButton("立即备份", "backup-run", "github", "ghost", false) : "") +
+      "</div>" +
+      backupSavedLine("github") +
+      "</div>"
+    );
+  }
+
+  function webdavCard() {
+    var target = backupTargetOf("webdav");
+    var passwordHint = target && target.has_password ? "已保存 " + C.maskTail(target.password_tail) + "，留空表示不修改" : "可留空";
+    var passwordPlaceholder = target && target.has_password ? "留空表示不修改" : "粘贴密码";
+    return (
+      '<div class="stack feature-item"><h3>WebDAV 网盘</h3>' +
+      '<p class="subtle">备份会打包成 zip 上传到指定目录</p>' +
+      '<label>服务器地址<input data-field="wdBase" name="wdBase" type="url" maxlength="400" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="https://example.com/dav" value="' +
+      C.escapeHtml(state.wdBase) +
+      '" /></label>' +
+      '<label>用户名<input data-field="wdUser" name="wdUser" type="text" maxlength="200" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="可留空" value="' +
+      C.escapeHtml(state.wdUser) +
+      '" /></label>' +
+      '<label>远程目录<input data-field="wdDir" name="wdDir" type="text" maxlength="300" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="可留空，例如 hivemos" value="' +
+      C.escapeHtml(state.wdDir) +
+      '" /></label>' +
+      '<label>密码<input data-field="wdPass" name="wdPass" type="password" maxlength="1000" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="' +
+      C.escapeHtml(passwordPlaceholder) +
+      '" value="' +
+      C.escapeHtml(state.wdPass) +
+      '" /><span class="subtle field-hint">' +
+      C.escapeHtml(passwordHint) +
+      "</span></label>" +
+      backupNote("webdav") +
+      '<div class="row-actions">' +
+      backupButton("测试连接", "backup-test", "webdav", "secondary", false) +
+      backupButton("保存", "backup-save", "webdav", "", !backupTestPassed("webdav")) +
+      (target && target.enabled ? backupButton("立即备份", "backup-run", "webdav", "ghost", false) : "") +
+      "</div>" +
+      backupSavedLine("webdav") +
+      "</div>"
+    );
+  }
+
+  function backupTargetSegment() {
+    var options = [
+      { value: "", label: "未选择" },
+      { value: "github", label: "GitHub 仓库" },
+      { value: "webdav", label: "WebDAV 网盘" },
+    ];
+    return (
+      '<div class="segmented" role="group" aria-label="自动备份目标">' +
+      options
+        .map(function (option) {
+          return (
+            '<button type="button" class="segment" data-action="set-backup-target" data-target="' +
+            option.value +
+            '" aria-pressed="' +
+            (state.backupTarget === option.value ? "true" : "false") +
+            '">' +
+            C.escapeHtml(option.label) +
+            "</button>"
+          );
+        })
+        .join("") +
+      "</div>"
+    );
+  }
+
+  function backupStatusBlock() {
+    if (state.backupError) {
+      return '<p class="callout danger" role="alert">' + C.escapeHtml(state.backupError) + "</p>";
+    }
+    if (!state.backup) return '<p class="subtle">正在读取备份状态</p>';
+    var schedule = state.backup.schedule || {};
+    var summary = schedule.last_summary || null;
+    var rows = [];
+    rows.push([
+      "自动备份",
+      schedule.auto_enabled ? "已开启（" + C.escapeHtml(backupTargetName(schedule.target)) + "）" : "已关闭",
+    ]);
+    if (summary) {
+      var when = C.formatMinute(summary.at) || "未知时间";
+      var trigger = summary.trigger === "scheduled" ? "定时" : "手动";
+      rows.push(["上次备份", C.escapeHtml(when + " · " + trigger + " · " + backupTargetName(summary.target))]);
+      if (summary.ok) {
+        rows.push([
+          "上次结果",
+          "成功，" +
+            C.escapeHtml(String(summary.files || 0) + " 个文件，" + humanBytes(summary.bytes)) +
+            "，耗时 " +
+            C.escapeHtml(String(summary.duration_ms || 0) + " ms"),
+        ]);
+      } else {
+        rows.push([
+          "上次结果",
+          "失败：" + C.escapeHtml(schedule.last_error || summary.error || "未知原因"),
+        ]);
+      }
+    } else {
+      rows.push(["上次备份", "还没有备份记录"]);
+    }
+    rows.push(["执行间隔", C.escapeHtml(cronIntervalLabel(state.backup.interval_hours || state.savedCronInterval))]);
+    var next = "";
+    if (!schedule.auto_enabled) next = "自动备份已关闭";
+    else if (!schedule.target) next = "还没有选择备份目标";
+    else if (schedule.last_success_at === null || schedule.last_success_at === undefined) next = "还没有成功备份，下次定时任务会执行";
+    else if (state.backup.next_due_at) next = "下次不早于 " + (C.formatMinute(state.backup.next_due_at) || "未知时间");
+    else next = "等待下次定时任务";
+    rows.push(["下次自动备份", C.escapeHtml(next)]);
+    return C.facts(rows);
+  }
+
+  function backupAutoPanel() {
+    var dirty = state.backupAuto !== state.savedBackupAuto || state.backupTarget !== state.savedBackupTarget;
+    return (
+      '<form id="backup-auto-form" class="stack inline-panel" novalidate>' +
+      "<h3>自动备份</h3>" +
+      '<p class="subtle">自动备份跟随「定时任务频率」，距上次成功备份达到间隔后在下一次定时任务里执行</p>' +
+      '<div class="perm-row"><div class="perm-meta"><strong>自动备份</strong><span class="subtle">' +
+      (state.backupAuto ? "已开启" : "已关闭") +
+      '</span></div><button type="button" class="switch" role="switch" aria-checked="' +
+      (state.backupAuto ? "true" : "false") +
+      '" data-action="toggle-backup-auto" aria-label="自动备份"><span class="switch-knob"></span></button></div>' +
+      '<div class="stack"><span>备份目标</span>' +
+      backupTargetSegment() +
+      "</div>" +
+      (state.backupAuto && !state.backupTarget
+        ? '<p class="callout warn">还没有选择备份目标，自动备份不会执行</p>'
+        : "") +
+      fieldError("backup-auto-error", state.backupScheduleError, "callout danger") +
+      '<div class="row-actions"><button type="submit"' +
+      (!dirty || state.busy ? " disabled" : "") +
+      ">保存自动备份</button><span class=\"subtle\"" +
+      (dirty ? "" : " hidden") +
+      ">有改动尚未保存</span></div>" +
+      "</form>"
+    );
+  }
+
+  function backupPanel() {
+    return panel(
+      "backup-panel",
+      "同步与备份",
+      '<div class="stack" id="backup-status"><h3>备份状态</h3>' +
+        backupStatusBlock() +
+        "</div>" +
+        '<div class="feature-cols">' +
+        githubCard() +
+        webdavCard() +
+        "</div>" +
+        backupAutoPanel(),
+    );
+  }
+
+  function resetBackupTest(id) {
+    state.backupTest[id] = { ok: false, message: "", visibility: "", signature: "" };
+    paintBackupTarget(id);
+  }
+
+  function paintBackupTarget(id) {
+    var passed = backupTestPassed(id);
+    var test = state.backupTest[id];
+    var save = document.querySelector('[data-action="backup-save"][data-target="' + id + '"]');
+    if (save) save.disabled = !passed || state.busy;
+    var note = document.getElementById("backup-" + id + "-note");
+    if (note) {
+      if (passed && test.message) {
+        note.className = "callout ok";
+        note.textContent = test.message;
+        note.hidden = false;
+      } else if (test.message) {
+        note.className = "callout danger";
+        note.textContent = test.message;
+        note.hidden = false;
+      } else {
+        note.className = "callout";
+        note.textContent = "";
+        note.hidden = true;
+      }
+    }
+    if (id === "github") {
+      var warn = document.getElementById("backup-github-visibility");
+      if (warn) warn.hidden = !backupGithubIsPublic();
+    }
+  }
+
+  function applyBackupState(result) {
+    if (!result.data || result.data.ok !== true || !result.data.backup) {
+      state.backup = null;
+      state.backupError =
+        result.status === 0 ? "网络异常，请重试" : C.explain(result.data && result.data.error, "暂时无法读取同步与备份状态");
+      return;
+    }
+    var backup = result.data.backup;
+    state.backup = backup;
+    state.backupError = "";
+    if (backup.schedule) {
+      var autoEnabled = backup.schedule.auto_enabled === true;
+      var autoTarget = backup.schedule.target || "";
+      // 后台刷新不覆盖还没保存的改动
+      if (state.backupAuto === state.savedBackupAuto) state.backupAuto = autoEnabled;
+      if (state.backupTarget === state.savedBackupTarget) state.backupTarget = autoTarget;
+      state.savedBackupAuto = autoEnabled;
+      state.savedBackupTarget = autoTarget;
+    }
+    if (!state.backupSeeded && backup.targets) {
+      var github = backup.targets.github;
+      if (github) {
+        state.ghOwner = github.owner || "";
+        state.ghRepo = github.repo || "";
+        state.ghBranch = github.branch || "";
+        state.ghPath = github.path_prefix || "";
+      }
+      var webdav = backup.targets.webdav;
+      if (webdav) {
+        state.wdBase = webdav.base_url || "";
+        state.wdUser = webdav.username || "";
+        state.wdDir = webdav.remote_dir || "";
+      }
+    }
+    state.backupSeeded = true;
+  }
+
+  function refreshBackup() {
+    return api("GET", "/api/backup").then(function (result) {
+      if (loggedOut(result)) return;
+      applyBackupState(result);
+      if (!state.loading) render();
+    });
+  }
+
+  function toggleBackupAuto() {
+    state.backupAuto = !state.backupAuto;
+    state.backupScheduleError = "";
+    render();
+  }
+
+  function setBackupTarget(control) {
+    var value = control.getAttribute("data-target") || "";
+    if (value !== "" && value !== "github" && value !== "webdav") return;
+    state.backupTarget = value;
+    state.backupScheduleError = "";
+    render();
+  }
+
+  function testBackupTarget(id) {
+    if (id !== "github" && id !== "webdav") return;
+    state.backupTest[id] = { ok: false, message: "正在测试连接…", visibility: "", signature: "" };
+    state.busy = true;
+    render();
+    api("POST", "/api/backup/test", backupPayload(id)).then(function (result) {
+      state.busy = false;
+      if (loggedOut(result)) return;
+      if (!result.data || result.data.ok !== true) {
+        state.backupTest[id] = {
+          ok: false,
+          message: result.status === 0 ? "网络异常，请重试" : C.explain(result.data && result.data.error, "测试连接失败，请重试"),
+          visibility: "",
+          signature: "",
+        };
+        render();
+        return;
+      }
+      var outcome = result.data.result || {};
+      if (outcome.ok === true) {
+        state.backupTest[id] = {
+          ok: true,
+          message: outcome.detail || "连接正常",
+          visibility: typeof outcome.visibility === "string" ? outcome.visibility : "",
+          signature: backupSignature(id),
+        };
+        toast("连接测试通过");
+      } else {
+        state.backupTest[id] = {
+          ok: false,
+          message: outcome.error || "测试连接失败",
+          visibility: "",
+          signature: "",
+        };
+      }
+      render();
+    });
+  }
+
+  function saveBackupTarget(id) {
+    if (id !== "github" && id !== "webdav") return;
+    if (!backupTestPassed(id)) {
+      state.backupTest[id] = {
+        ok: false,
+        message: "请先测试连接，测试通过后才能保存",
+        visibility: "",
+        signature: "",
+      };
+      render();
+      return;
+    }
+    state.busy = true;
+    state.backupTest[id].message = "";
+    render();
+    api("PUT", "/api/backup/targets/" + id, backupPayload(id)).then(function (result) {
+      state.busy = false;
+      if (loggedOut(result)) return;
+      if (!result.data || result.data.ok !== true) {
+        state.backupTest[id] = {
+          ok: false,
+          message: result.status === 0 ? "网络异常，请重试" : C.explain(result.data && result.data.error, "保存失败，请重试"),
+          visibility: "",
+          signature: "",
+        };
+        render();
+        return;
+      }
+      state.backupTest[id] = { ok: false, message: "", visibility: "", signature: "" };
+      if (id === "github") state.ghToken = "";
+      else state.wdPass = "";
+      toast(backupTargetName(id) + "备份目标已保存");
+      refreshBackup();
+    });
+  }
+
+  function runBackupNow(id) {
+    if (id !== "github" && id !== "webdav") return;
+    state.busy = true;
+    render();
+    api("POST", "/api/backup/run", { target: id }).then(function (result) {
+      state.busy = false;
+      if (loggedOut(result)) return;
+      if (!result.data || result.data.ok !== true) {
+        toast(
+          result.status === 0 ? "网络异常，请重试" : C.explain(result.data && result.data.error, "备份失败，请重试"),
+          "danger",
+        );
+        render();
+        return;
+      }
+      var run = result.data.result || {};
+      if (run.ok === true) toast("备份完成，" + String(run.files || 0) + " 个文件");
+      else toast("备份失败：" + (run.error || "未知原因"), "danger");
+      refreshBackup();
+    });
+  }
+
+  function submitBackupAuto() {
+    state.busy = true;
+    state.backupScheduleError = "";
+    render();
+    api("PATCH", "/api/backup/settings", {
+      auto_enabled: state.backupAuto,
+      target: state.backupTarget,
+    }).then(function (result) {
+      state.busy = false;
+      if (loggedOut(result)) return;
+      if (!result.data || result.data.ok !== true) {
+        state.backupScheduleError =
+          result.status === 0 ? "网络异常，请重试" : C.explain(result.data && result.data.error, "保存自动备份设置失败，请重试");
+        render();
+        return;
+      }
+      var saved = result.data.schedule || {};
+      state.backupAuto = saved.auto_enabled === true;
+      state.savedBackupAuto = state.backupAuto;
+      state.backupTarget = saved.target || "";
+      state.savedBackupTarget = state.backupTarget;
+      if (state.backup) {
+        state.backup.schedule = saved;
+        state.backup.interval_hours = Number(result.data.interval_hours) || state.backup.interval_hours;
+        state.backup.next_due_at = result.data.next_due_at;
+      }
+      state.backupScheduleError = "";
+      toast("自动备份设置已保存");
+      refreshBackup();
+    });
+  }
+
+  // 无左侧导航的堆叠版式（管理员账号 / 会话管理 / 功能设置 / 同步与备份 / 系统信息）
   function settingsLayout() {
     return (
       '<div class="settings"><div class="settings-body">' +
       accountPanel() +
       sessionsPanel() +
       featuresPanel() +
+      backupPanel() +
       systemPanel() +
       "</div></div>"
     );
@@ -822,6 +1374,8 @@
       clearNote("features-error", "featuresError");
       paintFeatureState();
     }
+    if (field.indexOf("gh") === 0) resetBackupTest("github");
+    if (field.indexOf("wd") === 0) resetBackupTest("webdav");
   }
 
   function clearNote(id, key) {
@@ -860,6 +1414,11 @@
     else if (action === "revoke-session") revokeSession(control.getAttribute("data-id") || "");
     else if (action === "revoke-others") revokeOthers(control);
     else if (action === "set-cron-interval") setCronInterval(control);
+    else if (action === "toggle-backup-auto") toggleBackupAuto();
+    else if (action === "set-backup-target") setBackupTarget(control);
+    else if (action === "backup-test") testBackupTarget(control.getAttribute("data-target") || "");
+    else if (action === "backup-save") saveBackupTarget(control.getAttribute("data-target") || "");
+    else if (action === "backup-run") runBackupNow(control.getAttribute("data-target") || "");
   }
 
   function onSubmit(event) {
@@ -870,6 +1429,7 @@
     if (form.id === "profile-form") submitProfile();
     else if (form.id === "password-form") submitPassword();
     else if (form.id === "features-form") submitFeatures();
+    else if (form.id === "backup-auto-form") submitBackupAuto();
   }
 
   function fail(slot, key, result, fallback) {
@@ -1240,6 +1800,7 @@
       api("GET", "/api/account/totp"),
       api("GET", "/api/account/sessions"),
       api("GET", "/api/settings"),
+      api("GET", "/api/backup"),
     ]).then(
       function (results) {
         if (token !== loadToken) return;
@@ -1255,6 +1816,7 @@
         var totp = results[1];
         var sessions = results[2];
         var settingsResult = results[3];
+        var backupResult = results[4];
         if (settingsResult.data && settingsResult.data.ok === true && settingsResult.data.settings) {
           var savedSettings = settingsResult.data.settings;
           state.savedPinLimit = Number(savedSettings.sidebar_pin_limit);
@@ -1262,6 +1824,8 @@
           state.savedCronInterval = Number(savedSettings.cron_interval_hours);
           state.cronInterval = state.savedCronInterval;
         }
+        // 同步与备份读不到也不拦整页：面板显示提示，其它设置照常可用
+        applyBackupState(backupResult);
         // 功能设置读不到不拦整页：面板回退到默认值，而保存按钮只有在真改过
         // （与默认值不同）时才会亮，不会把默认值误写回去。
         var failed = [profile, totp, sessions].filter(function (item) {
