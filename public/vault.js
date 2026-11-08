@@ -75,7 +75,7 @@
       C.layout(
         "",
         "<div class=\"page-tabs\" role=\"tablist\">" +
-          "<button class=\"page-tab\" type=\"button\" role=\"tab\" data-tab=\"vault\" aria-selected=\"" + (activeTab === "vault" ? "true" : "false") + "\">保险库</button>" +
+          "<button class=\"page-tab\" type=\"button\" role=\"tab\" data-tab=\"vault\" aria-selected=\"" + (activeTab === "vault" ? "true" : "false") + "\">账号密码</button>" +
           "<button class=\"page-tab\" type=\"button\" role=\"tab\" data-tab=\"gateway\" aria-selected=\"" + (activeTab === "gateway" ? "true" : "false") + "\">模型网关</button>" +
           "<button class=\"page-tab\" type=\"button\" role=\"tab\" data-tab=\"email\" aria-selected=\"" + (activeTab === "email" ? "true" : "false") + "\">邮箱</button>" +
           "</div>" +
