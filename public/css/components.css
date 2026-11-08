@@ -330,3 +330,53 @@ dialog.action-menu::backdrop { background: var(--overlay); }
 }
 .switch[aria-checked="true"] { background: var(--accent-button); border-color: transparent; }
 .switch[aria-checked="true"] .switch-knob { left: 20px; background: var(--on-accent); }
+
+/* Expandable card panel (shared, SMSinBox style): the toggle strip sits at
+   the card foot, the panel opens inside the card above it. Used by every
+   board instead of a centered action menu for card management. */
+.record > .expand-panel, .record > .expand-toggle { grid-column: 1 / -1; }
+
+.expand-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  min-height: 36px;
+  padding: 6px 2px;
+  background: transparent;
+  border: 0;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  color: var(--text-2);
+  font: inherit;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.expand-toggle:hover { color: var(--text); }
+
+.expand-toggle .chev {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  margin-right: 4px;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(45deg);
+  transition: transform var(--dur-fast) var(--ease);
+}
+
+.expand-toggle[aria-expanded="true"] .chev { transform: rotate(225deg); }
+
+.expand-panel { border-top: 1px solid var(--border); padding-top: 12px; }
+.expand-panel[hidden] { display: none; }
+
+.expand-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.expand-actions button { min-height: 36px; }
+
+.expand-note { margin: 0 0 10px; }
+.expand-subhead { margin: 14px 0 4px; font-size: var(--fs-sm); font-weight: 600; color: var(--text-2); }
+.expand-subhead:first-child { margin-top: 0; }

@@ -175,8 +175,51 @@
       (options.extra || "") +
       "</div>" +
       facts(options.facts || []) +
+      (options.expandKey
+        ? expandPanel(options.expandKey, options.expandBody || "") + expandToggle(options.expandKey, options.expandLabel)
+        : "") +
       "</article>"
     );
+  }
+
+  // ---- Expandable card panels (SMSinBox style) ----
+  // A card renders a toggle strip plus a panel inside the card; management
+  // actions and inline settings live in the panel instead of a centered
+  // menu. Expansion state lives in this module so a page re-render
+  // (innerHTML swap) restores which cards were open. Panels toggle
+  // independently: any number of cards may be open at once.
+  var expandedCards = {};
+
+  function cardExpanded(key) {
+    return !!expandedCards[key];
+  }
+
+  function expandToggle(key, label) {
+    return (
+      '<button type="button" class="expand-toggle" data-expand-toggle="' +
+      escapeHtml(key) +
+      '" aria-expanded="' +
+      (cardExpanded(key) ? "true" : "false") +
+      '"><span>' +
+      escapeHtml(label || "高级设置") +
+      '</span><span class="chev" aria-hidden="true"></span></button>'
+    );
+  }
+
+  function expandPanel(key, bodyHtml) {
+    return (
+      '<div class="expand-panel" data-expand-panel="' +
+      escapeHtml(key) +
+      '"' +
+      (cardExpanded(key) ? "" : " hidden") +
+      ">" +
+      (bodyHtml || "") +
+      "</div>"
+    );
+  }
+
+  function expandActions(buttonsHtml) {
+    return '<div class="expand-actions">' + (buttonsHtml || "") + "</div>";
   }
 
   function list(html) {
@@ -539,6 +582,22 @@
   document.addEventListener("click", function (event) {
     var target = event.target;
     if (!(target instanceof Element)) return;
+    var toggle = target.closest("[data-expand-toggle]");
+    if (!toggle) return;
+    var key = toggle.getAttribute("data-expand-toggle") || "";
+    var scope = toggle.closest("article") || toggle.parentElement;
+    var selector = '[data-expand-panel="' + (window.CSS && CSS.escape ? CSS.escape(key) : key) + '"]';
+    var panel = scope ? scope.querySelector(selector) : null;
+    if (!panel && scope && scope.parentElement) panel = scope.parentElement.querySelector(selector);
+    if (!panel) panel = document.querySelector(selector);
+    expandedCards[key] = !expandedCards[key];
+    toggle.setAttribute("aria-expanded", expandedCards[key] ? "true" : "false");
+    if (panel) panel.hidden = !expandedCards[key];
+  });
+
+  document.addEventListener("click", function (event) {
+    var target = event.target;
+    if (!(target instanceof Element)) return;
     var button = target.closest("[data-copy]");
     if (!button) return;
     var value = button.getAttribute("data-copy") || "";
@@ -584,6 +643,10 @@
     askConfirm: askConfirm,
     openFormDialog: openFormDialog,
     openActionMenu: openActionMenu,
+    cardExpanded: cardExpanded,
+    expandToggle: expandToggle,
+    expandPanel: expandPanel,
+    expandActions: expandActions,
     addBar: addBar,
     groupSelect: groupSelect,
     groupedSections: groupedSections,
