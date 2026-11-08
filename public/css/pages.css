@@ -431,6 +431,7 @@ img, svg, video, canvas { max-width: 100%; }
 /* 移动端统计卡一行两个 */
 @media (max-width: 767px) {
   .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 
 .section-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; }
 .section-head .section-actions { align-items: center; }
