@@ -27,6 +27,7 @@ import {
 import {
   createMachine,
   deleteMachine,
+  deleteWorkerScriptForMachine,
   fetchWorkersForMachine,
   getMachine,
   listMachines,
@@ -64,6 +65,8 @@ export async function handleMachinesRequest(request: Request, env: Env, ctx: Wai
   if (ports && ports[1]) return machinePorts(request, env, ports[1]);
   const portOne = /^\/api\/machines\/([A-Za-z0-9_-]+)\/ports\/(\d+)$/.exec(path);
   if (portOne && portOne[1] && portOne[2]) return machinePortOne(request, env, portOne[1], Number(portOne[2]));
+  const workerScript = /^\/api\/machines\/([A-Za-z0-9_-]+)\/workers\/([A-Za-z0-9._~-]+)$/.exec(path);
+  if (workerScript && workerScript[1] && workerScript[2]) return machineWorkerDelete(request, env, workerScript[1], decodeURIComponent(workerScript[2]));
   const keepaliveRoute = /^\/api\/machines\/([A-Za-z0-9_-]+)\/keepalive$/.exec(path);
   if (keepaliveRoute && keepaliveRoute[1]) return machineKeepalive(request, env, keepaliveRoute[1]);
   const one = /^\/api\/machines\/([A-Za-z0-9_-]+)$/.exec(path);
@@ -232,10 +235,32 @@ async function machineAction(request: Request, env: Env, id: string, action: str
       targetName: name,
       text: `查看了「${name}」的 Workers 列表`,
     });
-    return json({ ok: true, workers: result.workers, fetched_at: result.fetched_at });
+    return json({ ok: true, workers: result.workers, fetched_at: result.fetched_at, platform: result.platform, account_id: result.account_id, subdomain: result.subdomain });
   });
 }
 
+
+// DELETE /api/machines/:id/workers/:name — delete one Cloudflare Worker
+// script under the entry's account, with the entry's stored token.
+async function machineWorkerDelete(request: Request, env: Env, id: string, scriptName: string): Promise<Response> {
+  if (request.method.toUpperCase() !== "DELETE") return methodNotAllowed("DELETE");
+  const gate = await mutationGate(request);
+  if (gate) return gate;
+  return wrap(async () => {
+    const machine = (await listMachines(env.DB, null)).find((row) => row.id === id);
+    await deleteWorkerScriptForMachine(env.DB, id, vaultKeyOf(env), ACTOR, scriptName, Date.now());
+    const name = machine?.name ?? id;
+    await logOp(env.DB, {
+      actor: await panelActor(request, env),
+      module: "云主机",
+      action: "删除",
+      targetId: id,
+      targetName: name,
+      text: `删除了「${name}」名下的 Worker「${scriptName}」`,
+    });
+    return json({ ok: true });
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Provider connections (cloud tab phase 2). The routes live under

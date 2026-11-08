@@ -1675,29 +1675,77 @@
       ctrl.setBody(C.emptyState("还没有保存 API 令牌", item.platform === "vercel" ? "先在编辑里补上 API 令牌，再来查看名下项目" : "先在编辑里补上 Cloudflare 账号 ID 与 API 令牌，再来查看名下 Workers"));
       return;
     }
-    api("POST", "/api/machines/" + encodeURIComponent(item.id) + "/workers")
-      .then(function (result) {
-        if (!result.data || !result.data.ok) {
-          ctrl.setBody(C.emptyState("读取失败", (result.data && result.data.error) || "请稍后重试"));
-          return;
-        }
-        var workers = result.data.workers || [];
-        if (!workers.length) {
-          ctrl.setBody(C.emptyState(item.platform === "vercel" ? "这个账号下还没有项目" : "这个账号下还没有 Workers", "拉取于 " + (C.formatMinute(result.data.fetched_at) || "刚刚")));
-          return;
-        }
-        var rows = workers.map(function (w) {
-          var modified = w.modified_on ? String(w.modified_on).slice(0, 10) + " " + String(w.modified_on).slice(11, 16) : "未记录";
-          var wfacts = w.meta ? [["框架", C.escapeHtml(w.meta)], ["更新时间", C.escapeHtml(modified)]] : [["更新时间", C.escapeHtml(modified)]];
-          return C.record({ id: w.name, title: w.name, facts: wfacts });
-        }).join("");
-        ctrl.setBody(
-          "<p class=\"subtle\">拉取于 " + C.escapeHtml(C.formatMinute(result.data.fetched_at) || "刚刚") + "，共 " + workers.length + " 个</p>" + C.list(rows)
-        );
-      })
-      .catch(function () {
-        ctrl.setBody(C.emptyState("读取失败", "网络异常，请重试"));
-      });
+    var listState = { subdomain: "", accountId: item.cf_account_id || "", platform: item.platform || "cloudflare" };
+    function workerActions(w) {
+      if (listState.platform === "vercel") return "";
+      var btns = "";
+      if (listState.subdomain) {
+        btns += "<button type=\"button\" class=\"secondary\" data-wact=\"visit\" data-url=\"" + C.escapeHtml("https://" + w.name + "." + listState.subdomain + ".workers.dev") + "\">访问</button>";
+      }
+      if (listState.accountId) {
+        btns += "<button type=\"button\" class=\"secondary\" data-wact=\"console\" data-url=\"" + C.escapeHtml("https://dash.cloudflare.com/" + listState.accountId + "/workers/services/view/" + w.name + "/production") + "\">控制台</button>";
+      }
+      btns += "<button type=\"button\" class=\"danger\" data-confirm-delete data-wact=\"delete\" data-name=\"" + C.escapeHtml(w.name) + "\">删除</button>";
+      return btns;
+    }
+    function loadWorkers() {
+      api("POST", "/api/machines/" + encodeURIComponent(item.id) + "/workers")
+        .then(function (result) {
+          if (!result.data || !result.data.ok) {
+            ctrl.setBody(C.emptyState("读取失败", (result.data && result.data.error) || "请稍后重试"));
+            return;
+          }
+          if (result.data.platform) listState.platform = result.data.platform;
+          if (result.data.account_id) listState.accountId = result.data.account_id;
+          if (result.data.subdomain) listState.subdomain = result.data.subdomain;
+          var workers = result.data.workers || [];
+          if (!workers.length) {
+            ctrl.setBody(C.emptyState(item.platform === "vercel" ? "这个账号下还没有项目" : "这个账号下还没有 Workers", "拉取于 " + (C.formatMinute(result.data.fetched_at) || "刚刚")));
+            return;
+          }
+          var rows = workers.map(function (w) {
+            var modified = w.modified_on ? String(w.modified_on).slice(0, 10) + " " + String(w.modified_on).slice(11, 16) : "未记录";
+            var wfacts = w.meta ? [["框架", C.escapeHtml(w.meta)], ["更新时间", C.escapeHtml(modified)]] : [["更新时间", C.escapeHtml(modified)]];
+            return C.record({ id: w.name, title: w.name, facts: wfacts, actions: workerActions(w) });
+          }).join("");
+          ctrl.setBody(
+            "<p class=\"subtle\">拉取于 " + C.escapeHtml(C.formatMinute(result.data.fetched_at) || "刚刚") + "，共 " + workers.length + " 个</p>" + C.list(rows)
+          );
+        })
+        .catch(function () {
+          ctrl.setBody(C.emptyState("读取失败", "网络异常，请重试"));
+        });
+    }
+    ctrl.dialog.addEventListener("click", function (event) {
+      var target = event.target;
+      if (!(target instanceof Element)) return;
+      var btn = target.closest("[data-wact]");
+      if (!btn) return;
+      var act = btn.getAttribute("data-wact");
+      if (act === "visit" || act === "console") {
+        window.open(btn.getAttribute("data-url"), "_blank", "noopener");
+        return;
+      }
+      if (act === "delete") {
+        var wname = btn.getAttribute("data-name");
+        btn.disabled = true;
+        api("DELETE", "/api/machines/" + encodeURIComponent(item.id) + "/workers/" + encodeURIComponent(wname))
+          .then(function (res) {
+            if (res.data && res.data.ok) {
+              C.toast("已删除 Worker「" + wname + "」");
+              loadWorkers();
+            } else {
+              btn.disabled = false;
+              C.toast((res.data && res.data.error) || "删除失败");
+            }
+          })
+          .catch(function () {
+            btn.disabled = false;
+            C.toast("删除失败");
+          });
+      }
+    });
+    loadWorkers();
   }
 
   var page = document.getElementById("page");

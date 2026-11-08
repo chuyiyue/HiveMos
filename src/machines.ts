@@ -598,7 +598,7 @@ export async function fetchWorkersForMachine(
   key: ContentKey,
   actor: string,
   now: number,
-): Promise<{ workers: WorkerScript[]; fetched_at: number }> {
+): Promise<{ workers: WorkerScript[]; fetched_at: number; platform: string; account_id: string; subdomain: string }> {
   const row = await getMachine(db, id);
   if (!row) throw new MachineError(404, "机器不存在");
   if (row.kind !== "worker") throw new MachineError(400, "只有 Workers 条目可以查看名下 Workers");
@@ -629,7 +629,7 @@ export async function fetchWorkersForMachine(
       }))
       .filter((project) => project.name !== "");
     await writeAudit(db, { machineId: id, actor, source: "panel", action: "workers_list", detail: { count: vWorkers.length, platform: "vercel" } }, now);
-    return { workers: vWorkers, fetched_at: now };
+    return { workers: vWorkers, fetched_at: now, platform: "vercel", account_id: "", subdomain: "" };
   }
   if (!row.cf_account_id) throw new MachineError(400, "先填写 Cloudflare 账号 ID");
   let response: Response;
@@ -653,7 +653,62 @@ export async function fetchWorkersForMachine(
     .map((script) => ({ name: String(script.id ?? ""), modified_on: script.modified_on ?? null }))
     .filter((script) => script.name !== "");
   await writeAudit(db, { machineId: id, actor, source: "panel", action: "workers_list", detail: { count: workers.length } }, now);
-  return { workers, fetched_at: now };
+  // Best effort: the account subdomain powers the panel's 访问 button
+  // (https://<script>.<subdomain>.workers.dev). Any failure just hides it.
+  let subdomain = "";
+  try {
+    const subResponse = await fetch("https://api.cloudflare.com/client/v4/accounts/" + encodeURIComponent(row.cf_account_id) + "/workers/subdomain", {
+      headers: { authorization: "Bearer " + token, accept: "application/json" },
+    });
+    const subBody = (await subResponse.json().catch(() => null)) as {
+      success?: boolean;
+      result?: { subdomain?: string };
+    } | null;
+    if (subResponse.ok && subBody && subBody.success === true && typeof subBody.result?.subdomain === "string") {
+      subdomain = subBody.result.subdomain;
+    }
+  } catch {
+    subdomain = "";
+  }
+  return { workers, fetched_at: now, platform: "cloudflare", account_id: row.cf_account_id, subdomain };
+}
+
+// Panel action on a Worker entry: delete one script under the account with
+// the stored token. The deletion is audited like every other panel write.
+export async function deleteWorkerScriptForMachine(
+  db: D1Database,
+  id: string,
+  key: ContentKey,
+  actor: string,
+  scriptName: string,
+  now: number,
+): Promise<{ name: string }> {
+  const row = await getMachine(db, id);
+  if (!row) throw new MachineError(404, "机器不存在");
+  if (row.kind !== "worker") throw new MachineError(400, "只有 Workers 条目可以删除名下 Workers");
+  if ((row.platform || "cloudflare") === "vercel") throw new MachineError(400, "Vercel 项目请在 Vercel 控制台删除");
+  if (!row.cf_account_id) throw new MachineError(400, "先填写 Cloudflare 账号 ID");
+  if (!row.api_token_enc) throw new MachineError(400, "先补上 API 令牌");
+  const token = await openMachineSecret(key, row.api_token_enc);
+  let response: Response;
+  try {
+    response = await fetch(
+      "https://api.cloudflare.com/client/v4/accounts/" + encodeURIComponent(row.cf_account_id) + "/workers/scripts/" + encodeURIComponent(scriptName),
+      { method: "DELETE", headers: { authorization: "Bearer " + token, accept: "application/json" } },
+    );
+  } catch {
+    throw new MachineError(502, "连接 Cloudflare 失败，请稍后重试");
+  }
+  const body = (await response.json().catch(() => null)) as {
+    success?: boolean;
+    errors?: Array<{ code?: number; message?: string }>;
+  } | null;
+  if (!response.ok || (body !== null && body.success !== true)) {
+    const first = body?.errors?.[0];
+    throw new MachineError(502, first?.message ? "Cloudflare：" + first.message : "删除失败，请稍后重试");
+  }
+  await writeAudit(db, { machineId: id, actor, source: "panel", action: "workers_delete", detail: { script: scriptName } }, now);
+  return { name: scriptName };
 }
 
 // MCP read path: mirrors fetchConfigForAgent — the audit row lands before
