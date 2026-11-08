@@ -17,7 +17,7 @@ import { readCookie } from "./http";
 export const OPLOG_BOARDS = [
   { key: "agents", label: "Agents 与应用", modules: ["Agent", "应用"] },
   { key: "mcp-skills", label: "MCP 与 Skills", modules: ["MCP", "Skills", "API"] },
-  { key: "machines", label: "云计算资源", modules: ["云主机"] },
+  { key: "machines", label: "云计算资源", modules: ["云主机", "网络节点"] },
   { key: "memory-soul", label: "记忆与 Soul", modules: ["记忆", "Soul"] },
   { key: "tasks-calendar", label: "任务与日历", modules: ["任务", "日历"] },
   { key: "vault", label: "保险库", modules: ["保险库"] },
@@ -41,6 +41,7 @@ export const OPLOG_MODULES = [
   "任务",
   "日历",
   "云主机",
+  "网络节点",
   "保险库",
   "分组",
   "设置",

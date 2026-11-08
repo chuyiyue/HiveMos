@@ -32,6 +32,7 @@ import { handleMemoryRequest } from "./memory-http";
 import { handleSoulRequest } from "./soul-http";
 import { handleTasksRequest } from "./tasks-http";
 import { handleMachinesRequest } from "./machines-http";
+import { handleNodesRequest } from "./nodes-http";
 import { runKeepaliveSweep, syncAllConnections } from "./providers";
 import { vaultKeyOf } from "./machines";
 import { handleOverviewRequest } from "./overview-http";
@@ -114,6 +115,8 @@ export default {
       if (tasks) return tasks;
       const machines = await handleMachinesRequest(request, env, wait, path);
       if (machines) return machines;
+      const nodes = await handleNodesRequest(request, env, wait, path);
+      if (nodes) return nodes;
       const overview = await handleOverviewRequest(request, env, wait, path);
       if (overview) return overview;
       const records = await handleRecordsRequest(request, env, wait, path);
