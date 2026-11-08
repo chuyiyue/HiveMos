@@ -39,6 +39,7 @@ import { handleRecordsRequest } from "./records-http";
 import { handleOplogRequest } from "./oplog-http";
 import { handleSystemRequest, recordCronRun } from "./system-http";
 import { handleSettingsRequest } from "./settings-http";
+import { handleBackupRequest } from "./backup-http";
 import { cronSweepDue } from "./settings";
 import { handleVaultRequest } from "./vault-http";
 import { handleExtrasRequest } from "./extras-http";
@@ -125,6 +126,9 @@ export default {
       // same admin gate.
       const settings = await handleSettingsRequest(request, env, path);
       if (settings) return settings;
+      // 同步与备份：目标配置、活体测试与手动备份。
+      const backup = await handleBackupRequest(request, env, path);
+      if (backup) return backup;
       const vault = await handleVaultRequest(request, env, wait, path);
       if (vault) return vault;
       const extras = await handleExtrasRequest(request, env, wait, path);
