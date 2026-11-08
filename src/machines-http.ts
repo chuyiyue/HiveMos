@@ -7,11 +7,14 @@ import type { Env, WaitCtx } from "./env";
 import {
   createMachine,
   deleteMachine,
+  fetchWorkersForMachine,
   listMachines,
   MACHINE_KINDS,
   MachineError,
   machinePublic,
+  revealMachineSecret,
   updateMachine,
+  vaultKeyOf,
 } from "./machines";
 
 const MAX_BODY_BYTES = 64 * 1024;
@@ -20,6 +23,8 @@ const ACTOR = "user";
 export async function handleMachinesRequest(request: Request, env: Env, ctx: WaitCtx, path: string): Promise<Response | null> {
   void ctx;
   if (path === "/api/machines") return collection(request, env);
+  const action = /^\/api\/machines\/([A-Za-z0-9_-]+)\/(reveal|workers)$/.exec(path);
+  if (action && action[1] && action[2]) return machineAction(request, env, action[1], action[2]);
   const one = /^\/api\/machines\/([A-Za-z0-9_-]+)$/.exec(path);
   if (one && one[1]) return machineOne(request, env, one[1]);
   return null;
@@ -65,7 +70,7 @@ async function collection(request: Request, env: Env): Promise<Response> {
     const body = await readBody(request);
     if (!body.ok) return body.response;
     return wrap(async () => {
-      const created = await createMachine(env.DB, body.value, ACTOR, "panel", Date.now());
+      const created = await createMachine(env.DB, body.value, ACTOR, "panel", Date.now(), vaultKeyOf(env));
       return json({ ok: true, machine: machinePublic(created) }, 201);
     });
   }
@@ -79,7 +84,7 @@ async function machineOne(request: Request, env: Env, id: string): Promise<Respo
     if (gate) return gate;
     const body = await readBody(request);
     if (!body.ok) return body.response;
-    return wrap(async () => json({ ok: true, machine: machinePublic(await updateMachine(env.DB, id, body.value, ACTOR, "panel", Date.now())) }));
+    return wrap(async () => json({ ok: true, machine: machinePublic(await updateMachine(env.DB, id, body.value, ACTOR, "panel", Date.now(), vaultKeyOf(env))) }));
   }
   if (method === "DELETE") {
     const gate = await mutationGate(request);
@@ -90,4 +95,23 @@ async function machineOne(request: Request, env: Env, id: string): Promise<Respo
     });
   }
   return methodNotAllowed("PATCH, DELETE");
+}
+
+// POST-only sub actions: reveal hands back the stored secret (audited in the
+// core), workers lists the Cloudflare account's scripts with the stored
+// token. Neither accepts a body.
+async function machineAction(request: Request, env: Env, id: string, action: string): Promise<Response> {
+  if (request.method.toUpperCase() !== "POST") return methodNotAllowed("POST");
+  const gate = await mutationGate(request);
+  if (gate) return gate;
+  if (action === "reveal") {
+    return wrap(async () => {
+      const result = await revealMachineSecret(env.DB, id, vaultKeyOf(env), ACTOR, Date.now());
+      return json({ ok: true, reveal: result });
+    });
+  }
+  return wrap(async () => {
+    const result = await fetchWorkersForMachine(env.DB, id, vaultKeyOf(env), ACTOR, Date.now());
+    return json({ ok: true, workers: result.workers, fetched_at: result.fetched_at });
+  });
 }
