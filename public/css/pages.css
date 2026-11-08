@@ -390,6 +390,7 @@ img, svg, video, canvas { max-width: 100%; }
   white-space: nowrap;
 }
 .page-head .add-bar .add-button { flex: none; width: auto; }
+.page-head-actions .add-button { flex: 0 1 auto; width: auto; }
 
 @media (max-width: 639px) {
   .page-head { flex-direction: column; align-items: stretch; gap: 0; }

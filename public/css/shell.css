@@ -598,9 +598,10 @@ button.account-logout:hover { background: var(--sidebar-bg-hover); color: var(--
 
 @media (max-width: 639px) {
   /* 移动端侧栏：pin 栏跟着底部账号区走，空白留在导航与 pin 栏之间，pin 多时内部滑动 */
-  .sidebar { overflow: hidden; }
+  .sidebar { overflow-y: auto; }
+  body.nav-open { overflow: hidden; }
   .sidebar-nav { flex: 0 0 auto; overflow: visible; }
-  .sidebar-devices { flex: 0 1 auto; margin-top: auto; max-height: 50dvh; min-height: 0; overflow-y: auto; }
+  .sidebar-devices { flex: 0 1 auto; margin-top: auto; min-height: 0; }
   .sidebar-footer { flex: none; }
   .sidebar {
     width: min(84vw, 320px);

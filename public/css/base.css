@@ -156,3 +156,6 @@ code, .mono, pre {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Never let one oversized element scroll the whole page sideways. */
+html { overflow-x: clip; }

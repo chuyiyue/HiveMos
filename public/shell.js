@@ -262,9 +262,24 @@
     else button.removeAttribute("aria-current");
   }
 
+  function alignDrawer() {
+    var sidebar = document.getElementById("sidebar");
+    if (!sidebar) return;
+    var vv = window.visualViewport;
+    var mobile = window.matchMedia("(max-width: 639px)").matches;
+    if (vv && mobile && sidebar.classList.contains("is-open")) {
+      sidebar.style.top = vv.offsetTop + "px";
+      sidebar.style.height = vv.height + "px";
+    } else {
+      sidebar.style.top = "";
+      sidebar.style.height = "";
+    }
+  }
+
   function closeSidebar() {
     var sidebar = document.getElementById("sidebar");
     if (sidebar) sidebar.classList.remove("is-open");
+    alignDrawer();
     var backdrop = document.getElementById("sidebar-backdrop");
     if (backdrop) backdrop.hidden = true;
     var menu = document.getElementById("menu-toggle");
@@ -280,6 +295,7 @@
     var menu = document.getElementById("menu-toggle");
     if (menu) menu.setAttribute("aria-expanded", "true");
     document.body.classList.add("nav-open");
+    alignDrawer();
   }
 
   function bindDrawer() {
@@ -293,6 +309,7 @@
       });
     }
     if (backdrop) backdrop.addEventListener("click", closeSidebar);
+    if (window.visualViewport) window.visualViewport.addEventListener("resize", alignDrawer);
     document.addEventListener("keydown", function (event) {
       if (event.key === "Escape") closeSidebar();
     });

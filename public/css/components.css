@@ -505,7 +505,7 @@ article.record {
 
 .card-actions { display: flex; gap: 8px; }
 
-.card-actions > button { flex: 1 1 0; min-width: 0; min-height: 38px; }
+.card-actions > button { flex: 1 1 0; min-width: 0; min-height: 38px; white-space: nowrap; }
 .card-actions > button.accent { background: var(--accent); border-color: var(--accent); color: #fff; }
 .wp-tabs { display: flex; flex-wrap: wrap; width: fit-content; max-width: 100%; padding: 3px; gap: 3px; margin-bottom: 16px; background: var(--bg-sunken); border-radius: var(--r-md); }
 .wp-tab { flex: 0 0 auto; min-height: 34px; appearance: none; background: transparent; border: 0; border-radius: calc(var(--r-md) - 3px); color: var(--text-2); font: inherit; padding: 6px 14px; cursor: pointer; -webkit-tap-highlight-color: transparent; }
@@ -948,3 +948,12 @@ a.alert-row:hover { background: var(--surface-hover); }
 .card-list > article.record { height: 100%; }
 article.record .card-actions { margin-top: auto; }
 .mem-card { height: 100%; }
+
+/* Mobile: card action rows become a two-column grid (four-grid for 4 buttons)
+   instead of squeezing into narrow columns with vertically wrapped text. */
+@media (max-width: 639px) {
+  .card-actions { display: grid; grid-template-columns: 1fr 1fr; }
+  .card-actions > button { width: 100%; }
+  .record.agent-card .card-actions { display: grid; }
+  .record.agent-card .card-actions > button { width: 100%; }
+}
