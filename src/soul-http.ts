@@ -8,14 +8,17 @@ import {
   SoulError,
   createSoul,
   deleteSoul,
+  deleteSoulVersion,
   getSoulById,
   listSouls,
   listVersions,
+  moveSoulVersion,
   rollbackSoul,
   soulDetail,
   soulSummary,
   soulVersionPublic,
   updateSoul,
+  updateSoulVersion,
 } from "./soul";
 import { logOp, panelActor } from "./oplog";
 
@@ -28,6 +31,10 @@ export async function handleSoulRequest(request: Request, env: Env, ctx: WaitCtx
     return json({ ok: false, error: "跨站请求被拒绝" }, 403);
   }
   if (path === "/api/soul") return collection(request, env);
+  const versionMove = /^\/api\/soul\/([A-Za-z0-9_-]+)\/versions\/(\d+)\/move$/.exec(path);
+  if (versionMove && versionMove[1] && versionMove[2]) return versionMoveRoute(request, env, versionMove[1], versionMove[2]);
+  const versionOne = /^\/api\/soul\/([A-Za-z0-9_-]+)\/versions\/(\d+)$/.exec(path);
+  if (versionOne && versionOne[1] && versionOne[2]) return versionOneRoute(request, env, versionOne[1], versionOne[2]);
   const versions = /^\/api\/soul\/([A-Za-z0-9_-]+)\/versions$/.exec(path);
   if (versions && versions[1]) return versionsRoute(request, env, versions[1]);
   const rollback = /^\/api\/soul\/([A-Za-z0-9_-]+)\/rollback$/.exec(path);
@@ -125,13 +132,77 @@ async function oneRoute(request: Request, env: Env, id: string): Promise<Respons
   return methodNotAllowed("GET, PATCH, DELETE");
 }
 
+function pathVersion(raw: string): number {
+  if (!/^\d+$/.test(raw)) throw new SoulError(400, "请提供版本号");
+  const version = Number(raw);
+  if (!Number.isInteger(version) || version < 1) throw new SoulError(400, "请提供版本号");
+  return version;
+}
+
 async function versionsRoute(request: Request, env: Env, id: string): Promise<Response> {
   if (request.method.toUpperCase() !== "GET") return methodNotAllowed("GET");
   return wrap(async () => {
     const row = await getSoulById(env.DB, id);
     if (!row) return json({ ok: false, error: "Soul 不存在" }, 404);
     const versions = await listVersions(env.DB, id);
-    return json({ ok: true, versions: versions.map(soulVersionPublic) });
+    return json({ ok: true, current_version: row.version, versions: versions.map(soulVersionPublic) });
+  });
+}
+
+async function versionOneRoute(request: Request, env: Env, id: string, rawVersion: string): Promise<Response> {
+  const method = request.method.toUpperCase();
+  if (method === "PATCH") {
+    const body = await readBody(request);
+    if (!body.ok) return body.response;
+    return wrap(async () => {
+      const version = pathVersion(rawVersion);
+      const updated = await updateSoulVersion(env.DB, id, version, body.value, Date.now());
+      if (updated.contentChanged) {
+        const live = updated.version.version === updated.soul.version;
+        await logOp(env.DB, {
+          actor: await panelActor(request, env),
+          module: "Soul",
+          action: "修改",
+          targetId: id,
+          targetName: updated.soul.agent_name,
+          text: live
+            ? `修改了 Soul（${updated.soul.agent_name}）的当前版本 v${updated.version.version}`
+            : `修改了 Soul（${updated.soul.agent_name}）的历史版本 v${updated.version.version}`,
+        });
+      }
+      return json({ ok: true, version: soulVersionPublic(updated.version), soul: soulDetail(updated.soul) });
+    });
+  }
+  if (method === "DELETE") {
+    return wrap(async () => {
+      const version = pathVersion(rawVersion);
+      const removed = await deleteSoulVersion(env.DB, id, version);
+      await logOp(env.DB, {
+        actor: await panelActor(request, env),
+        module: "Soul",
+        action: "删除",
+        targetId: id,
+        targetName: removed.agentName,
+        text: `删除了 Soul（${removed.agentName}）的历史版本 v${removed.version}`,
+      });
+      return json({ ok: true });
+    });
+  }
+  return methodNotAllowed("PATCH, DELETE");
+}
+
+async function versionMoveRoute(request: Request, env: Env, id: string, rawVersion: string): Promise<Response> {
+  if (request.method.toUpperCase() !== "POST") return methodNotAllowed("POST");
+  const body = await readBody(request);
+  if (!body.ok) return body.response;
+  return wrap(async () => {
+    const version = pathVersion(rawVersion);
+    const moved = await moveSoulVersion(env.DB, id, version, body.value.direction);
+    return json({
+      ok: true,
+      current_version: moved.currentVersion,
+      versions: moved.versions.map(soulVersionPublic),
+    });
   });
 }
 

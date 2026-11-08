@@ -94,8 +94,8 @@ const fixtures = {
     { id: "soul_ledger", agent_name: "ledger", version: 2, ai_status: null, ai_summary: null, created_at: 1793000000000, updated_at: 1794090000000, content: "# 值守人格\n\n先核对再动手\n" },
   ],
   soul_versions: [
-    { id: "sv_1", soul_id: "soul_ledger", version: 1, source: "panel", actor: "roye", created_at: 1793000000000, content: "# 初版\n" },
-    { id: "sv_2", soul_id: "soul_ledger", version: 2, source: "panel", actor: "roye", created_at: 1794090000000, content: "# 值守人格\n\n先核对再动手\n" },
+    { id: "sv_1", soul_id: "soul_ledger", version: 1, source: "panel", actor: "roye", created_at: 1793000000000, label: null, sort_order: 1, content: "# 初版\n" },
+    { id: "sv_2", soul_id: "soul_ledger", version: 2, source: "panel", actor: "roye", created_at: 1794090000000, label: "值守口径", sort_order: 0, content: "# 值守人格\n\n先核对再动手\n" },
   ],
   tasks: [
     { id: "task_1", title: "核对备份包", note: "读 manifest", status: "active", assignee: "ledger", from_label: "roye", source: "panel", ai_status: null, ai_summary: null, created_at: 1794000000000, updated_at: 1794090000000, completed_at: null },

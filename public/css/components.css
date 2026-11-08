@@ -511,6 +511,12 @@ article.record {
 @media (max-width: 639px) {
   article.soul-card .card-actions > button { padding-left: 6px; padding-right: 6px; white-space: nowrap; }
 }
+
+/* 历史版本一行按钮多，按内容宽度换行，不跟卡片三等分。 */
+article.soul-version .card-actions { display: flex; flex-wrap: wrap; }
+article.soul-version .card-actions > button { flex: 0 1 auto; width: auto; min-height: 32px; padding: 4px 10px; }
+article.soul-version .ver-rename { flex: 1 0 100%; display: grid; gap: 8px; }
+article.soul-version .ver-rename .manage-actions { margin-top: 0; }
 .wp-tabs { display: flex; flex-wrap: wrap; width: fit-content; max-width: 100%; padding: 3px; gap: 3px; margin-bottom: 16px; background: var(--bg-sunken); border-radius: var(--r-md); }
 .wp-tab { flex: 0 0 auto; min-height: 34px; appearance: none; background: transparent; border: 0; border-radius: calc(var(--r-md) - 3px); color: var(--text-2); font: inherit; padding: 6px 14px; cursor: pointer; -webkit-tap-highlight-color: transparent; }
 .wp-tab[aria-selected="true"] { background: var(--surface); color: var(--text); font-weight: 600; box-shadow: var(--shadow-1); }

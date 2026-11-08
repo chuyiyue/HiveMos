@@ -34,9 +34,15 @@ export interface SoulVersionRow {
   source: string;
   actor: string | null;
   created_at: number;
+  // Empty label means the panel shows the default name (version + time).
+  label: string | null;
+  // Lower comes first. Ties break by version descending, so untouched rows
+  // (all 0) stay newest-first. Display order only — not the live version.
+  sort_order: number;
 }
 
 const MAX_NAME_CHARS = 80;
+const MAX_LABEL_CHARS = 80;
 const MAX_CONTENT_CHARS = 256 * 1024;
 
 function rowsOf<T>(value: { results?: T[] } | T[] | null | undefined): T[] {
@@ -67,13 +73,21 @@ export function soulDetail(row: SoulRow): Record<string, unknown> {
   return { ...soulSummary(row), content: row.content };
 }
 
+function sortOrderOf(row: SoulVersionRow): number {
+  const value = Number(row.sort_order);
+  return Number.isFinite(value) ? value : 0;
+}
+
 export function soulVersionPublic(row: SoulVersionRow): Record<string, unknown> {
+  const label = typeof row.label === "string" ? row.label.trim() : "";
   return {
     version: row.version,
     content: row.content,
     source: row.source,
     actor: row.actor,
     created_at: row.created_at,
+    label: label || null,
+    sort_order: sortOrderOf(row),
   };
 }
 
@@ -92,6 +106,21 @@ async function audit(
   ).run();
 }
 
+// One less than the current minimum, so a newly written version sorts to
+// the front without renumbering the rows already on the list. The label
+// stays null: the panel shows the default name until someone renames it.
+async function frontSortOrder(db: D1Database, soulId: string): Promise<number> {
+  const row = await prepare(
+    db,
+    "SELECT MIN(sort_order) AS min_sort FROM soul_versions WHERE soul_id = ?",
+    [soulId],
+  ).first<{ min_sort: number | null }>();
+  if (!row || row.min_sort == null) return 0;
+  const min = Number(row.min_sort);
+  if (!Number.isFinite(min)) return 0;
+  return min - 1;
+}
+
 async function insertVersion(
   db: D1Database,
   soulId: string,
@@ -101,10 +130,11 @@ async function insertVersion(
   actor: string,
   now: number,
 ): Promise<void> {
+  const sortOrder = await frontSortOrder(db, soulId);
   await prepare(
     db,
-    "INSERT INTO soul_versions (id, soul_id, version, content, source, actor, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-    [newId("sver_"), soulId, version, content, source, actor, now],
+    "INSERT INTO soul_versions (id, soul_id, version, content, source, actor, created_at, label, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)",
+    [newId("sver_"), soulId, version, content, source, actor, now, sortOrder],
   ).run();
 }
 
@@ -120,6 +150,21 @@ function readContent(value: unknown): string {
   if (typeof value !== "string") throw new SoulError(400, "内容格式不正确");
   if (value.length > MAX_CONTENT_CHARS) throw new SoulError(400, "内容过长");
   return value;
+}
+
+// null clears the custom name and the panel falls back to the default.
+function readLabel(value: unknown): string | null {
+  if (value == null) return null;
+  if (typeof value !== "string") throw new SoulError(400, "名称格式不正确");
+  const label = value.trim();
+  if (!label) return null;
+  if (label.length > MAX_LABEL_CHARS) throw new SoulError(400, "名称需要 1 到 80 个字符");
+  return label;
+}
+
+function readDirection(value: unknown): "up" | "down" {
+  if (value === "up" || value === "down") return value;
+  throw new SoulError(400, "请指定上移或下移");
 }
 
 export async function listSouls(db: D1Database): Promise<SoulRow[]> {
@@ -138,7 +183,7 @@ export async function getSoulByName(db: D1Database, agentName: string): Promise<
 export async function listVersions(db: D1Database, soulId: string): Promise<SoulVersionRow[]> {
   const listed = await prepare(
     db,
-    "SELECT * FROM soul_versions WHERE soul_id = ? ORDER BY version DESC",
+    "SELECT * FROM soul_versions WHERE soul_id = ? ORDER BY sort_order ASC, version DESC",
     [soulId],
   ).all<SoulVersionRow>();
   return rowsOf(listed);
@@ -258,6 +303,110 @@ export async function rollbackSoul(
   const updated = await getSoulById(db, id);
   if (!updated) throw new SoulError(500, "回滚后读取失败");
   return updated;
+}
+
+// Rename and in-place content edit. Neither bumps souls.version nor inserts
+// a history row. Editing the live version also writes souls.content, so the
+// entry and its current history row stay one copy of the same text.
+export async function updateSoulVersion(
+  db: D1Database,
+  soulId: string,
+  version: number,
+  input: { label?: unknown; content?: unknown },
+  now: number,
+): Promise<{ soul: SoulRow; version: SoulVersionRow; contentChanged: boolean }> {
+  const soul = await getSoulById(db, soulId);
+  if (!soul) throw new SoulError(404, "Soul 不存在");
+  const row = await getVersion(db, soulId, version);
+  if (!row) throw new SoulError(404, "这个版本不存在");
+  const hasLabel = input.label !== undefined;
+  const hasContent = input.content !== undefined;
+  if (!hasLabel && !hasContent) throw new SoulError(400, "没有要保存的内容");
+
+  const label = hasLabel ? readLabel(input.label) : row.label ?? null;
+  const content = hasContent ? readContent(input.content) : row.content;
+  const labelChanged = hasLabel && label !== (row.label ?? null);
+  const contentChanged = hasContent && content !== row.content;
+  if (labelChanged || contentChanged) {
+    const statements = [
+      prepare(db, "UPDATE soul_versions SET label = ?, content = ? WHERE soul_id = ? AND version = ?", [
+        label,
+        content,
+        soulId,
+        version,
+      ]),
+    ];
+    if (contentChanged && version === soul.version) {
+      statements.push(
+        prepare(db, "UPDATE souls SET content = ?, updated_at = ? WHERE id = ? AND version = ?", [
+          content,
+          now,
+          soulId,
+          version,
+        ]),
+      );
+    }
+    await db.batch(statements);
+  }
+  const updatedSoul = await getSoulById(db, soulId);
+  const updatedVersion = await getVersion(db, soulId, version);
+  if (!updatedSoul || !updatedVersion) throw new SoulError(500, "保存后读取失败");
+  return { soul: updatedSoul, version: updatedVersion, contentChanged };
+}
+
+export async function deleteSoulVersion(
+  db: D1Database,
+  soulId: string,
+  version: number,
+): Promise<{ agentName: string; version: number }> {
+  const soul = await getSoulById(db, soulId);
+  if (!soul) throw new SoulError(404, "Soul 不存在");
+  const row = await getVersion(db, soulId, version);
+  if (!row) throw new SoulError(404, "这个版本不存在");
+  const versions = await listVersions(db, soulId);
+  if (versions.length <= 1) throw new SoulError(400, "至少保留一个版本");
+  if (version === soul.version) {
+    throw new SoulError(400, "当前生效版本不能删除，请先回滚到其他版本再删");
+  }
+  await prepare(db, "DELETE FROM soul_versions WHERE soul_id = ? AND version = ?", [soulId, version]).run();
+  return { agentName: soul.agent_name, version };
+}
+
+// Swaps with the neighbour in display order, then rewrites sort_order as
+// 0..n-1. The live version number and souls.version are left alone.
+export async function moveSoulVersion(
+  db: D1Database,
+  soulId: string,
+  version: number,
+  directionRaw: unknown,
+): Promise<{ versions: SoulVersionRow[]; currentVersion: number }> {
+  const soul = await getSoulById(db, soulId);
+  if (!soul) throw new SoulError(404, "Soul 不存在");
+  const direction = readDirection(directionRaw);
+  const versions = await listVersions(db, soulId);
+  const index = versions.findIndex((entry) => entry.version === version);
+  if (index < 0) throw new SoulError(404, "这个版本不存在");
+  const target = direction === "up" ? index - 1 : index + 1;
+  if (target < 0 || target >= versions.length) {
+    return { versions, currentVersion: soul.version };
+  }
+  const next = versions.slice();
+  const current = next[index];
+  const neighbor = next[target];
+  if (!current || !neighbor) return { versions, currentVersion: soul.version };
+  next[index] = neighbor;
+  next[target] = current;
+  await db.batch(
+    next.map((entry, order) =>
+      prepare(db, "UPDATE soul_versions SET sort_order = ? WHERE soul_id = ? AND version = ?", [
+        order,
+        soulId,
+        entry.version,
+      ]),
+    ),
+  );
+  const listed = await listVersions(db, soulId);
+  return { versions: listed, currentVersion: soul.version };
 }
 
 export async function deleteSoul(db: D1Database, id: string, actor: string, now: number): Promise<void> {
