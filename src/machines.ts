@@ -70,6 +70,8 @@ export interface MachineRow {
   remote_state: string | null;
   last_sync_at: number | null;
   group_id: string | null;
+  icon: string | null;
+  icon_manual: number;
   ai_summary: string | null;
   ai_tags: string | null;
   created_at: number;
@@ -113,12 +115,14 @@ export interface PublicMachine {
   remote_state: string | null;
   last_sync_at: number | null;
   group_id: string | null;
+  icon: string | null;
+  icon_manual: boolean;
   created_at: number;
   updated_at: number;
 }
 
 const COLUMNS =
-  "id, kind, name, region, spec, description, version, status, binding, last_heartbeat_at, note, hostname, os, ip, ssh_host, ssh_port, ssh_user, auth_type, ssh_secret_enc, ssh_tail, kernel, arch, probe_status, probe_at, probe_error, host_fingerprint, vendor, access_note, cf_account_id, platform, team_id, api_token_enc, api_token_tail, connection_id, remote_id, remote_name, last_sync_at, ai_summary, ai_tags, created_at, updated_at, group_id, remote_state";
+  "id, kind, name, region, spec, description, version, status, binding, last_heartbeat_at, note, hostname, os, ip, ssh_host, ssh_port, ssh_user, auth_type, ssh_secret_enc, ssh_tail, kernel, arch, probe_status, probe_at, probe_error, host_fingerprint, vendor, access_note, cf_account_id, platform, team_id, api_token_enc, api_token_tail, connection_id, remote_id, remote_name, last_sync_at, ai_summary, ai_tags, created_at, updated_at, group_id, remote_state, icon, icon_manual";
 
 const ID_PREFIX: Record<string, string> = { server: "sv_", cloud: "pc_", worker: "wk_" };
 
@@ -166,9 +170,35 @@ export function machinePublic(row: MachineRow): PublicMachine {
     remote_state: row.remote_state ?? null,
     last_sync_at: row.last_sync_at,
     group_id: row.group_id,
+    icon: row.icon ?? null,
+    icon_manual: !!row.icon_manual,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
+}
+
+// OS icon ids, mirroring the icon-os-* symbols in public/icons.svg and
+// OS_ICONS in public/machines.js (keep the three lists in sync).
+export const OS_ICON_IDS = [
+  "debian", "ubuntu", "centos", "fedora", "arch", "alpine",
+  "suse", "redhat", "freebsd", "windows", "macos", "linux",
+];
+
+export function osIconForOs(os: string): string | null {
+  const s = (os || "").toLowerCase();
+  if (!s.trim()) return null;
+  if (s.includes("debian")) return "debian";
+  if (s.includes("ubuntu")) return "ubuntu";
+  if (s.includes("centos")) return "centos";
+  if (s.includes("fedora")) return "fedora";
+  if (s.includes("arch")) return "arch";
+  if (s.includes("alpine")) return "alpine";
+  if (s.includes("suse")) return "suse";
+  if (s.includes("red hat") || s.includes("redhat") || s.includes("rhel")) return "redhat";
+  if (s.includes("freebsd")) return "freebsd";
+  if (s.includes("windows")) return "windows";
+  if (s.includes("darwin") || s.includes("mac")) return "macos";
+  return "linux";
 }
 
 export async function listMachines(db: D1Database, kind: string | null): Promise<MachineRow[]> {
@@ -513,11 +543,26 @@ export async function updateMachine(
       changed.push("api_token");
     }
   }
+  if (row.kind === "server" && Object.prototype.hasOwnProperty.call(input, "icon")) {
+    const raw = input["icon"];
+    if (raw === null) {
+      // Back to automatic: re-derive from the OS currently on record.
+      next.icon_manual = 0;
+      next.icon = osIconForOs(next.os);
+      changed.push("icon");
+    } else if (typeof raw === "string" && OS_ICON_IDS.includes(raw)) {
+      next.icon = raw;
+      next.icon_manual = 1;
+      changed.push("icon");
+    } else {
+      throw new MachineError(400, "系统图标不正确");
+    }
+  }
   // status / last_heartbeat_at in the payload are ignored on purpose: they
   // are runtime fields owned by machines_report.
   await prepare(
     db,
-    "UPDATE machines SET name = ?, region = ?, spec = ?, description = ?, binding = ?, note = ?, hostname = ?, os = ?, ip = ?, ssh_host = ?, ssh_port = ?, ssh_user = ?, auth_type = ?, ssh_secret_enc = ?, ssh_tail = ?, vendor = ?, access_note = ?, cf_account_id = ?, team_id = ?, api_token_enc = ?, api_token_tail = ?, group_id = ?, updated_at = ? WHERE id = ?",
+    "UPDATE machines SET name = ?, region = ?, spec = ?, description = ?, binding = ?, note = ?, hostname = ?, os = ?, ip = ?, ssh_host = ?, ssh_port = ?, ssh_user = ?, auth_type = ?, ssh_secret_enc = ?, ssh_tail = ?, vendor = ?, access_note = ?, cf_account_id = ?, team_id = ?, api_token_enc = ?, api_token_tail = ?, group_id = ?, icon = ?, icon_manual = ?, updated_at = ? WHERE id = ?",
     [
       next.name,
       next.region,
@@ -541,6 +586,8 @@ export async function updateMachine(
       next.api_token_enc,
       next.api_token_tail,
       next.group_id,
+      next.icon,
+      next.icon_manual,
       now,
       id,
     ],
@@ -909,7 +956,7 @@ export async function probeMachineById(
     const region = (await lookupRegionByIp(host)) || row.region;
     await prepare(
       db,
-      "UPDATE machines SET name = ?, hostname = ?, os = ?, spec = ?, kernel = ?, arch = ?, region = ?, host_fingerprint = ?, status = 'running', probe_status = 'ok', probe_at = ?, probe_error = '', last_heartbeat_at = ?, updated_at = ? WHERE id = ?",
+      "UPDATE machines SET name = ?, hostname = ?, os = ?, spec = ?, kernel = ?, arch = ?, region = ?, host_fingerprint = ?, icon = CASE WHEN icon_manual = 0 THEN ? ELSE icon END, status = 'running', probe_status = 'ok', probe_at = ?, probe_error = '', last_heartbeat_at = ?, updated_at = ? WHERE id = ?",
       [
         name,
         result.hostname || row.hostname,
@@ -919,6 +966,7 @@ export async function probeMachineById(
         result.arch,
         region,
         result.fingerprint,
+        osIconForOs(result.os || row.os) ?? row.icon,
         now,
         now,
         now,

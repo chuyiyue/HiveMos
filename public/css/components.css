@@ -830,3 +830,50 @@ a.alert-row:hover { background: var(--surface-hover); }
 /* The pager's compact size select keeps its inline, auto-width shape. */
 .pager-size .cs-wrap { display: inline-block; }
 .pager-size .cs-btn { width: auto; min-height: 32px; padding: 4px 8px; }
+/* Server OS icon picker (machines board). */
+.os-icon-btn {
+  display: inline-flex;
+  padding: 4px;
+  margin: -4px;
+  border: none;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  border-radius: var(--r-sm);
+}
+.os-icon-btn:hover { background: var(--bg-sunken); }
+.os-icon-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin: 10px 0;
+}
+.os-icon-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 12px;
+}
+.os-icon-cell .icon { width: 24px; height: 24px; }
+.os-icon-cell.is-active { border-color: var(--text-3); background: var(--bg-sunken); font-weight: 600; }
+.os-icon-auto {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 9px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 13px;
+}
+.os-icon-auto.is-active { background: var(--bg-sunken); font-weight: 600; }

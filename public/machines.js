@@ -166,10 +166,13 @@
       title: kind === "worker" ? item.name : deviceTitle(item),
       bodyHtml:
         C.manageInfoHead({
-          icon: kind === "worker" ? "layout" : "monitor",
+          icon: kind === "server" ? undefined : kind === "worker" ? "layout" : "monitor",
+          iconHtml: kind === "server" ? serverIconBtnHtml(item) : undefined,
           title: kind === "worker" ? item.name : deviceTitle(item),
-          titleSuffix: kind === "server" && item.status ? " " + C.statusPill(item.status) : "",
-          sub: kindLabel + (item.region && kind !== "worker" ? " · " + item.region : ""),
+          sub:
+            kindLabel +
+            (kind === "server" && item.status ? " " + C.statusPill(item.status) : "") +
+            (item.region && kind !== "worker" ? " · " + item.region : ""),
         }) +
         "<div class=\"manage-info-card\"><dl class=\"kv\">" +
         facts +
@@ -192,6 +195,122 @@
     
   }
 
+  var OS_ICONS = [
+    ["debian", "Debian"],
+    ["ubuntu", "Ubuntu"],
+    ["centos", "CentOS"],
+    ["fedora", "Fedora"],
+    ["arch", "Arch Linux"],
+    ["alpine", "Alpine"],
+    ["suse", "SUSE"],
+    ["redhat", "Red Hat"],
+    ["freebsd", "FreeBSD"],
+    ["windows", "Windows"],
+    ["macos", "macOS"],
+    ["linux", "Linux"],
+  ];
+
+  function osIconIdForOs(os) {
+    var s = String(os || "").toLowerCase();
+    if (!s.trim()) return null;
+    if (s.indexOf("debian") >= 0) return "debian";
+    if (s.indexOf("ubuntu") >= 0) return "ubuntu";
+    if (s.indexOf("centos") >= 0) return "centos";
+    if (s.indexOf("fedora") >= 0) return "fedora";
+    if (s.indexOf("arch") >= 0) return "arch";
+    if (s.indexOf("alpine") >= 0) return "alpine";
+    if (s.indexOf("suse") >= 0) return "suse";
+    if (s.indexOf("red hat") >= 0 || s.indexOf("redhat") >= 0 || s.indexOf("rhel") >= 0) return "redhat";
+    if (s.indexOf("freebsd") >= 0) return "freebsd";
+    if (s.indexOf("windows") >= 0) return "windows";
+    if (s.indexOf("darwin") >= 0 || s.indexOf("mac") >= 0) return "macos";
+    return "linux";
+  }
+
+  function serverIconId(item) {
+    if (item.icon) {
+      for (var i = 0; i < OS_ICONS.length; i++) {
+        if (OS_ICONS[i][0] === item.icon) return item.icon;
+      }
+    }
+    return osIconIdForOs(item.os);
+  }
+
+  function serverIconHtml(item) {
+    var id = serverIconId(item);
+    return C.iconSvg(id ? "os-" + id : "monitor");
+  }
+
+  function serverIconBtnHtml(item) {
+    return (
+      "<button type=\"button\" class=\"os-icon-btn\" data-micon data-id=\"" +
+      C.escapeHtml(item.id) +
+      "\" title=\"更换系统图标\" aria-label=\"更换系统图标\">" +
+      serverIconHtml(item) +
+      "</button>"
+    );
+  }
+
+  function openOsIconPicker(item, headBtn) {
+    var manual = !!item.icon_manual;
+    var cells = OS_ICONS.map(function (pair) {
+      var active = manual && item.icon === pair[0];
+      return (
+        "<button type=\"button\" class=\"os-icon-cell" +
+        (active ? " is-active" : "") +
+        "\" data-os-icon=\"" +
+        pair[0] +
+        "\">" +
+        C.iconSvg("os-" + pair[0]) +
+        "<span>" +
+        pair[1] +
+        "</span></button>"
+      );
+    }).join("");
+    var autoId = osIconIdForOs(item.os);
+    var body =
+      "<p class=\"subtle manage-note\">" +
+      (manual ? "当前是手动选的图标，探活不会覆盖" : "当前跟随系统，探活到新系统时自动换") +
+      "</p>" +
+      "<div class=\"os-icon-grid\">" +
+      cells +
+      "</div>" +
+      "<button type=\"button\" class=\"os-icon-auto" +
+      (manual ? "" : " is-active") +
+      "\" data-os-icon=\"__auto__\">" +
+      C.iconSvg(autoId ? "os-" + autoId : "monitor") +
+      "<span>跟随系统（自动）</span></button>";
+    var ctrl = C.openManageDialog({ title: "系统图标", size: "sm", bodyHtml: body });
+    ctrl.dialog.addEventListener("click", function (event) {
+      var cell = event.target.closest("[data-os-icon]");
+      if (!cell || cell.disabled) return;
+      var pick = cell.getAttribute("data-os-icon");
+      cell.disabled = true;
+      api("PATCH", "/api/machines/" + encodeURIComponent(item.id), {
+        icon: pick === "__auto__" ? null : pick,
+      })
+        .then(function (res) {
+          if (res.data && res.data.ok && res.data.machine) {
+            var updated = res.data.machine;
+            state.items = state.items.map(function (entry) {
+              return entry.id === updated.id ? updated : entry;
+            });
+            if (headBtn) headBtn.innerHTML = serverIconHtml(updated);
+            C.toast("图标已更新");
+            ctrl.close();
+            render();
+          } else {
+            cell.disabled = false;
+            C.toast((res.data && res.data.error) || "图标保存失败");
+          }
+        })
+        .catch(function () {
+          cell.disabled = false;
+          C.toast("图标保存失败");
+        });
+    });
+  }
+
   function card(kind, item, facts, actionsOverride) {
     var lede = kind === "worker" ? item.description : item.region;
     var id = C.escapeHtml(item.id);
@@ -208,7 +327,8 @@
     }
     return C.record({
       id: item.id,
-      icon: kind === "worker" ? "layout" : "monitor",
+      icon: kind === "server" ? undefined : kind === "worker" ? "layout" : "monitor",
+      iconHtml: kind === "server" ? serverIconHtml(item) : undefined,
       title: kind === "worker" ? item.name : deviceTitle(item),
       pill: kind === "host" ? connName(item) || undefined : undefined,
       corner: C.statusPill(item.connection_id ? remoteStateOf(item) : item.status),
@@ -1843,6 +1963,15 @@
       return;
     }
     if (target.closest("[data-copy]")) return;
+    var miconBtn = target.closest("[data-micon]");
+    if (miconBtn) {
+      var miconItem = null;
+      state.items.forEach(function (entry) {
+        if (entry.id === miconBtn.getAttribute("data-id")) miconItem = entry;
+      });
+      if (miconItem) openOsIconPicker(miconItem, miconBtn);
+      return;
+    }
     var importOne = target.closest("[data-conn-import-one]");
     if (importOne) {
       importDevices([importOne.getAttribute("data-conn-import-one")], importOne);
