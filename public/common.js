@@ -606,6 +606,12 @@
       escapeHtml(endpoint) +
       "\" data-label=\"复制接入地址\">复制接入地址</button>" +
       "</div>" +
+      "<div class=\"agent-records\">" +
+      "<h3>访问记录</h3>" +
+      "<div data-agent-records-body>" +
+      (opts && opts.recordsHtml ? opts.recordsHtml : '<p class="subtle">正在读取</p>') +
+      "</div>" +
+      "</div>" +
       "</div>" +
       "<div data-mpanel=\"perms\" hidden>" +
       "<p class=\"subtle manage-note\">这个 Agent 通过面板 MCP 能访问的系统功能，在下方点选后点保存权限统一生效</p>" +
@@ -929,7 +935,7 @@
           if (!dataChanged) return;
           if (silent && (interacted || busy)) return;
           ctrl.setTitle(fresh.name);
-          ctrl.setBody(agentManageBody(fresh, groupNameOf(fresh), {}));
+          ctrl.setBody(agentManageBody(fresh, groupNameOf(fresh), { recordsHtml: agentRecordsHtml }));
           syncPermUI();
         })
         .catch(function () {
@@ -1206,7 +1212,59 @@
 
     wireManageTabs(ctrl);
     syncPermUI();
+    // ---- This agent's own records (local async fill; never blocks open) ----
+
+    var agentRecordsHtml = null;
+
+    function fillAgentRecords() {
+      if (!ctrl.bodyEl || agentRecordsHtml === null) return;
+      var body = ctrl.bodyEl.querySelector("[data-agent-records-body]");
+      if (body) body.innerHTML = agentRecordsHtml;
+    }
+
+    function loadAgentRecords() {
+      agentApi("GET", "/api/records?agent_id=" + encodeURIComponent(agentId) + "&limit=8")
+        .then(function (result) {
+          if (result.status === 401) {
+            location.assign("/login.html");
+            return;
+          }
+          var records =
+            result.data && result.data.ok === true && Array.isArray(result.data.records) ? result.data.records : null;
+          if (!records) {
+            agentRecordsHtml = '<p class="subtle">访问记录暂时读不到</p>';
+          } else if (!records.length) {
+            agentRecordsHtml = '<p class="subtle">还没有访问记录，这个 Agent 的取用与操作会留在这里</p>';
+          } else {
+            agentRecordsHtml =
+              '<ol class="feed">' +
+              records
+                .map(function (item) {
+                  return (
+                    '<li><time datetime="' +
+                    escapeHtml(new Date(item.at).toISOString()) +
+                    '">' +
+                    escapeHtml(formatMinute(item.at) || "") +
+                    '</time><span><span class="tag">' +
+                    escapeHtml(item.module_label) +
+                    "</span> " +
+                    escapeHtml(item.text) +
+                    "</span></li>"
+                  );
+                })
+                .join("") +
+              "</ol>";
+          }
+          fillAgentRecords();
+        })
+        .catch(function () {
+          agentRecordsHtml = '<p class="subtle">访问记录暂时读不到</p>';
+          fillAgentRecords();
+        });
+    }
+
     var initialRefresh = refresh(seed ? { silent: true } : undefined);
+    loadAgentRecords();
     return ctrl;
   }
 
