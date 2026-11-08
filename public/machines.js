@@ -18,6 +18,10 @@
   var TITLE_FOR = { server: "服务器", host: "云主机", worker: "Worker" };
 
   var state = { items: [], connections: [], groups: [], loaded: false, loadError: "" };
+  // Full credential values stay off the list payloads. Each surface fetches
+  // its own row and caches it for the rest of the page session.
+  var connCreds = {};
+  var workerTokens = {};
 
   function api(method, url, body) {
     var headers = { accept: "application/json" };
@@ -134,7 +138,7 @@
         (item.platform === "vercel"
           ? row("Team ID", C.escapeHtml(item.team_id || "个人账号"))
           : row("Cloudflare 账号", C.escapeHtml(item.cf_account_id || "未填写"))) +
-        row("API 令牌", item.api_token_tail ? "末四位 " + C.escapeHtml(item.api_token_tail) : "未填写") +
+        row("API 令牌", item.api_token_tail ? workerTokenHtml(item, true) : "未填写") +
         row("版本", C.escapeHtml(item.version || "未记录")) +
         row("更新时间", C.escapeHtml(C.formatMinute(item.updated_at) || "—"));
     } else if (item.connection_id) {
@@ -403,7 +407,7 @@
       if (item.platform === "vercel") {
         if (item.team_id) facts.push(["Team ID", C.escapeHtml(item.team_id)]);
       } else if (item.cf_account_id) facts.push(["Cloudflare 账号", C.escapeHtml(item.cf_account_id)]);
-      if (item.api_token_tail) facts.push(["API 令牌", "末四位 " + C.escapeHtml(item.api_token_tail)]);
+      if (item.api_token_tail) facts.push(["API 令牌", workerTokenHtml(item, activeTab === "workers")]);
       return card("worker", item, facts);
     }
     if (uiKind === "server") {
@@ -674,6 +678,7 @@
               ctrl.setError((res.data && res.data.error) || "保存失败，请重试");
               return;
             }
+            if (kind === "worker" && item && payload.api_token) delete workerTokens[item.id];
             ctrl.close();
             load();
           })
@@ -1266,6 +1271,131 @@
     return found;
   }
 
+  function copyValueHtml(value) {
+    var shown = C.escapeHtml(value);
+    return "<span class=\"copy-text\" data-copy=\"" + shown + "\" data-label=\"" + shown + "\" title=\"点击复制\">" + shown + "</span>";
+  }
+
+  function connCredInner(conn, kick) {
+    var entry = connCreds[conn.id];
+    if (entry && entry.status === "ok") return entry.value ? copyValueHtml(entry.value) : "已保存";
+    if (entry && entry.status === "error") {
+      var tail = conn.config_tail ? "末四位 " + C.escapeHtml(conn.config_tail) : "已保存";
+      return "<span class=\"copy-text\" data-conn-cred-retry=\"" + C.escapeHtml(conn.id) + "\" title=\"读取失败，点击重试\">" + tail + "</span>";
+    }
+    if (kick) ensureConnCred(conn.id);
+    return "读取中";
+  }
+
+  function connCredHtml(conn) {
+    return "<span data-conn-cred=\"" + C.escapeHtml(conn.id) + "\">" + connCredInner(conn, true) + "</span>";
+  }
+
+  function paintConnCred(id) {
+    var conn = findConn(id);
+    if (!conn) return;
+    var html = connCredInner(conn, false);
+    document.querySelectorAll("[data-conn-cred]").forEach(function (node) {
+      if (node.getAttribute("data-conn-cred") === id) node.innerHTML = html;
+    });
+  }
+
+  function ensureConnCred(id) {
+    var entry = connCreds[id];
+    if (entry && (entry.status === "loading" || entry.status === "ok")) return;
+    var ticket = {};
+    connCreds[id] = { status: "loading", value: "", ticket: ticket };
+    api("GET", "/api/machines/providers/" + encodeURIComponent(id) + "/credential")
+      .then(function (res) {
+        if (!connCreds[id] || connCreds[id].ticket !== ticket) return;
+        if (res.data && res.data.ok && typeof res.data.credential === "string") {
+          connCreds[id] = { status: "ok", value: res.data.credential };
+        } else {
+          connCreds[id] = { status: "error", value: "" };
+        }
+        paintConnCred(id);
+      })
+      .catch(function () {
+        if (!connCreds[id] || connCreds[id].ticket !== ticket) return;
+        connCreds[id] = { status: "error", value: "" };
+        paintConnCred(id);
+      });
+  }
+
+  function retryConnCred(id) {
+    if (!id) return;
+    delete connCreds[id];
+    ensureConnCred(id);
+    paintConnCred(id);
+  }
+
+  function findMachine(id) {
+    var found = null;
+    state.items.forEach(function (entry) { if (entry.id === id) found = entry; });
+    return found;
+  }
+
+  function workerTokenInner(item, kick) {
+    var entry = workerTokens[item.id];
+    if (entry && entry.status === "ok") return entry.value ? copyValueHtml(entry.value) : "未填写";
+    if (entry && entry.status === "error") {
+      var tail = item.api_token_tail ? "末四位 " + C.escapeHtml(item.api_token_tail) : "未填写";
+      return "<span class=\"copy-text\" data-worker-token-retry=\"" + C.escapeHtml(item.id) + "\" title=\"读取失败，点击重试\">" + tail + "</span>";
+    }
+    if (entry && entry.status === "loading") return "读取中";
+    if (kick) {
+      ensureWorkerToken(item.id);
+      return "读取中";
+    }
+    return item.api_token_tail ? "末四位 " + C.escapeHtml(item.api_token_tail) : "未填写";
+  }
+
+  function workerTokenHtml(item, kick) {
+    if (!item.api_token_tail && !(workerTokens[item.id] && workerTokens[item.id].status === "ok" && workerTokens[item.id].value)) {
+      return "未填写";
+    }
+    if (!kick && !workerTokens[item.id]) return "末四位 " + C.escapeHtml(item.api_token_tail);
+    return "<span data-worker-token=\"" + C.escapeHtml(item.id) + "\">" + workerTokenInner(item, !!kick) + "</span>";
+  }
+
+  function paintWorkerToken(id) {
+    var item = findMachine(id);
+    if (!item) return;
+    var html = workerTokenInner(item, false);
+    document.querySelectorAll("[data-worker-token]").forEach(function (node) {
+      if (node.getAttribute("data-worker-token") === id) node.innerHTML = html;
+    });
+  }
+
+  function ensureWorkerToken(id) {
+    var entry = workerTokens[id];
+    if (entry && (entry.status === "loading" || entry.status === "ok")) return;
+    var ticket = {};
+    workerTokens[id] = { status: "loading", value: "", ticket: ticket };
+    api("POST", "/api/machines/" + encodeURIComponent(id) + "/reveal")
+      .then(function (res) {
+        if (!workerTokens[id] || workerTokens[id].ticket !== ticket) return;
+        if (res.data && res.data.ok && res.data.reveal && typeof res.data.reveal.secret === "string") {
+          workerTokens[id] = { status: "ok", value: res.data.reveal.secret };
+        } else {
+          workerTokens[id] = { status: "error", value: "" };
+        }
+        paintWorkerToken(id);
+      })
+      .catch(function () {
+        if (!workerTokens[id] || workerTokens[id].ticket !== ticket) return;
+        workerTokens[id] = { status: "error", value: "" };
+        paintWorkerToken(id);
+      });
+  }
+
+  function retryWorkerToken(id) {
+    if (!id) return;
+    delete workerTokens[id];
+    ensureWorkerToken(id);
+    paintWorkerToken(id);
+  }
+
   function setConnStatus(text, isError) {
     var el = connPanelCtrl && connPanelCtrl.bodyEl.querySelector("[data-conn-status]");
     if (!el) return;
@@ -1326,7 +1456,7 @@
             title: conn.name,
             pill: conn.provider_label || providerLabel(conn.provider),
             facts: [
-              ["凭据", conn.config_tail ? "末四位 " + C.escapeHtml(conn.config_tail) : "已保存"],
+              ["凭据", connCredHtml(conn)],
               ["已接入", count + " 台"],
               ["最近测试", C.escapeHtml(testSummary(conn))],
             ],
@@ -1341,7 +1471,7 @@
   function connInfoHtml(conn) {
     var rows = [
       ["服务商", C.escapeHtml(conn.provider_label || providerLabel(conn.provider))],
-      ["凭据", conn.config_tail ? "末四位 " + C.escapeHtml(conn.config_tail) : "已保存"],
+      ["凭据", connCredHtml(conn)],
       ["创建时间", C.escapeHtml(C.formatMinute(conn.created_at) || "—")],
       ["最近测试", C.escapeHtml(testSummary(conn))],
     ];
@@ -1432,7 +1562,7 @@
       '<h3 class="manage-subhead">更新凭据</h3>' +
       '<form data-conn-cred novalidate>' +
       credentialFields(conn.provider) +
-      '<p class="subtle">填写新的配置。保存前会拉取一次设备列表，通过后才替换现有凭据，页面只显示末四位</p>' +
+      '<p class="subtle">填写新的配置。保存前会拉取一次设备列表，通过后才替换现有凭据</p>' +
       '<div class="manage-actions"><button type="submit">保存凭据</button></div>' +
       "</form>" +
       '<h3 class="manage-subhead">名下设备</h3>' +
@@ -1645,6 +1775,7 @@
           setConnStatus((res.data && res.data.error) || "凭据未更新", true);
           return;
         }
+        if (connPanelState && connPanelState.selectedId) delete connCreds[connPanelState.selectedId];
         afterConnWrite("凭据已更新", false);
       })
       .catch(function () {
@@ -1963,6 +2094,16 @@
       return;
     }
     if (target.closest("[data-copy]")) return;
+    var credRetry = target.closest("[data-conn-cred-retry]");
+    if (credRetry) {
+      retryConnCred(credRetry.getAttribute("data-conn-cred-retry"));
+      return;
+    }
+    var tokenRetry = target.closest("[data-worker-token-retry]");
+    if (tokenRetry) {
+      retryWorkerToken(tokenRetry.getAttribute("data-worker-token-retry"));
+      return;
+    }
     var miconBtn = target.closest("[data-micon]");
     if (miconBtn) {
       var miconItem = null;
