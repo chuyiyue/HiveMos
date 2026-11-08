@@ -1330,8 +1330,13 @@ export async function updateAgent(db: D1Database, id: string, value: unknown): P
     if (typeof body.pinned !== "boolean") return { ok: false, status: 400, error: "固定状态不正确" };
     pinnedAt = body.pinned ? Date.now() : null;
   }
+  let status = existing.status;
+  if ("status" in body) {
+    if (body.status !== "active" && body.status !== "disabled") return { ok: false, status: 400, error: "状态不正确" };
+    status = body.status;
+  }
   try {
-    await prepare(db, "UPDATE agents SET name = ?, group_id = ?, permissions = ?, pinned_at = ? WHERE id = ?", [name, groupId, JSON.stringify(permissions), pinnedAt, id]).run();
+    await prepare(db, "UPDATE agents SET name = ?, group_id = ?, permissions = ?, pinned_at = ?, status = ? WHERE id = ?", [name, groupId, JSON.stringify(permissions), pinnedAt, status, id]).run();
   } catch (error) {
     if (isUniqueError(error)) return { ok: false, status: 409, error: "这个名字已存在" };
     return dbFailure();

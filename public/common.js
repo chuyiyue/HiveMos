@@ -545,7 +545,8 @@
       (active
         ? "<div class=\"manage-danger-zone\"><p class=\"subtle\">删除后该 Agent 会被停用，令牌立即失效</p>" +
           "<button type=\"button\" class=\"danger\" data-confirm-delete data-agent-act=\"disable\">删除</button></div>"
-        : "<p class=\"subtle\">这个 Agent 已停用</p>");
+        : "<p class=\"subtle\">这个 Agent 已停用，启用后可继续调用</p>" +
+          "<div class=\"manage-actions\"><button type=\"button\" data-agent-act=\"enable\">启用</button></div>");
     var permSection = partial
       ? '<p class="subtle" data-perm-pending>权限读取中</p>'
       : permPickerHtml(agent);
@@ -1082,6 +1083,31 @@
       });
     }
 
+    function doEnable() {
+      guardAction().then(function (ok) {
+        if (!ok) return;
+        busy = true;
+        agentApi("PATCH", "/api/agents/" + encodeURIComponent(agent.id), { status: "active" })
+          .then(function (result) {
+            busy = false;
+            if (result.status === 401) {
+              location.assign("/login.html");
+              return;
+            }
+            if (!result.data || result.data.ok !== true) {
+              setStatus((result.data && result.data.error) || "没有启用成功，请重试", true);
+              return;
+            }
+            ctrl.forceClose();
+            changed("已启用");
+          })
+          .catch(function () {
+            busy = false;
+            setStatus("网络异常，请重试", true);
+          });
+      });
+    }
+
     function openDisableConfirm() {
       
         busy = true;
@@ -1134,6 +1160,7 @@
       else if (act === "move") doMove();
       else if (act === "rotate") doRotate();
       else if (act === "disable") doDisable();
+      else if (act === "enable") doEnable();
     });
 
     ctrl.dialog.addEventListener("focusin", function (event) {
