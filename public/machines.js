@@ -335,7 +335,8 @@
       icon: kind === "server" ? undefined : kind === "worker" ? (item.platform === "vercel" ? "vercel" : "cloudflare") : "monitor",
       iconHtml: kind === "server" ? serverIconHtml(item) : undefined,
       title: kind === "worker" ? item.name : deviceTitle(item),
-      pill: kind === "server" ? serverBadge(item) : kind === "worker" ? (item.platform === "vercel" ? "Vercel" : "Cloudflare") : kind === "host" ? connName(item) || undefined : undefined,
+      pill: kind === "worker" ? (item.platform === "vercel" ? "Vercel" : "Cloudflare") : kind === "host" ? connName(item) || undefined : undefined,
+      pillHtml: kind === "server" ? serverBadgeHtml(item) : undefined,
       corner: C.statusPill(item.connection_id ? remoteStateOf(item) : item.status),
       lede: lede || "",
       facts: facts,
@@ -436,6 +437,19 @@
     ["laos", "老挝", "🇱🇦", "LA"], ["nepal", "尼泊尔", "🇳🇵", "NP"],
     ["sri lanka", "斯里兰卡", "🇱🇰", "LK"], ["mongolia", "蒙古", "🇲🇳", "MN"]
   ];
+
+  function serverBadgeHtml(item) {
+    var region = String((item && item.region) || "").trim();
+    if (!region) return undefined;
+    var lower = region.toLowerCase();
+    for (var i = 0; i < COUNTRY_CODES.length; i++) {
+      var row = COUNTRY_CODES[i];
+      if (lower.indexOf(row[0]) !== -1 || region.indexOf(row[1]) !== -1) {
+        return "<span class=\"flag-big\">" + row[2] + "</span> " + C.escapeHtml(row[3]);
+      }
+    }
+    return undefined;
+  }
 
   function serverBadge(item) {
     var region = String((item && item.region) || "").trim();

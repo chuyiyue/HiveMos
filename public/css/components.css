@@ -101,6 +101,7 @@ input:focus, textarea:focus, select:focus {
 .callout.danger { background: var(--danger-soft); }
 .callout.ok { background: var(--success-soft); color: var(--success-text); }
 
+.badge .flag-big { font-size: 18px; line-height: 1; vertical-align: -3px; }
 .badge, .tag, .status-pill {
   display: inline-flex;
   align-items: center;

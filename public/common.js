@@ -311,7 +311,7 @@
       "<h3 class=\"record-name\">" +
       escapeHtml(options.title) +
       "</h3>" +
-      (options.pill ? badge(options.pill) : "") +
+      (options.pillHtml ? '<span class="badge">' + options.pillHtml + "</span>" : options.pill ? badge(options.pill) : "") +
       (options.status ? statusPill(options.status) : "") +
       (options.corner ? "<span class=\"record-corner\">" + options.corner + "</span>" : "") +
       "</div>";
