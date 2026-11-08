@@ -100,11 +100,24 @@
   }
 
   function injectCollapseButton() {
+    var button = document.querySelector(".sidebar-collapse");
+    if (button) {
+      // The button ships in the page markup so the brand row has its final
+      // geometry from the first parsed frame; the boot only binds it.
+      if (button.dataset.bound === "1") return;
+      button.dataset.bound = "1";
+      button.addEventListener("click", function () {
+        var collapsed = document.documentElement.getAttribute("data-sidebar") === "collapsed";
+        applySidebarState(!collapsed, true);
+      });
+      return;
+    }
     var brand = document.querySelector(".sidebar > .brand");
-    if (!brand || document.querySelector(".sidebar-collapse")) return;
-    var button = document.createElement("button");
+    if (!brand) return;
+    button = document.createElement("button");
     button.type = "button";
     button.className = "sidebar-collapse ghost icon-btn";
+    button.dataset.bound = "1";
     button.append(svgIcon("icon-chevron-left"));
     button.addEventListener("click", function () {
       var collapsed = document.documentElement.getAttribute("data-sidebar") === "collapsed";

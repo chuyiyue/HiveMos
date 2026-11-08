@@ -198,11 +198,24 @@
   }
 
   function injectCollapseButton() {
+    var button = document.querySelector(".sidebar-collapse");
+    if (button) {
+      // Static markup already carries the button; bind it if nobody has.
+      if (button.dataset.bound === "1") return;
+      button.dataset.bound = "1";
+      button.addEventListener("click", function () {
+        var collapsed = document.documentElement.getAttribute("data-sidebar") === "collapsed";
+        applySidebarState(!collapsed, true);
+      });
+      applySidebarState(document.documentElement.getAttribute("data-sidebar") === "collapsed", false);
+      return;
+    }
     var brand = document.querySelector(".sidebar > .brand");
-    if (!brand || document.querySelector(".sidebar-collapse")) return;
-    var button = document.createElement("button");
+    if (!brand) return;
+    button = document.createElement("button");
     button.type = "button";
     button.className = "sidebar-collapse ghost icon-btn";
+    button.dataset.bound = "1";
     button.append(svgIcon("icon-chevron-left"));
     button.addEventListener("click", function () {
       var collapsed = document.documentElement.getAttribute("data-sidebar") === "collapsed";
@@ -348,7 +361,9 @@
   }
 
   window.addEventListener("hivemos:sidebar-refresh", loadSidebarAgents);
-  if (!window.__HIVEMOS_SIDEBAR_BOOT__) {
+  var chromeDone = !!window.__HIVEMOS_SIDEBAR_BOOT__ &&
+    !!document.querySelector(".sidebar-collapse[data-bound=\"1\"]");
+  if (!chromeDone) {
     renderNav();
     markAccount();
     injectCollapseButton();
