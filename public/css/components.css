@@ -426,7 +426,7 @@ article.record {
 
 .pin-btn:hover { background: var(--surface-hover); color: var(--text-2); }
 
-.pin-btn[aria-pressed="true"] { color: var(--text); }
+.pin-btn[aria-pressed="true"] { color: var(--accent); background: var(--accent-soft); }
 
 .pin-btn[aria-pressed="true"] .icon { fill: currentColor; }
 

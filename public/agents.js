@@ -75,7 +75,7 @@
       (pinned ? "取消固定" : "固定到侧边栏") +
       "\" aria-label=\"" +
       (pinned ? "取消固定" : "固定到侧边栏") +
-      "\"><svg class=\"icon\" viewBox=\"0 0 24 24\" aria-hidden=\"true\"><use href=\"/icons.svg#icon-pin\"/></svg></button>"
+      "\"><svg class=\"icon\" viewBox=\"0 0 24 24\" aria-hidden=\"true\"><use href=\"/icons.svg#" + (pinned ? "icon-pin-filled" : "icon-pin") + "\"/></svg></button>"
     );
   }
 
