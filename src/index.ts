@@ -35,6 +35,7 @@ import { handleSoulRequest } from "./soul-http";
 import { handleTasksRequest } from "./tasks-http";
 import { handleMachinesRequest } from "./machines-http";
 import { handleOverviewRequest } from "./overview-http";
+import { handleRecordsRequest } from "./records-http";
 import { handleSystemRequest, recordCronRun } from "./system-http";
 import { handleVaultRequest } from "./vault-http";
 import { handleExtrasRequest } from "./extras-http";
@@ -111,6 +112,8 @@ export default {
       if (machines) return machines;
       const overview = await handleOverviewRequest(request, env, wait, path);
       if (overview) return overview;
+      const records = await handleRecordsRequest(request, env, wait, path);
+      if (records) return records;
       const system = await handleSystemRequest(request, env, wait, path);
       if (system) return system;
       const vault = await handleVaultRequest(request, env, wait, path);
