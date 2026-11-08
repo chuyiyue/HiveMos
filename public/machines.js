@@ -335,7 +335,7 @@
       icon: kind === "server" ? undefined : kind === "worker" ? (item.platform === "vercel" ? "vercel" : "cloudflare") : "monitor",
       iconHtml: kind === "server" ? serverIconHtml(item) : undefined,
       title: kind === "worker" ? item.name : deviceTitle(item),
-      pill: kind === "server" ? serverBadge(item) : kind === "host" ? connName(item) || undefined : undefined,
+      pill: kind === "server" ? serverBadge(item) : kind === "worker" ? (item.platform === "vercel" ? "Vercel" : "Cloudflare") : kind === "host" ? connName(item) || undefined : undefined,
       corner: C.statusPill(item.connection_id ? remoteStateOf(item) : item.status),
       lede: lede || "",
       facts: facts,
@@ -450,7 +450,7 @@
 
   function cardFor(uiKind, item) {
     if (uiKind === "worker") {
-      var facts = [["平台", item.platform === "vercel" ? "Vercel" : "Cloudflare"]];
+      var facts = [];
       if (item.platform === "vercel") {
         if (item.team_id) facts.push(["Team ID", C.escapeHtml(item.team_id)]);
         facts.push(["项目总量", workerStatSpan(item, "projects")]);
