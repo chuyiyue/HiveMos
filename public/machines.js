@@ -109,19 +109,26 @@
         row("接入备注", C.escapeHtml(item.access_note || "无")) +
         row("地域", C.escapeHtml(item.region || "未填写"));
     }
+    // 按钮排序：本机操作 → 来源连接 → 日常管理 → 删除类垫底
     var btns = "";
-    if (item.connection_id) {
-      var connId = C.escapeHtml(item.connection_id);
-      btns += "<button type=\"button\" class=\"secondary\" data-conn=\"test\" data-id=\"" + connId + "\">测试连接</button>";
-      btns += "<button type=\"button\" class=\"secondary\" data-conn=\"sync\" data-id=\"" + connId + "\">同步连接</button>";
-      btns += "<button type=\"button\" class=\"danger\" data-conn=\"delete\" data-id=\"" + connId + "\">删除连接</button>";
-    }
+    if (kind === "server") {
       btns += "<button type=\"button\" class=\"secondary\" data-mact=\"probe\" data-kind=\"server\" data-id=\"" + id + "\">测试连接</button>";
       btns += "<button type=\"button\" class=\"secondary\" data-mact=\"reveal\" data-kind=\"server\" data-id=\"" + id + "\">查看 SSH 密码</button>";
+    }
+    if (kind === "worker") {
       btns += "<button type=\"button\" class=\"secondary\" data-mact=\"workers\" data-kind=\"worker\" data-id=\"" + id + "\">" + (item.platform === "vercel" ? "查看项目" : "查看 Workers") + "</button>";
+    }
+    var connId = item.connection_id ? C.escapeHtml(item.connection_id) : "";
+    if (connId) {
+      btns += "<button type=\"button\" class=\"secondary\" data-conn=\"test\" data-id=\"" + connId + "\">测试连接</button>";
+      btns += "<button type=\"button\" class=\"secondary\" data-conn=\"sync\" data-id=\"" + connId + "\">同步连接</button>";
+    }
     btns += "<button type=\"button\" class=\"secondary\" data-mact=\"group\" data-kind=\"" + kind + "\" data-id=\"" + id + "\">设置分组</button>";
     btns += "<button type=\"button\" class=\"secondary\" data-mact=\"edit\" data-kind=\"" + kind + "\" data-id=\"" + id + "\">编辑</button>";
     btns += "<button type=\"button\" class=\"danger\" data-confirm-delete data-mact=\"delete\" data-kind=\"" + kind + "\" data-id=\"" + id + "\">删除</button>";
+    if (connId) {
+      btns += "<button type=\"button\" class=\"danger\" data-conn=\"delete\" data-id=\"" + connId + "\">删除连接</button>";
+    }
     var kindLabel = kind === "server" ? "服务器" : kind === "worker" ? "Worker" : "云主机";
     var ctrl = C.openManageDialog({
       title: item.name,
