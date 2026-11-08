@@ -43,22 +43,42 @@
     return text || "还没有心跳";
   }
 
-  // 与其它板块同一套卡片菜单入口：record 的 extra 里放「高级」按钮
-  function machineExpandBody(kind, item) {
+  // ---- 管理弹窗（点卡片信息区打开） ----
+
+  function openManage(key) {
+    if (!key) return;
+    var parts = key.split(":");
+    if (parts[0] !== "machine") return;
+    var kind = parts[1];
+    var id = parts.slice(2).join(":");
+    var found = null;
+    state.items.forEach(function (entry) {
+      if (entry.id === id) found = entry;
+    });
+    if (found) openMachineManage(kind, found);
+  }
+
+  function openMachineManage(kind, item) {
     var id = C.escapeHtml(item.id);
     var btns = "";
     if (kind === "server")
-      btns += '<button type="button" class="secondary" data-mact="reveal" data-kind="server" data-id="' + id + '">查看 SSH 密码</button>';
+      btns += "<button type=\"button\" class=\"secondary\" data-mact=\"reveal\" data-kind=\"server\" data-id=\"" + id + "\">查看 SSH 密码</button>";
     if (kind === "worker")
-      btns += '<button type="button" class="secondary" data-mact="workers" data-kind="worker" data-id="' + id + '">查看 Workers</button>';
-    btns += '<button type="button" class="secondary" data-mact="edit" data-kind="' + kind + '" data-id="' + id + '">编辑</button>';
-    btns += '<button type="button" class="danger" data-mact="delete" data-kind="' + kind + '" data-id="' + id + '">删除</button>';
-    return C.expandActions(btns);
+      btns += "<button type=\"button\" class=\"secondary\" data-mact=\"workers\" data-kind=\"worker\" data-id=\"" + id + "\">查看 Workers</button>";
+    btns += "<button type=\"button\" class=\"secondary\" data-mact=\"edit\" data-kind=\"" + kind + "\" data-id=\"" + id + "\">编辑</button>";
+    btns += "<button type=\"button\" class=\"danger\" data-mact=\"delete\" data-kind=\"" + kind + "\" data-id=\"" + id + "\">删除</button>";
+    var ctrl = C.openManageDialog({
+      title: item.name,
+      bodyHtml: "<div class=\"manage-actions\">" + btns + "</div>",
+    });
+    ctrl.dialog.addEventListener("click", handleClick);
   }
 
   function deleteMachine(kind, item, anchor) {
+    var dlg = anchor && anchor.closest ? anchor.closest("[data-manage-dialog]") : null;
+    var mount = (dlg && dlg.querySelector("[data-manage-confirm]")) || anchor;
     C.askConfirm({
-      anchor: anchor,
+      anchor: mount,
       title: "删除" + TITLE_FOR[kind],
       text: "确认删除「" + item.name + "」吗？删除后无法恢复",
       confirmLabel: "删除",
@@ -66,15 +86,35 @@
     }).then(function (yes) {
       if (!yes) return;
       api("DELETE", "/api/machines/" + encodeURIComponent(item.id)).then(function (res) {
-        if (res.data && res.data.ok) load();
+        if (res.data && res.data.ok) { C.closeCurrentOverlay(); load(); }
       });
     });
   }
 
   function card(kind, item, facts) {
     var lede = kind === "worker" ? item.description : item.region;
-    return C.record({ id: item.id, title: item.name, status: item.status, lede: lede || "", facts: facts, expandKey: "machine:" + kind + ":" + item.id, expandBody: machineExpandBody(kind, item) });
+    var id = C.escapeHtml(item.id);
+    var actions = "";
+    if (kind === "server") {
+      actions += "<button type=\"button\" class=\"secondary\" data-mact=\"reveal\" data-kind=\"server\" data-id=\"" + id + "\">查看密码</button>";
+      if (item.ip) actions += "<button type=\"button\" class=\"secondary\" data-copy=\"" + C.escapeHtml(item.ip) + "\" data-label=\"复制 IP\">复制 IP</button>";
+    } else if (kind === "worker") {
+      actions += "<button type=\"button\" class=\"secondary\" data-mact=\"workers\" data-kind=\"worker\" data-id=\"" + id + "\">查看 Workers</button>";
+    } else {
+      actions += "<button type=\"button\" class=\"secondary\" data-mact=\"edit\" data-kind=\"" + kind + "\" data-id=\"" + id + "\">编辑</button>";
+    }
+    return C.record({
+      id: item.id,
+      icon: kind === "worker" ? "layout" : "monitor",
+      title: item.name,
+      status: item.status,
+      lede: lede || "",
+      facts: facts,
+      actions: actions,
+      manage: "machine:" + kind + ":" + item.id,
+    });
   }
+
 
   function listSection(uiKind, title, unit) {
     var items = byKind(uiKind);
@@ -352,7 +392,9 @@
   }
 
   var page = document.getElementById("page");
-  page.addEventListener("click", function (event) {
+  page.addEventListener("click", handleClick);
+
+  function handleClick(event) {
     var target = event.target;
     if (!(target instanceof Element)) return;
     var tab = target.closest(".page-tab");
@@ -365,6 +407,12 @@
     var add = target.closest("[data-add]");
     if (add) {
       openItemDialog(add.getAttribute("data-add"), null);
+      return;
+    }
+    var zone = target.closest("[data-manage]");
+    if (zone) {
+      if (target.closest("button, a, input, select, textarea")) return;
+      openManage(zone.getAttribute("data-manage"));
       return;
     }
     var mact = target.closest("[data-mact]");
@@ -381,7 +429,7 @@
         else if (act === "delete") deleteMachine(mkind, found, mact);
       }
     }
-  });
+  }
   render();
   load();
 })();
