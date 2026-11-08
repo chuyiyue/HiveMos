@@ -1,9 +1,14 @@
-/* 管理员账号、修改密码、两步验证、会话。数据来自 /api/account/* */
+/* 管理员账号、两步验证、登录记录、系统信息、侧边栏。
+   版式照 SMSinBox /users：页内设置导航 + 分区面板。数据来自 /api/account/* 与 /api/system/info */
 (function () {
   var C = window.HiveCommon;
   var state = {
     loading: true,
     loadError: "",
+    accountError: "",
+    accountStatus: "",
+    system: null,
+    systemError: "",
     profile: null,
     profileInput: "",
     profileError: "",
@@ -31,6 +36,7 @@
   var loadToken = 0;
   var totpToken = 0;
   var bound = false;
+  var navObserver = null;
 
   function passwordScore(password) {
     var value = String(password || "");
@@ -172,32 +178,60 @@
     }, 2800);
   }
 
-  function accountSection() {
+  function panel(id, title, body) {
+    return (
+      '<section id="' +
+      id +
+      '" class="settings-section panel stack" aria-labelledby="' +
+      id +
+      '-title"><h2 id="' +
+      id +
+      '-title">' +
+      C.escapeHtml(title) +
+      "</h2>" +
+      body +
+      "</section>"
+    );
+  }
+
+  function accountCallouts() {
+    var html = "";
+    if (state.accountError) {
+      html += '<p class="callout danger" role="alert">' + C.escapeHtml(state.accountError) + "</p>";
+    }
+    if (state.accountStatus) {
+      html += '<p class="callout ok">' + C.escapeHtml(state.accountStatus) + "</p>";
+    }
+    return html;
+  }
+
+  function accountPanel() {
     var profile = state.profile || {};
     var created = C.formatMinute(profile.created_at) || "未知";
-    var form =
-      '<form id="profile-form" class="form-grid" novalidate><label>展示用户名' +
+    var profileForm =
+      '<form id="profile-form" class="stack" novalidate><h3>用户名</h3>' +
+      "<label>GitHub 用户名" +
       '<input data-field="profileInput" name="username" type="text" maxlength="39" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="例如 octocat，可留空" value="' +
       C.escapeHtml(state.profileInput) +
       '" />' +
-      '<p class="subtle field-hint">只显示在侧栏，不用于登录，留空则清除</p></label>' +
+      '<p class="subtle field-hint">仅用于显示与 GitHub 头像，不用于登录；留空则清除</p></label>' +
       fieldError("profile-error", state.profileError) +
       '<div class="row-actions"><button type="submit"' +
       (state.busy ? " disabled" : "") +
-      ">保存</button></div></form>" +
+      ">保存用户名</button></div></form>" +
       C.facts([
         ["登录用户名", C.escapeHtml(profile.username || "未知")],
         ["角色", C.escapeHtml(roleText(profile.role))],
         ["创建时间", C.escapeHtml(created)],
       ]);
-    return C.section("管理员账号", "", form);
+    return panel("account-panel", "管理员账号", accountCallouts() + profileForm + passwordForm());
   }
 
-  function passwordSection() {
+  function passwordForm() {
     var score = passwordScore(state.newPassword);
     var type = state.revealPassword ? "text" : "password";
-    var form =
-      '<form id="password-form" class="form-grid" novalidate>' +
+    return (
+      '<form id="password-form" class="stack" novalidate><h3>改密码</h3>' +
       "<label>当前密码" +
       '<input data-field="currentPassword" name="currentPassword" type="password" maxlength="256" autocomplete="current-password" value="' +
       C.escapeHtml(state.currentPassword) +
@@ -223,11 +257,14 @@
       '<div class="row-actions">' +
       button("生成强密码", "generate-password", "ghost") +
       "</div>" +
+      '<p class="subtle">8–256 位；保存后需重新登录</p>' +
       fieldError("password-error", state.passwordError) +
       '<div class="row-actions"><button type="submit"' +
       (state.busy ? " disabled" : "") +
-      ">保存密码</button></div></form>";
-    return C.section("修改密码", "8–256 位，保存后需重新登录", form);
+      ">保存密码</button>" +
+      button("退出登录", "logout", "secondary") +
+      "</div></form>"
+    );
   }
 
   function totpStateText(status) {
@@ -338,7 +375,7 @@
     return "";
   }
 
-  function totpSection() {
+  function totpPanel() {
     var status = state.totp;
     var extra = totpExtra(status);
     var actions = "";
@@ -358,7 +395,7 @@
       error +
       (actions ? '<div class="row-actions">' + actions + "</div>" : "") +
       totpPanelBody();
-    return C.section("两步验证", "", body);
+    return panel("totp-panel", "两步验证", body);
   }
 
   function deviceText(value) {
@@ -392,7 +429,7 @@
       C.escapeHtml(sessionWhen(session)) +
       "</p></div>" +
       '<button type="button" class="' +
-      (current ? "danger" : "secondary") +
+      (current ? "secondary" : "ghost") +
       '" data-action="revoke-session" data-id="' +
       C.escapeHtml(id) +
       '">' +
@@ -403,27 +440,93 @@
     );
   }
 
-  function sessionsSection() {
+  function sessionsPanel() {
     var others = state.sessions.some(function (item) {
       return !item.current;
     });
-    var actions =
-      '<button type="button" class="ghost" data-action="refresh-sessions"' +
-      (state.busy ? " disabled" : "") +
-      ">刷新</button>" +
-      '<button type="button" class="secondary" data-action="revoke-others"' +
-      (!others || state.busy ? " disabled" : "") +
-      ">撤销其它会话</button>";
     var list = state.sessions.length
       ? C.list(state.sessions.map(sessionRow).join(""))
       : C.emptyState("没有有效的登录会话", "登录后的会话会列在这里");
     var error = state.sessionsError
       ? '<p class="callout danger" role="alert">' + C.escapeHtml(state.sessionsError) + "</p>"
       : "";
-    return C.section("会话管理", "", '<div class="confirm-slot" data-confirm-for="revoke-others"></div>' + error + list, actions);
+    var actions =
+      '<div class="row-actions">' +
+      '<button type="button" class="secondary" data-action="revoke-others"' +
+      (!others || state.busy ? " disabled" : "") +
+      ">撤销其它会话</button>" +
+      '<button type="button" class="ghost" data-action="refresh-sessions"' +
+      (state.busy ? " disabled" : "") +
+      ">刷新列表</button></div>";
+    return panel(
+      "sessions-panel",
+      "登录记录",
+      '<div class="confirm-slot" data-confirm-for="revoke-others"></div>' + error + list + actions,
+    );
   }
 
-  function sidebarSection() {
+  function systemFactValue(render) {
+    if (state.systemError) return "读取失败";
+    if (!state.system) return "读取中…";
+    return render(state.system);
+  }
+
+  function systemPanel() {
+    function count(key) {
+      return systemFactValue(function (s) {
+        var value = s.counts ? s.counts[key] : null;
+        return value === null || value === undefined ? "—" : String(value);
+      });
+    }
+    var rows = [
+      ["版本", systemFactValue(function (s) { return s.version ? C.escapeHtml(s.version) : "未知"; })],
+      ["部署提交", systemFactValue(function (s) { return s.build_commit ? C.escapeHtml(s.build_commit) : "未知"; })],
+      ["运行环境", "Cloudflare Workers + D1"],
+      ["数据库", systemFactValue(function (s) { return C.escapeHtml(s.database_name || "未知"); })],
+      ["自定义域", systemFactValue(function (s) { return C.escapeHtml(s.domain || "未知"); })],
+      [
+        "MCP 工具",
+        systemFactValue(function (s) {
+          return (s.mcp_tools === null || s.mcp_tools === undefined ? "—" : String(s.mcp_tools)) + " 个";
+        }),
+      ],
+      ["Agent", count("agents")],
+      ["MCP 服务", count("mcp_servers")],
+      ["记忆", count("memories")],
+      ["Soul", count("souls")],
+      ["任务", count("tasks")],
+      ["日历", count("calendars")],
+      ["日程", count("events")],
+      ["云主机", count("machines")],
+      ["保险库条目", count("vault_entries")],
+      ["登录会话", String(state.sessions.length)],
+      [
+        "快照定时",
+        systemFactValue(function (s) {
+          var cron = s.cron || {};
+          var head = "每 6 小时（" + C.escapeHtml(cron.schedule || "0 */6 * * *") + "）";
+          if (cron.last_run_at) {
+            var when = C.formatMinute(cron.last_run_at) || "未知时间";
+            return cron.active
+              ? head + "，已生效，最近运行 " + C.escapeHtml(when)
+              : head + "，最近运行 " + C.escapeHtml(when) + "，已超时未再运行";
+          }
+          return head + "，未生效：尚未观察到定时运行";
+        }),
+      ],
+    ];
+    var body =
+      '<dl class="system-facts">' +
+      rows
+        .map(function (row) {
+          return "<div><dt>" + C.escapeHtml(row[0]) + "</dt><dd>" + row[1] + "</dd></div>";
+        })
+        .join("") +
+      "</dl>";
+    return panel("system-panel", "系统信息", body);
+  }
+
+  function sidebarPanel() {
     var form =
       '<form id="sidebar-form" class="form-grid" novalidate>' +
       '<label>展示上限<input data-field="pinLimitInput" name="pinLimitInput" type="number" min="1" max="20" step="1" inputmode="numeric" value="' +
@@ -433,7 +536,86 @@
       '<div class="row-actions"><button type="submit"' +
       (state.busy ? " disabled" : "") +
       ">保存</button></div></form>";
-    return C.section("侧边栏", "", form);
+    return panel("sidebar-panel", "侧边栏", form);
+  }
+
+  var NAV_ITEMS = [
+    ["account-panel", "管理员账号"],
+    ["sessions-panel", "登录记录"],
+    ["totp-panel", "两步验证"],
+    ["system-panel", "系统信息"],
+    ["sidebar-panel", "侧边栏"],
+  ];
+
+  function settingsNav() {
+    var links = NAV_ITEMS.map(function (item) {
+      return (
+        '<a href="#' +
+        item[0] +
+        '"><span class="setting-item-meta"><span class="setting-item-title">' +
+        C.escapeHtml(item[1]) +
+        '</span></span><span class="setting-item-arrow" aria-hidden="true">›</span></a>'
+      );
+    }).join("");
+    return '<nav class="settings-nav" aria-label="设置">' + links + "</nav>";
+  }
+
+  function settingsLayout() {
+    return (
+      '<div class="settings">' +
+      settingsNav() +
+      '<div class="settings-body">' +
+      accountPanel() +
+      sessionsPanel() +
+      totpPanel() +
+      systemPanel() +
+      sidebarPanel() +
+      "</div></div>"
+    );
+  }
+
+  function initSettingsNav() {
+    if (navObserver) {
+      navObserver.disconnect();
+      navObserver = null;
+    }
+    if (!window.matchMedia || window.matchMedia("(max-width: 639px)").matches) return;
+    var nav = document.querySelector(".settings-nav");
+    if (!nav || typeof IntersectionObserver !== "function") return;
+    var links = Array.prototype.slice.call(nav.querySelectorAll('a[href^="#"]'));
+    var sections = links
+      .map(function (link) {
+        return document.querySelector(link.getAttribute("href") || "");
+      })
+      .filter(function (section) {
+        return section instanceof HTMLElement;
+      });
+    if (!links.length || !sections.length) return;
+    function activate(id) {
+      links.forEach(function (link) {
+        var active = link.getAttribute("href") === "#" + id;
+        link.classList.toggle("is-active", active);
+        if (active) link.setAttribute("aria-current", "true");
+        else link.removeAttribute("aria-current");
+      });
+    }
+    activate(sections[0].id || "");
+    navObserver = new IntersectionObserver(
+      function (entries) {
+        var visible = entries
+          .filter(function (entry) {
+            return entry.isIntersecting;
+          })
+          .sort(function (a, b) {
+            return a.boundingClientRect.top - b.boundingClientRect.top;
+          });
+        if (visible[0]) activate(visible[0].target.id);
+      },
+      { rootMargin: "-24% 0px -68% 0px", threshold: 0 },
+    );
+    sections.forEach(function (section) {
+      navObserver.observe(section);
+    });
   }
 
   function submitPinLimit() {
@@ -466,17 +648,11 @@
         C.emptyState("没有读到账号", state.loadError) +
         '<div class="row-actions"><button type="button" data-action="reload">重试</button></div>';
     } else {
-      html =
-        '<div class="stack">' +
-        accountSection() +
-        passwordSection() +
-        totpSection() +
-        sessionsSection() +
-        sidebarSection() +
-        "</div>";
+      html = settingsLayout();
     }
-    C.mount(C.layout("管理员账号、两步验证与登录会话", html));
+    C.mount(C.layout("", html));
     bind();
+    initSettingsNav();
     var focusSelector = state.focus;
     state.focus = "";
     if (focusSelector) {
@@ -515,9 +691,13 @@
     if (!field || !Object.prototype.hasOwnProperty.call(state, field)) return;
     state[field] = target.value;
     if (field === "newPassword") paintStrength(target.value);
-    if (field === "profileInput") clearNote("profile-error", "profileError");
+    if (field === "profileInput") {
+      clearNote("profile-error", "profileError");
+      state.accountStatus = "";
+    }
     if (field === "currentPassword" || field === "newPassword" || field === "confirmPassword") {
       clearNote("password-error", "passwordError");
+      state.accountError = "";
     }
     if (field === "totpCode" || field === "totpPassword") clearNote("totp-error", "totpError");
     if (field === "pinLimitInput") clearNote("pin-limit-error", "pinLimitError");
@@ -547,6 +727,7 @@
     if (!control || state.busy) return;
     var action = control.getAttribute("data-action");
     if (action === "reload") load();
+    else if (action === "logout") logout();
     else if (action === "generate-password") fillGenerated();
     else if (action === "totp-setup") beginSetup();
     else if (action === "totp-enable") enableTotp();
@@ -578,10 +759,19 @@
     render();
   }
 
+  function logout() {
+    state.busy = true;
+    api("POST", "/api/auth/logout", {}).then(function () {
+      location.assign("/login.html");
+    });
+  }
+
   function submitProfile() {
     var username = fieldValue("profileInput").trim();
     state.profileInput = username;
     state.profileError = "";
+    state.accountError = "";
+    state.accountStatus = "";
     state.busy = true;
     render();
     api("POST", "/api/account/profile", { username: username }).then(function (result) {
@@ -595,8 +785,9 @@
       if (!state.profile) state.profile = {};
       state.profile.profile_username = saved;
       state.profileError = "";
+      state.accountStatus = saved ? "用户名已保存" : "用户名已清除";
       paintSidebar(displayName(saved, state.profile.username));
-      toast(saved ? "用户名已保存" : "用户名已清除");
+      toast(state.accountStatus);
       render();
     });
   }
@@ -605,34 +796,40 @@
     var current = fieldValue("currentPassword");
     var next = fieldValue("newPassword");
     var again = fieldValue("confirmPassword");
-    var message = "";
+    state.passwordError = "";
+    state.accountError = "";
+    state.accountStatus = "";
+    // 反馈位置照 /users：新密码本身的校验留在字段下，其余（缺当前密码、
+    // 与当前密码相同、服务端拒绝）走账号面板顶部的提示条。
+    var fieldMessage = "";
+    var panelMessage = "";
     var focus = "";
     if (!current) {
-      message = "请填写当前密码";
+      panelMessage = "请填写当前密码";
       focus = '[data-field="currentPassword"]';
     } else if (current.length > 256) {
-      message = "当前密码需要 1 到 256 个字符";
+      panelMessage = "当前密码需要 1 到 256 个字符";
       focus = '[data-field="currentPassword"]';
     } else if (!next) {
-      message = "请填写新密码";
+      fieldMessage = "请填写新密码";
       focus = '[data-field="newPassword"]';
     } else if (next.length < 8 || next.length > 256) {
-      message = "新密码需要 8 到 256 个字符";
+      fieldMessage = "新密码需要 8 到 256 个字符";
       focus = '[data-field="newPassword"]';
     } else if (next !== again) {
-      message = "两次输入的新密码不一致";
+      fieldMessage = "两次输入的新密码不一致";
       focus = '[data-field="confirmPassword"]';
     } else if (next === current) {
-      message = "新密码不能与当前密码相同";
+      panelMessage = "新密码不能与当前密码相同";
       focus = '[data-field="newPassword"]';
     }
-    if (message) {
-      state.passwordError = message;
+    if (fieldMessage || panelMessage) {
+      state.passwordError = fieldMessage;
+      state.accountError = panelMessage;
       state.focus = focus;
       render();
       return;
     }
-    state.passwordError = "";
     state.busy = true;
     render();
     api("POST", "/api/account/password", { currentPassword: current, newPassword: next }).then(function (result) {
@@ -643,7 +840,7 @@
         }, 600);
         return;
       }
-      fail('[data-field="currentPassword"]', "passwordError", result, "改密码失败，请重试");
+      fail('[data-field="currentPassword"]', "accountError", result, "改密码失败，请重试");
     });
   }
 
@@ -894,11 +1091,28 @@
     });
   }
 
+  function loadSystem() {
+    var token = loadToken;
+    api("GET", "/api/system/info").then(function (result) {
+      if (token !== loadToken) return;
+      if (result.status === 401) return;
+      if (!result.data || result.data.ok !== true) {
+        state.systemError = "读取失败";
+        state.system = null;
+      } else {
+        state.system = result.data;
+        state.systemError = "";
+      }
+      if (!state.loading) render();
+    });
+  }
+
   function load() {
     var token = (loadToken += 1);
     state.loading = true;
     state.loadError = "";
     render();
+    loadSystem();
     Promise.all([
       api("GET", "/api/account/profile"),
       api("GET", "/api/account/totp"),
