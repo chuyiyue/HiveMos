@@ -258,10 +258,10 @@ async function agentRotate(request: Request, env: Env, id: string): Promise<Resp
 
 function readScope(request: Request, value: unknown): string | null {
   const fromQuery = new URL(request.url).searchParams.get("scope");
-  if (fromQuery === "agent" || fromQuery === "mcp") return fromQuery;
+  if (fromQuery === "agent" || fromQuery === "mcp" || fromQuery === "machines") return fromQuery;
   if (value && typeof value === "object") {
     const scope = (value as { scope?: unknown }).scope;
-    if (scope === "agent" || scope === "mcp") return scope;
+    if (scope === "agent" || scope === "mcp" || scope === "machines") return scope;
   }
   return null;
 }

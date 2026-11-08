@@ -5,6 +5,14 @@
 import { isCrossSite, json, readJsonLimited } from "./http";
 import type { Env, WaitCtx } from "./env";
 import {
+  createConnectionWithDevices,
+  deleteConnection,
+  listConnections,
+  syncConnection,
+  testAdHocConnection,
+  testStoredConnection,
+} from "./providers";
+import {
   createMachine,
   deleteMachine,
   fetchWorkersForMachine,
@@ -12,6 +20,8 @@ import {
   MACHINE_KINDS,
   MachineError,
   machinePublic,
+  probeMachineById,
+  probeStaleServers,
   revealMachineSecret,
   updateMachine,
   vaultKeyOf,
@@ -21,9 +31,14 @@ const MAX_BODY_BYTES = 64 * 1024;
 const ACTOR = "user";
 
 export async function handleMachinesRequest(request: Request, env: Env, ctx: WaitCtx, path: string): Promise<Response | null> {
-  void ctx;
-  if (path === "/api/machines") return collection(request, env);
-  const action = /^\/api\/machines\/([A-Za-z0-9_-]+)\/(reveal|workers)$/.exec(path);
+  if (path === "/api/machines/providers/test") return providerTest(request);
+  if (path === "/api/machines/providers") return providerCollection(request, env);
+  const providerAction = /^\/api\/machines\/providers\/([A-Za-z0-9_-]+)\/(test|sync)$/.exec(path);
+  if (providerAction && providerAction[1] && providerAction[2]) return providerActionRun(request, env, providerAction[1], providerAction[2]);
+  const providerOne = /^\/api\/machines\/providers\/([A-Za-z0-9_-]+)$/.exec(path);
+  if (providerOne && providerOne[1]) return providerOneRun(request, env, providerOne[1]);
+  if (path === "/api/machines") return collection(request, env, ctx);
+  const action = /^\/api\/machines\/([A-Za-z0-9_-]+)\/(reveal|workers|probe)$/.exec(path);
   if (action && action[1] && action[2]) return machineAction(request, env, action[1], action[2]);
   const one = /^\/api\/machines\/([A-Za-z0-9_-]+)$/.exec(path);
   if (one && one[1]) return machineOne(request, env, one[1]);
@@ -55,12 +70,19 @@ async function readBody(request: Request): Promise<{ ok: true; value: Record<str
   return { ok: true, value: body.value as Record<string, unknown> };
 }
 
-async function collection(request: Request, env: Env): Promise<Response> {
+async function collection(request: Request, env: Env, ctx: WaitCtx): Promise<Response> {
   const method = request.method.toUpperCase();
   if (method === "GET") {
     const kind = new URL(request.url).searchParams.get("kind");
     if (kind !== null && !MACHINE_KINDS.includes(kind)) {
       return json({ ok: false, error: "类型不正确" }, 400);
+    }
+    // Auto-probe: opening the list quietly re-probes stale servers in the
+    // background (waitUntil keeps the response fast). There is no cron —
+    // the account quota is full — so this list-driven refresh plus the
+    // probe right after creating a server is the whole "auto" story.
+    if (kind === null || kind === "server") {
+      ctx.waitUntil(probeStaleServers(env.DB, vaultKeyOf(env), ACTOR, Date.now()).catch(() => undefined));
     }
     return wrap(async () => json({ ok: true, machines: (await listMachines(env.DB, kind)).map(machinePublic) }));
   }
@@ -99,11 +121,18 @@ async function machineOne(request: Request, env: Env, id: string): Promise<Respo
 
 // POST-only sub actions: reveal hands back the stored secret (audited in the
 // core), workers lists the Cloudflare account's scripts with the stored
-// token. Neither accepts a body.
+// token, probe runs a real SSH liveness check with the stored config.
+// None of them accepts a body.
 async function machineAction(request: Request, env: Env, id: string, action: string): Promise<Response> {
   if (request.method.toUpperCase() !== "POST") return methodNotAllowed("POST");
   const gate = await mutationGate(request);
   if (gate) return gate;
+  if (action === "probe") {
+    return wrap(async () => {
+      const result = await probeMachineById(env.DB, id, vaultKeyOf(env), ACTOR, Date.now());
+      return json({ ok: true, machine: machinePublic(result.machine), probe: result.probe });
+    });
+  }
   if (action === "reveal") {
     return wrap(async () => {
       const result = await revealMachineSecret(env.DB, id, vaultKeyOf(env), ACTOR, Date.now());
@@ -113,5 +142,77 @@ async function machineAction(request: Request, env: Env, id: string, action: str
   return wrap(async () => {
     const result = await fetchWorkersForMachine(env.DB, id, vaultKeyOf(env), ACTOR, Date.now());
     return json({ ok: true, workers: result.workers, fetched_at: result.fetched_at });
+  });
+}
+
+
+// ---------------------------------------------------------------------------
+// Provider connections (cloud tab phase 2). The routes live under
+// /api/machines/providers so the board router in index.ts needs no change.
+// Test endpoints answer 200 with { ok: false, error } for provider-side
+// failures so the wizard can show the reason inline; creating a connection
+// re-lists devices server-side and refuses (400) when the test fails.
+
+async function providerTest(request: Request): Promise<Response> {
+  if (request.method.toUpperCase() !== "POST") return methodNotAllowed("POST");
+  const gate = await mutationGate(request);
+  if (gate) return gate;
+  const body = await readBody(request);
+  if (!body.ok) return body.response;
+  return wrap(async () => {
+    const provider = typeof body.value["provider"] === "string" ? body.value["provider"] : "";
+    const config = (body.value["config"] ?? {}) as Record<string, unknown>;
+    const outcome = await testAdHocConnection(provider, config);
+    if (!outcome.ok) return json({ ok: false, error: outcome.error ?? "连接测试失败" });
+    return json({ ok: true, devices: outcome.devices ?? [] });
+  });
+}
+
+async function providerCollection(request: Request, env: Env): Promise<Response> {
+  const method = request.method.toUpperCase();
+  if (method === "GET") {
+    return wrap(async () => json({ ok: true, connections: await listConnections(env.DB) }));
+  }
+  if (method === "POST") {
+    const gate = await mutationGate(request);
+    if (gate) return gate;
+    const body = await readBody(request);
+    if (!body.ok) return body.response;
+    return wrap(async () => {
+      const provider = typeof body.value["provider"] === "string" ? body.value["provider"] : "";
+      const name = typeof body.value["name"] === "string" ? body.value["name"] : "";
+      const config = (body.value["config"] ?? {}) as Record<string, unknown>;
+      const deviceIds = Array.isArray(body.value["device_ids"]) ? body.value["device_ids"].filter((value): value is string => typeof value === "string") : [];
+      const result = await createConnectionWithDevices(env.DB, vaultKeyOf(env), { provider, name, config, deviceIds, groupId: body.value["group_id"] }, ACTOR, Date.now());
+      return json({ ok: true, connection: result.connection, machines: result.machines }, 201);
+    });
+  }
+  return methodNotAllowed("GET, POST");
+}
+
+async function providerActionRun(request: Request, env: Env, id: string, action: string): Promise<Response> {
+  if (request.method.toUpperCase() !== "POST") return methodNotAllowed("POST");
+  const gate = await mutationGate(request);
+  if (gate) return gate;
+  if (action === "test") {
+    return wrap(async () => {
+      const outcome = await testStoredConnection(env.DB, vaultKeyOf(env), id, Date.now());
+      if (!outcome.ok) return json({ ok: false, error: outcome.error ?? "连接测试失败" });
+      return json({ ok: true, devices: outcome.devices ?? [] });
+    });
+  }
+  return wrap(async () => {
+    const result = await syncConnection(env.DB, vaultKeyOf(env), id, Date.now());
+    return json({ ok: true, updated: result.updated, missing: result.missing, devices: result.devices });
+  });
+}
+
+async function providerOneRun(request: Request, env: Env, id: string): Promise<Response> {
+  if (request.method.toUpperCase() !== "DELETE") return methodNotAllowed("DELETE");
+  const gate = await mutationGate(request);
+  if (gate) return gate;
+  return wrap(async () => {
+    await deleteConnection(env.DB, id, Date.now());
+    return json({ ok: true });
   });
 }
