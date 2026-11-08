@@ -112,10 +112,9 @@
         row("系统", C.escapeHtml(item.os || "未填写")) +
         row(
           "主机 IP",
-          C.escapeHtml(item.ip || "未填写") +
-            (item.ip
-              ? " <button type=\"button\" class=\"copy-btn\" data-copy=\"" + C.escapeHtml(item.ip) + "\" data-label=\"复制\">复制</button>"
-              : "")
+          item.ip
+            ? "<span class=\"copy-text\" data-copy=\"" + C.escapeHtml(item.ip) + "\" data-label=\"" + C.escapeHtml(item.ip) + "\" title=\"点击复制\">" + C.escapeHtml(item.ip) + "</span>"
+            : "未填写"
         );
     } else if (kind === "worker") {
       facts =
@@ -187,7 +186,6 @@
     if (kind === "server") {
       actions += "<button type=\"button\" class=\"secondary\" data-mact=\"probe\" data-kind=\"server\" data-id=\"" + id + "\">测试连接</button>";
       actions += "<button type=\"button\" class=\"secondary\" data-mact=\"reveal\" data-kind=\"server\" data-id=\"" + id + "\">查看密码</button>";
-      if (item.ip) actions += "<button type=\"button\" class=\"secondary\" data-copy=\"" + C.escapeHtml(item.ip) + "\" data-label=\"复制 IP\">复制 IP</button>";
     } else if (kind === "worker") {
       actions += "<button type=\"button\" class=\"secondary\" data-mact=\"workers\" data-kind=\"worker\" data-id=\"" + id + "\">" + (item.platform === "vercel" ? "查看项目" : "查看 Workers") + "</button>";
     } else if (actionsOverride !== undefined) {
@@ -223,7 +221,7 @@
         ["备注", C.escapeHtml(item.note || "无")],
         ["主机名", C.escapeHtml(item.hostname || "尚未探活")],
         ["系统", C.escapeHtml(item.os || "尚未探活")],
-        ["主机 IP", C.escapeHtml(item.ip || "未填写")],
+        ["主机 IP", item.ip ? "<span class=\"copy-text\" data-copy=\"" + C.escapeHtml(item.ip) + "\" data-label=\"" + C.escapeHtml(item.ip) + "\" title=\"点击复制\">" + C.escapeHtml(item.ip) + "</span>" : "未填写"],
       ]);
     }
     if (item.connection_id) {
@@ -1273,6 +1271,7 @@
       else openItemDialog(addKind, null);
       return;
     }
+    if (target.closest("[data-copy]")) return;
     var zone = target.closest("[data-manage]");
     if (zone && !target.closest("button, a, input, select, textarea")) {
       openManage(zone.getAttribute("data-manage"));

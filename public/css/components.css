@@ -693,3 +693,6 @@ button.is-armed, .is-armed {
 .manage-name-edit { display: inline-grid; place-items: center; width: 26px; height: 26px; flex: none; padding: 0; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--text-3); cursor: pointer; }
 .manage-name-edit:hover { background: var(--surface-hover); color: var(--accent-text); }
 .manage-name-edit .icon { width: 15px; height: 15px; }
+
+.copy-text { cursor: pointer; }
+.copy-text:hover { color: var(--accent); }
