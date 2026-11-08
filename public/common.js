@@ -194,6 +194,11 @@
     return !!expandedCards[key];
   }
 
+  function setCardExpanded(key, on) {
+    if (on) expandedCards[key] = true;
+    else delete expandedCards[key];
+  }
+
   function expandToggle(key, label) {
     return (
       '<button type="button" class="expand-toggle" data-expand-toggle="' +
@@ -644,6 +649,7 @@
     openFormDialog: openFormDialog,
     openActionMenu: openActionMenu,
     cardExpanded: cardExpanded,
+    setCardExpanded: setCardExpanded,
     expandToggle: expandToggle,
     expandPanel: expandPanel,
     expandActions: expandActions,
