@@ -64,6 +64,31 @@
     if (found) openMachineManage(kind, found);
   }
 
+  var REMOTE_STATE_LABELS = {
+    creating: "创建中", starting: "启动中", running: "运行中", stopping: "停止中",
+    stopped: "已停止", suspending: "暂停中", suspended: "已暂停", resuming: "恢复中",
+    deleting: "删除中", deleted: "已删除", error: "运行异常",
+  };
+  function remoteStateOf(item) {
+    if (item.remote_state) return item.remote_state;
+    return item.status === "running" ? "running" : "stopped";
+  }
+  function remoteStateLabel(item) {
+    return REMOTE_STATE_LABELS[remoteStateOf(item)] || (item.status === "running" ? "运行中" : "已停止");
+  }
+  function powerFor(item) {
+    var st = remoteStateOf(item);
+    if (st === "stopped" || st === "error") return { label: "启动", action: "start" };
+    if (st === "suspended") return { label: "恢复", action: "resume" };
+    if (st === "running") return { label: "暂停", action: "suspend" };
+    return { label: remoteStateLabel(item), action: "" };
+  }
+  function findMachine(id) {
+    var found = null;
+    state.items.forEach(function (entry) { if (entry.id === id) found = entry; });
+    return found;
+  }
+
   function connName(item) {
     if (!item || !item.connection_id) return "";
     var found = null;
@@ -159,7 +184,7 @@
     
   }
 
-  function card(kind, item, facts) {
+  function card(kind, item, facts, actionsOverride) {
     var lede = kind === "worker" ? item.description : item.region;
     var id = C.escapeHtml(item.id);
     var actions = "";
@@ -169,6 +194,8 @@
       if (item.ip) actions += "<button type=\"button\" class=\"secondary\" data-copy=\"" + C.escapeHtml(item.ip) + "\" data-label=\"复制 IP\">复制 IP</button>";
     } else if (kind === "worker") {
       actions += "<button type=\"button\" class=\"secondary\" data-mact=\"workers\" data-kind=\"worker\" data-id=\"" + id + "\">" + (item.platform === "vercel" ? "查看项目" : "查看 Workers") + "</button>";
+    } else if (actionsOverride !== undefined) {
+      actions = actionsOverride;
     } else {
       actions += "<button type=\"button\" class=\"secondary\" data-mact=\"edit\" data-kind=\"" + kind + "\" data-id=\"" + id + "\">编辑</button>";
     }
@@ -178,6 +205,7 @@
       title: item.name,
       pill: kind === "host" ? connName(item) || undefined : undefined,
       status: item.status,
+      statusText: item.connection_id ? remoteStateLabel(item) : undefined,
       lede: lede || "",
       facts: facts,
       actions: actions,
@@ -205,12 +233,20 @@
     }
     if (item.connection_id) {
       var connFacts = [
-        ["状态", C.escapeHtml(item.status === "running" ? "运行中" : "已停止")],
+        ["状态", C.escapeHtml(remoteStateLabel(item))],
         ["规格", C.escapeHtml(item.spec || "未同步")],
         ["最近同步", C.escapeHtml(item.last_sync_at ? C.formatMinute(item.last_sync_at) || "—" : "尚未同步")],
       ];
       if (item.remote_name && item.remote_name !== item.name) connFacts.push(["远端名称", C.escapeHtml(item.remote_name)]);
-      return card(uiKind, item, connFacts);
+      var pw = powerFor(item);
+      var pid = C.escapeHtml(item.id);
+      var quick =
+        (pw.action
+          ? "<button type=\"button\" class=\"secondary\" data-mpower=\"" + pw.action + "\" data-id=\"" + pid + "\">" + pw.label + "</button>"
+          : "<button type=\"button\" class=\"secondary\" disabled>" + pw.label + "</button>") +
+        "<button type=\"button\" class=\"secondary\" data-mports data-id=\"" + pid + "\">端口转发</button>" +
+        "<button type=\"button\" class=\"secondary\" data-mkeep data-id=\"" + pid + "\">保活</button>";
+      return card(uiKind, item, connFacts, quick);
     }
     var facts = [
       ["规格", C.escapeHtml(item.spec)],
@@ -750,6 +786,220 @@
     );
   }
 
+  // ---- 接入设备快捷功能：电源 / 端口转发 / 保活 ----
+
+  function powerMachine(btn) {
+    var id = btn.getAttribute("data-id");
+    var action = btn.getAttribute("data-mpower");
+    var labels = { start: "启动", resume: "恢复", suspend: "暂停", stop: "停止" };
+    btn.disabled = true;
+    var original = btn.textContent;
+    btn.textContent = "处理中…";
+    api("POST", "/api/machines/" + encodeURIComponent(id) + "/power", { action: action })
+      .then(function (res) {
+        if (res.data && res.data.ok) {
+          C.toast("已发送" + (labels[action] || "操作") + "指令，状态刷新中");
+          return load();
+        }
+        C.toast((res.data && res.data.error) || "操作失败", "error");
+      })
+      .catch(function () { C.toast("操作失败", "error"); })
+      .then(function () {
+        btn.disabled = false;
+        btn.textContent = original;
+      });
+  }
+
+  function openPortsDialog(id) {
+    var ctrl = C.openManageDialog({
+      title: "端口转发",
+      size: "md",
+      bodyHtml: '<div data-ports-body>' + C.emptyState("正在读取", "稍等片刻") + "</div>",
+    });
+    var bodyEl = ctrl.bodyEl.querySelector("[data-ports-body]");
+    function renderPorts(data) {
+      var ports = data.ports || [];
+      var rows = ports.length
+        ? ports
+            .map(function (p) {
+              return (
+                '<div class="port-row"><div class="port-main"><span class="port-name">' +
+                C.escapeHtml(p.name || "未命名") +
+                ' <span class="subtle">端口 ' +
+                p.port +
+                "</span></span>" +
+                (p.url
+                  ? '<a class="port-url" href="' + C.escapeHtml(p.url) + '" target="_blank" rel="noopener">' + C.escapeHtml(p.url) + "</a>"
+                  : "") +
+                '</div><button type="button" class="ghost" data-port-del="' +
+                p.port +
+                '">取消公开</button></div>'
+              );
+            })
+            .join("")
+        : C.emptyState("还没有公开的端口", "把机器上的服务端口公开后，会生成一个公网地址");
+      bodyEl.innerHTML =
+        (data.enabled === false ? '<p class="callout danger">这台机器的公网端口功能未开启</p>' : "") +
+        rows +
+        '<form class="port-add" data-port-form><label>端口<input name="port" type="number" min="1024" max="65535" placeholder="1024 – 65535" /></label>' +
+        '<label>名称<input name="name" maxlength="100" placeholder="例如 Web 服务" /></label>' +
+        '<button type="submit">公开端口</button></form>' +
+        '<p class="subtle">5901 和 6768 是平台保留端口；每台机器最多公开 16 个</p>';
+    }
+    function refresh() {
+      return api("GET", "/api/machines/" + encodeURIComponent(id) + "/ports").then(function (res) {
+        if (res.data && res.data.ok) renderPorts(res.data);
+        else bodyEl.innerHTML = C.emptyState("读取失败", (res.data && res.data.error) || "请稍后再试");
+      });
+    }
+    ctrl.dialog.addEventListener("submit", function (event) {
+      var form = event.target.closest("[data-port-form]");
+      if (!form) return;
+      event.preventDefault();
+      var data = new FormData(form);
+      api("POST", "/api/machines/" + encodeURIComponent(id) + "/ports", {
+        port: Number(data.get("port")),
+        name: String(data.get("name") || ""),
+      }).then(function (res) {
+        if (res.data && res.data.ok) {
+          C.toast("端口已公开");
+          refresh();
+        } else C.toast((res.data && res.data.error) || "公开失败", "error");
+      });
+    });
+    ctrl.dialog.addEventListener("click", function (event) {
+      var del = event.target.closest("[data-port-del]");
+      if (!del) return;
+      var port = del.getAttribute("data-port-del");
+      C.askConfirm(del, {
+        title: "取消公开端口 " + port + "？",
+        confirmLabel: "取消公开",
+        danger: true,
+        onConfirm: function () {
+          return api("DELETE", "/api/machines/" + encodeURIComponent(id) + "/ports/" + port).then(function (res) {
+            if (res.data && res.data.ok) {
+              C.toast("已取消公开");
+              refresh();
+            } else C.toast((res.data && res.data.error) || "取消失败", "error");
+          });
+        },
+      });
+    });
+    refresh();
+  }
+
+  function openKeepaliveDialog(id) {
+    api("GET", "/api/machines/" + encodeURIComponent(id) + "/keepalive").then(function (res) {
+      var policy = (res.data && res.data.keepalive) || { mode: "off", timezone: "Asia/Shanghai", windows: [] };
+      var mode = policy.mode || "off";
+      var windows = (policy.windows || []).map(function (w) { return { start: w.start, end: w.end }; });
+      function windowsHtml() {
+        return windows
+          .map(function (w, i) {
+            return (
+              '<div class="keep-window"><input type="time" value="' +
+              C.escapeHtml(w.start) +
+              '" data-kw-start="' +
+              i +
+              '" /><span>至</span><input type="time" value="' +
+              C.escapeHtml(w.end) +
+              '" data-kw-end="' +
+              i +
+              '" /><button type="button" class="ghost" data-kw-del="' +
+              i +
+              '">删除</button></div>'
+            );
+          })
+          .join("");
+      }
+      var ctrl = C.openFormDialog({
+        title: "保活设置",
+        bodyHtml:
+          "<label>保活模式</label>" +
+          '<div class="page-tabs" role="tablist">' +
+          [
+            ["off", "关闭"],
+            ["always", "全天"],
+            ["windows", "时段"],
+          ]
+            .map(function (opt) {
+              return '<button type="button" class="page-tab" data-kmode="' + opt[0] + '" aria-selected="' + (mode === opt[0] ? "true" : "false") + '">' + opt[1] + "</button>";
+            })
+            .join("") +
+          "</div>" +
+          '<div data-kwindows' +
+          (mode === "windows" ? "" : " hidden") +
+          ">" +
+          '<div data-kw-list>' +
+          windowsHtml() +
+          "</div>" +
+          '<button type="button" class="secondary" data-kw-add>添加时段</button>' +
+          '<label>时区<input name="timezone" autocomplete="off" value="' +
+          C.escapeHtml(policy.timezone || "Asia/Shanghai") +
+          '" /></label>' +
+          "</div>" +
+          (policy.last_result
+            ? '<p class="subtle">上次检查：' + C.escapeHtml(policy.last_result) + (policy.last_checked_at ? " · " + C.escapeHtml(C.formatMinute(policy.last_checked_at) || "") : "") + "</p>"
+            : "") +
+          '<p class="subtle">保活时段内机器被停机或暂停时会自动拉起；定时检查随 Cron 一起生效，目前手动同步连接时也会顺带检查一次</p>',
+        submitLabel: "保存",
+        onSubmit: function (form) {
+          syncWindowInputs();
+          var tz = String(new FormData(form).get("timezone") || "Asia/Shanghai");
+          return api("PUT", "/api/machines/" + encodeURIComponent(id) + "/keepalive", {
+            mode: mode,
+            timezone: tz,
+            windows: mode === "windows" ? windows : [],
+          }).then(function (res) {
+            if (res.data && res.data.ok) {
+              C.toast("保活设置已保存");
+              return true;
+            }
+            throw new Error((res.data && res.data.error) || "保存失败");
+          });
+        },
+      });
+      function syncWindowInputs() {
+        ctrl.dialog.querySelectorAll("[data-kw-start]").forEach(function (input) {
+          var entry = windows[Number(input.getAttribute("data-kw-start"))];
+          if (entry) entry.start = input.value;
+        });
+        ctrl.dialog.querySelectorAll("[data-kw-end]").forEach(function (input) {
+          var entry = windows[Number(input.getAttribute("data-kw-end"))];
+          if (entry) entry.end = input.value;
+        });
+      }
+      ctrl.dialog.addEventListener("click", function (event) {
+        var tab = event.target.closest("[data-kmode]");
+        if (tab) {
+          mode = tab.getAttribute("data-kmode");
+          ctrl.dialog.querySelectorAll("[data-kmode]").forEach(function (b) {
+            b.setAttribute("aria-selected", b === tab ? "true" : "false");
+          });
+          var kw = ctrl.dialog.querySelector("[data-kwindows]");
+          if (kw) kw.hidden = mode !== "windows";
+          return;
+        }
+        if (event.target.closest("[data-kw-add]")) {
+          if (windows.length >= 5) {
+            C.toast("最多 5 个时段", "error");
+            return;
+          }
+          syncWindowInputs();
+          windows.push({ start: "09:00", end: "18:00" });
+          ctrl.dialog.querySelector("[data-kw-list]").innerHTML = windowsHtml();
+          return;
+        }
+        var del = event.target.closest("[data-kw-del]");
+        if (del) {
+          syncWindowInputs();
+          windows.splice(Number(del.getAttribute("data-kw-del")), 1);
+          ctrl.dialog.querySelector("[data-kw-list]").innerHTML = windowsHtml();
+        }
+      });
+    });
+  }
+
   // 服务商管理悬浮面板：连接以与云主机相同的卡片呈现
   var connPanelCtrl = null;
   function connCardsHtml() {
@@ -1010,6 +1260,12 @@
       openManage(zone.getAttribute("data-manage"));
       return;
     }
+    var pwBtn = target.closest("[data-mpower]");
+    if (pwBtn && !pwBtn.disabled) return void powerMachine(pwBtn);
+    var portsBtn = target.closest("[data-mports]");
+    if (portsBtn) return void openPortsDialog(portsBtn.getAttribute("data-id"));
+    var keepBtn = target.closest("[data-mkeep]");
+    if (keepBtn) return void openKeepaliveDialog(keepBtn.getAttribute("data-id"));
     var connBtn = target.closest("[data-conn]");
     if (connBtn) {
       var connId = connBtn.getAttribute("data-id");

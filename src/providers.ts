@@ -27,6 +27,7 @@ export interface ProviderDevice {
   remoteId: string;
   name: string;
   status: string; // normalized: "running" | "offline"
+  state?: string; // raw provider state, e.g. InstaBox "suspended"
   os: string;
   spec: string;
   ip: string;
@@ -237,6 +238,7 @@ async function instaboxListDevices(config: ProviderConfig): Promise<ProviderDevi
         remoteId: String(raw.id ?? ""),
         name: String(raw.name ?? raw.id ?? ""),
         status: ["running", "starting", "resuming", "creating"].includes(state) ? "running" : "offline",
+        state,
         os: "",
         spec: vcpus || memGiB ? vcpus + " 核 / " + (Number.isInteger(memGiB) ? String(memGiB) : memGiB.toFixed(1)) + " GB" : "",
         ip: "",
@@ -554,7 +556,7 @@ export async function testStoredConnection(db: D1Database, key: ContentKey, id: 
 }
 
 const MACHINE_INSERT =
-  "INSERT INTO machines (id, kind, name, region, spec, description, version, status, binding, last_heartbeat_at, note, hostname, os, ip, ssh_host, ssh_port, ssh_user, auth_type, ssh_secret_enc, ssh_tail, vendor, access_note, cf_account_id, api_token_enc, api_token_tail, connection_id, remote_id, remote_name, last_sync_at, group_id, created_at, updated_at) VALUES (?, 'cloud', ?, ?, ?, '', '', ?, '未绑定', NULL, '', '', ?, ?, '', 22, '', 'password', '', '', ?, '', '', '', '', ?, ?, ?, ?, ?, ?, ?)";
+  "INSERT INTO machines (id, kind, name, region, spec, description, version, status, binding, last_heartbeat_at, note, hostname, os, ip, ssh_host, ssh_port, ssh_user, auth_type, ssh_secret_enc, ssh_tail, vendor, access_note, cf_account_id, api_token_enc, api_token_tail, connection_id, remote_id, remote_name, remote_state, last_sync_at, group_id, created_at, updated_at) VALUES (?, 'cloud', ?, ?, ?, '', '', ?, '未绑定', NULL, '', '', ?, ?, '', 22, '', 'password', '', '', ?, '', '', '', '', ?, ?, ?, ?, ?, ?, ?, ?)";
 
 export async function createConnectionWithDevices(
   db: D1Database,
@@ -597,6 +599,7 @@ export async function createConnectionWithDevices(
       connectionId,
       device.remoteId,
       device.name,
+      device.state ?? null,
       now,
       groupId,
       now,
@@ -643,12 +646,13 @@ export async function syncConnection(db: D1Database, key: ContentKey, id: string
       continue;
     }
     // The local alias (machines.name) is never overwritten by a sync.
-    await prepare(db, "UPDATE machines SET os = ?, spec = ?, ip = ?, status = ?, remote_name = ?, last_sync_at = ?, updated_at = ? WHERE id = ?", [
+    await prepare(db, "UPDATE machines SET os = ?, spec = ?, ip = ?, status = ?, remote_name = ?, remote_state = ?, last_sync_at = ?, updated_at = ? WHERE id = ?", [
       remote.os,
       remote.spec,
       remote.ip,
       remote.status,
       remote.name,
+      remote.state ?? null,
       now,
       now,
       local.id,
@@ -679,4 +683,266 @@ export async function syncAllConnections(db: D1Database, key: ContentKey, now: n
     }
   }
   void now;
+}
+
+
+// ---------------------------------------------------------------------------
+// Per-machine operations (power / public ports / keepalive)
+// InstaBox natively exposes power (POST /v1/machines/:id/<action> with an
+// Idempotency-Key) and public ports (/v1/machines/:id/ports). Keepalive
+// policy is stored locally; execution rides the scheduled sweep and, as an
+// interim while cron slots are scarce, manual connection syncs.
+
+export interface ProviderPort {
+  id: string;
+  port: number;
+  name: string;
+  url: string;
+  createdAt: string;
+}
+
+async function instaboxRequest(
+  config: ProviderConfig,
+  path: string,
+  init?: { method?: string; body?: unknown; idempotencyKey?: string },
+): Promise<unknown> {
+  const base = (config["endpoint"] || "https://api.instabox.sh").replace(/\/+$/, "");
+  const headers: Record<string, string> = { "X-API-Key": config["apiKey"] ?? "", accept: "application/json" };
+  if (init?.body !== undefined) headers["content-type"] = "application/json";
+  if (init?.idempotencyKey) headers["Idempotency-Key"] = init.idempotencyKey;
+  let response: Response;
+  try {
+    response = await fetch(base + path, {
+      method: init?.method || "GET",
+      headers,
+      body: init?.body !== undefined ? JSON.stringify(init.body) : undefined,
+      signal: AbortSignal.timeout(20000),
+    });
+  } catch {
+    throw new MachineError(502, "连接 InstaBox 失败，请稍后重试");
+  }
+  if (response.status === 401 || response.status === 403) {
+    throw new MachineError(502, "InstaBox：API 密钥不正确或权限不足（此操作需要带 machines:write 权限的密钥）");
+  }
+  if (response.status === 429) throw new MachineError(502, "InstaBox：请求过于频繁或额度受限，请稍后重试");
+  if (!response.ok) throw new MachineError(502, "InstaBox 返回异常（HTTP " + response.status + "）");
+  return response.json().catch(() => null);
+}
+
+interface MachineConnContext {
+  provider: string;
+  config: ProviderConfig;
+  remoteId: string;
+}
+
+async function machineConnContext(db: D1Database, key: ContentKey, machineId: string): Promise<MachineConnContext> {
+  const rows = rowsOf<{ connection_id: string; remote_id: string }>(
+    await prepare(db, "SELECT connection_id, remote_id FROM machines WHERE id = ?", [machineId]).all<{ connection_id: string; remote_id: string }>(),
+  );
+  const machine = rows[0];
+  if (!machine) throw new MachineError(404, "云主机不存在");
+  if (!machine.connection_id) throw new MachineError(400, "这台云主机不是接入设备，没有来源连接");
+  const conn = await getConnection(db, machine.connection_id);
+  if (!conn) throw new MachineError(404, "来源连接不存在");
+  const config = await storedConfig(db, key, conn);
+  return { provider: conn.provider, config, remoteId: machine.remote_id };
+}
+
+function requireInstabox(ctx: MachineConnContext): void {
+  if (ctx.provider !== "instabox") throw new MachineError(400, "该来源暂不支持此操作");
+}
+
+export async function providerPower(db: D1Database, key: ContentKey, machineId: string, action: string): Promise<void> {
+  if (!["start", "stop", "suspend", "resume"].includes(action)) throw new MachineError(400, "操作不正确");
+  const ctx = await machineConnContext(db, key, machineId);
+  requireInstabox(ctx);
+  await instaboxRequest(ctx.config, "/v1/machines/" + encodeURIComponent(ctx.remoteId) + "/" + action, {
+    method: "POST",
+    idempotencyKey: crypto.randomUUID(),
+  });
+}
+
+function portView(raw: unknown): ProviderPort | null {
+  const p = (raw ?? {}) as Record<string, unknown>;
+  const port = Number(p.port);
+  if (!Number.isInteger(port) || port <= 0) return null;
+  return {
+    id: String(p.id ?? ""),
+    port,
+    name: String(p.name ?? ""),
+    url: String(p.url ?? ""),
+    createdAt: String(p.createdAt ?? ""),
+  };
+}
+
+export async function providerPortsList(
+  db: D1Database,
+  key: ContentKey,
+  machineId: string,
+): Promise<{ enabled: boolean; ports: ProviderPort[] }> {
+  const ctx = await machineConnContext(db, key, machineId);
+  requireInstabox(ctx);
+  const raw = (await instaboxRequest(ctx.config, "/v1/machines/" + encodeURIComponent(ctx.remoteId) + "/ports")) as {
+    enabled?: unknown;
+    ports?: unknown[];
+  } | null;
+  if (!raw || !Array.isArray(raw.ports)) throw new MachineError(502, "InstaBox 返回了无法识别的响应");
+  const ports = raw.ports
+    .map(portView)
+    .filter((entry): entry is ProviderPort => entry !== null)
+    .sort((a, b) => a.port - b.port);
+  return { enabled: raw.enabled === true, ports };
+}
+
+export async function providerPortAdd(db: D1Database, key: ContentKey, machineId: string, port: number, name: string): Promise<ProviderPort> {
+  const ctx = await machineConnContext(db, key, machineId);
+  requireInstabox(ctx);
+  const raw = await instaboxRequest(ctx.config, "/v1/machines/" + encodeURIComponent(ctx.remoteId) + "/ports", {
+    method: "POST",
+    body: { port, name },
+  });
+  const view = portView(raw);
+  if (!view) throw new MachineError(502, "InstaBox 返回了无法识别的响应");
+  return view;
+}
+
+export async function providerPortRemove(db: D1Database, key: ContentKey, machineId: string, port: number): Promise<void> {
+  const ctx = await machineConnContext(db, key, machineId);
+  requireInstabox(ctx);
+  await instaboxRequest(ctx.config, "/v1/machines/" + encodeURIComponent(ctx.remoteId) + "/ports/" + port, { method: "DELETE" });
+}
+
+// ---- keepalive ----
+
+export interface KeepalivePolicy {
+  machine_id: string;
+  mode: "off" | "always" | "windows";
+  timezone: string;
+  windows: Array<{ start: string; end: string }>;
+  last_checked_at: number | null;
+  last_result: string;
+}
+
+export async function getKeepalive(db: D1Database, machineId: string): Promise<KeepalivePolicy> {
+  const rows = rowsOf<{ mode: string; timezone: string; windows_json: string; last_checked_at: number | null; last_result: string }>(
+    await prepare(db, "SELECT mode, timezone, windows_json, last_checked_at, last_result FROM machine_keepalive WHERE machine_id = ?", [
+      machineId,
+    ]).all<{ mode: string; timezone: string; windows_json: string; last_checked_at: number | null; last_result: string }>(),
+  );
+  const row = rows[0];
+  if (!row) {
+    return { machine_id: machineId, mode: "off", timezone: "Asia/Shanghai", windows: [], last_checked_at: null, last_result: "" };
+  }
+  let windows: Array<{ start: string; end: string }> = [];
+  try {
+    const parsed = JSON.parse(row.windows_json || "[]") as unknown;
+    if (Array.isArray(parsed)) {
+      windows = parsed
+        .filter(
+          (entry): entry is { start: string; end: string } =>
+            !!entry && typeof entry === "object" && typeof (entry as { start?: unknown }).start === "string" && typeof (entry as { end?: unknown }).end === "string",
+        )
+        .map((entry) => ({ start: entry.start, end: entry.end }));
+    }
+  } catch {
+    windows = [];
+  }
+  return {
+    machine_id: machineId,
+    mode: row.mode === "always" || row.mode === "windows" ? row.mode : "off",
+    timezone: row.timezone || "Asia/Shanghai",
+    windows,
+    last_checked_at: row.last_checked_at ?? null,
+    last_result: row.last_result || "",
+  };
+}
+
+export async function putKeepalive(
+  db: D1Database,
+  machineId: string,
+  policy: { mode: "off" | "always" | "windows"; timezone: string; windows: Array<{ start: string; end: string }> },
+  now: number,
+): Promise<KeepalivePolicy> {
+  await prepare(
+    db,
+    "INSERT INTO machine_keepalive (machine_id, mode, timezone, windows_json, last_checked_at, last_result, updated_at) VALUES (?, ?, ?, ?, NULL, '', ?) ON CONFLICT(machine_id) DO UPDATE SET mode = excluded.mode, timezone = excluded.timezone, windows_json = excluded.windows_json, updated_at = excluded.updated_at",
+    [machineId, policy.mode, policy.timezone, JSON.stringify(policy.windows), now],
+  ).run();
+  return getKeepalive(db, machineId);
+}
+
+function keepaliveInWindow(policy: KeepalivePolicy, now: number): boolean {
+  if (policy.mode === "always") return true;
+  if (policy.mode !== "windows" || !policy.windows.length) return false;
+  let parts: Intl.DateTimeFormatPart[];
+  try {
+    parts = new Intl.DateTimeFormat("en-GB", { timeZone: policy.timezone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(
+      new Date(now),
+    );
+  } catch {
+    return false;
+  }
+  const pick = (type: string): number => Number((parts.find((part) => part.type === type) || { value: "0" }).value) || 0;
+  const current = pick("hour") * 60 + pick("minute");
+  const toMinutes = (value: string): number => {
+    const bits = value.split(":");
+    return (Number(bits[0]) || 0) * 60 + (Number(bits[1]) || 0);
+  };
+  return policy.windows.some((window) => {
+    const start = toMinutes(window.start);
+    const end = toMinutes(window.end);
+    return start <= end ? current >= start && current < end : current >= start || current < end;
+  });
+}
+
+export async function runKeepaliveSweep(db: D1Database, key: ContentKey, now: number, onlyConnectionId?: string): Promise<void> {
+  const rows = rowsOf<{ machine_id: string; connection_id: string; remote_id: string }>(
+    await prepare(
+      db,
+      "SELECT k.machine_id AS machine_id, m.connection_id AS connection_id, m.remote_id AS remote_id FROM machine_keepalive k JOIN machines m ON m.id = k.machine_id WHERE k.mode != 'off' AND m.connection_id != ''",
+      [],
+    ).all<{ machine_id: string; connection_id: string; remote_id: string }>(),
+  );
+  const deviceCache = new Map<string, ProviderDevice[]>();
+  for (const row of rows) {
+    if (onlyConnectionId && row.connection_id !== onlyConnectionId) continue;
+    try {
+      const policy = await getKeepalive(db, row.machine_id);
+      let result: string;
+      if (!keepaliveInWindow(policy, now)) {
+        result = "不在保活时段";
+      } else {
+        let devices = deviceCache.get(row.connection_id);
+        if (!devices) {
+          const conn = await getConnection(db, row.connection_id);
+          if (!conn) continue;
+          const config = await storedConfig(db, key, conn);
+          devices = await fetchProviderDevices(conn.provider, config);
+          deviceCache.set(row.connection_id, devices);
+        }
+        const device = devices.find((entry) => entry.remoteId === row.remote_id);
+        if (!device) {
+          result = "远端设备不存在";
+        } else if (device.status === "running") {
+          result = "运行中";
+        } else if (device.state === "suspended") {
+          await providerPower(db, key, row.machine_id, "resume");
+          result = "已恢复运行";
+        } else if (device.state === "stopped") {
+          await providerPower(db, key, row.machine_id, "start");
+          result = "已启动";
+        } else {
+          result = "当前状态未处理（" + (device.state || device.status) + "）";
+        }
+      }
+      await prepare(db, "UPDATE machine_keepalive SET last_checked_at = ?, last_result = ?, updated_at = ? WHERE machine_id = ?", [
+        now,
+        result,
+        now,
+        row.machine_id,
+      ]).run();
+    } catch {
+      // One bad policy must not stop the sweep.
+    }
+  }
 }

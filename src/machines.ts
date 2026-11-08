@@ -67,6 +67,7 @@ export interface MachineRow {
   connection_id: string;
   remote_id: string;
   remote_name: string;
+  remote_state: string | null;
   last_sync_at: number | null;
   group_id: string | null;
   ai_summary: string | null;
@@ -109,6 +110,7 @@ export interface PublicMachine {
   connection_id: string;
   remote_id: string;
   remote_name: string;
+  remote_state: string | null;
   last_sync_at: number | null;
   group_id: string | null;
   created_at: number;
@@ -116,7 +118,7 @@ export interface PublicMachine {
 }
 
 const COLUMNS =
-  "id, kind, name, region, spec, description, version, status, binding, last_heartbeat_at, note, hostname, os, ip, ssh_host, ssh_port, ssh_user, auth_type, ssh_secret_enc, ssh_tail, kernel, arch, probe_status, probe_at, probe_error, host_fingerprint, vendor, access_note, cf_account_id, platform, team_id, api_token_enc, api_token_tail, connection_id, remote_id, remote_name, last_sync_at, ai_summary, ai_tags, created_at, updated_at, group_id";
+  "id, kind, name, region, spec, description, version, status, binding, last_heartbeat_at, note, hostname, os, ip, ssh_host, ssh_port, ssh_user, auth_type, ssh_secret_enc, ssh_tail, kernel, arch, probe_status, probe_at, probe_error, host_fingerprint, vendor, access_note, cf_account_id, platform, team_id, api_token_enc, api_token_tail, connection_id, remote_id, remote_name, last_sync_at, ai_summary, ai_tags, created_at, updated_at, group_id, remote_state";
 
 const ID_PREFIX: Record<string, string> = { server: "sv_", cloud: "pc_", worker: "wk_" };
 
@@ -161,6 +163,7 @@ export function machinePublic(row: MachineRow): PublicMachine {
     connection_id: row.connection_id,
     remote_id: row.remote_id,
     remote_name: row.remote_name,
+    remote_state: row.remote_state ?? null,
     last_sync_at: row.last_sync_at,
     group_id: row.group_id,
     created_at: row.created_at,

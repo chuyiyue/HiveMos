@@ -7,7 +7,14 @@ import type { Env, WaitCtx } from "./env";
 import {
   createConnectionWithDevices,
   deleteConnection,
+  getKeepalive,
   listConnections,
+  providerPortAdd,
+  providerPortRemove,
+  providerPortsList,
+  providerPower,
+  putKeepalive,
+  runKeepaliveSweep,
   syncConnection,
   testAdHocConnection,
   testStoredConnection,
@@ -16,6 +23,7 @@ import {
   createMachine,
   deleteMachine,
   fetchWorkersForMachine,
+  getMachine,
   listMachines,
   MACHINE_KINDS,
   MachineError,
@@ -43,6 +51,14 @@ export async function handleMachinesRequest(request: Request, env: Env, ctx: Wai
   if (path === "/api/machines") return collection(request, env, ctx);
   const action = /^\/api\/machines\/([A-Za-z0-9_-]+)\/(reveal|workers|probe)$/.exec(path);
   if (action && action[1] && action[2]) return machineAction(request, env, action[1], action[2]);
+  const power = /^\/api\/machines\/([A-Za-z0-9_-]+)\/power$/.exec(path);
+  if (power && power[1]) return machinePower(request, env, power[1]);
+  const ports = /^\/api\/machines\/([A-Za-z0-9_-]+)\/ports$/.exec(path);
+  if (ports && ports[1]) return machinePorts(request, env, ports[1]);
+  const portOne = /^\/api\/machines\/([A-Za-z0-9_-]+)\/ports\/(\d+)$/.exec(path);
+  if (portOne && portOne[1] && portOne[2]) return machinePortOne(request, env, portOne[1], Number(portOne[2]));
+  const keepaliveRoute = /^\/api\/machines\/([A-Za-z0-9_-]+)\/keepalive$/.exec(path);
+  if (keepaliveRoute && keepaliveRoute[1]) return machineKeepalive(request, env, keepaliveRoute[1]);
   const one = /^\/api\/machines\/([A-Za-z0-9_-]+)$/.exec(path);
   if (one && one[1]) return machineOne(request, env, one[1]);
   return null;
@@ -282,6 +298,7 @@ async function providerActionRun(request: Request, env: Env, id: string, action:
   }
   return wrap(async () => {
     const result = await syncConnection(env.DB, vaultKeyOf(env), id, Date.now());
+    await runKeepaliveSweep(env.DB, vaultKeyOf(env), Date.now(), id).catch(() => undefined);
     const conn = (await listConnections(env.DB)).find((row) => row.id === id);
     const name = conn?.name ?? id;
     await logOp(env.DB, {
@@ -314,4 +331,164 @@ async function providerOneRun(request: Request, env: Env, id: string): Promise<R
     });
     return json({ ok: true });
   });
+}
+
+
+// ---------------------------------------------------------------------------
+// Per-machine operations: power, public ports, keepalive (imported devices)
+
+const POWER_LABELS: Record<string, string> = { start: "启动", stop: "停止", suspend: "暂停", resume: "恢复" };
+
+async function machinePower(request: Request, env: Env, id: string): Promise<Response> {
+  if (request.method.toUpperCase() !== "POST") return methodNotAllowed("POST");
+  const gate = await mutationGate(request);
+  if (gate) return gate;
+  const body = await readBody(request);
+  if (!body.ok) return body.response;
+  const action = typeof body.value.action === "string" ? body.value.action : "";
+  return wrap(async () => {
+    const machine = await getMachine(env.DB, id);
+    if (!machine) return json({ ok: false, error: "云主机不存在" }, 404);
+    await providerPower(env.DB, vaultKeyOf(env), id, action);
+    if (machine.connection_id) {
+      await syncConnection(env.DB, vaultKeyOf(env), machine.connection_id, Date.now()).catch(() => undefined);
+    }
+    const label = POWER_LABELS[action] ?? "电源操作";
+    await logOp(env.DB, {
+      actor: await panelActor(request, env),
+      module: "云主机",
+      action: label,
+      targetId: id,
+      targetName: machine.name,
+      text: `${label}了云主机「${machine.name}」`,
+    });
+    const fresh = await getMachine(env.DB, id);
+    return json({ ok: true, machine: fresh ? machinePublic(fresh) : null });
+  });
+}
+
+async function machinePorts(request: Request, env: Env, id: string): Promise<Response> {
+  const method = request.method.toUpperCase();
+  if (method === "GET") {
+    return wrap(async () => {
+      const result = await providerPortsList(env.DB, vaultKeyOf(env), id);
+      return json({ ok: true, enabled: result.enabled, ports: result.ports });
+    });
+  }
+  if (method === "POST") {
+    const gate = await mutationGate(request);
+    if (gate) return gate;
+    const body = await readBody(request);
+    if (!body.ok) return body.response;
+    const port = Number(body.value.port);
+    const name = typeof body.value.name === "string" ? body.value.name.trim() : "";
+    if (!Number.isInteger(port) || port < 1024 || port > 65535) {
+      return json({ ok: false, error: "端口号需要是 1024 到 65535 的整数" }, 400);
+    }
+    if (port === 5901 || port === 6768) {
+      return json({ ok: false, error: "5901 和 6768 是平台保留端口，不能公开" }, 400);
+    }
+    if (Array.from(name).length > 100 || /[\u0000-\u001f\u007f]/.test(name)) {
+      return json({ ok: false, error: "端口名称最多 100 个字符，不能包含控制字符" }, 400);
+    }
+    return wrap(async () => {
+      const machine = await getMachine(env.DB, id);
+      if (!machine) return json({ ok: false, error: "云主机不存在" }, 404);
+      const existing = await providerPortsList(env.DB, vaultKeyOf(env), id);
+      if (existing.ports.length >= 16) return json({ ok: false, error: "每台机器最多公开 16 个端口" }, 400);
+      if (existing.ports.some((entry) => entry.port === port)) return json({ ok: false, error: "这个端口已经公开了" }, 400);
+      const created = await providerPortAdd(env.DB, vaultKeyOf(env), id, port, name);
+      await logOp(env.DB, {
+        actor: await panelActor(request, env),
+        module: "云主机",
+        action: "端口转发",
+        targetId: id,
+        targetName: machine.name,
+        text: `给云主机「${machine.name}」公开了端口 ${port}`,
+      });
+      return json({ ok: true, port: created }, 201);
+    });
+  }
+  return methodNotAllowed("GET, POST");
+}
+
+async function machinePortOne(request: Request, env: Env, id: string, port: number): Promise<Response> {
+  if (request.method.toUpperCase() !== "DELETE") return methodNotAllowed("DELETE");
+  const gate = await mutationGate(request);
+  if (gate) return gate;
+  return wrap(async () => {
+    const machine = await getMachine(env.DB, id);
+    if (!machine) return json({ ok: false, error: "云主机不存在" }, 404);
+    await providerPortRemove(env.DB, vaultKeyOf(env), id, port);
+    await logOp(env.DB, {
+      actor: await panelActor(request, env),
+      module: "云主机",
+      action: "取消端口转发",
+      targetId: id,
+      targetName: machine.name,
+      text: `取消了云主机「${machine.name}」的端口 ${port} 公开`,
+    });
+    return json({ ok: true });
+  });
+}
+
+function readKeepaliveBody(value: Record<string, unknown>): { mode: "off" | "always" | "windows"; timezone: string; windows: Array<{ start: string; end: string }> } {
+  const mode = typeof value.mode === "string" ? value.mode : "";
+  if (mode !== "off" && mode !== "always" && mode !== "windows") throw new MachineError(400, "请选择有效的保活模式");
+  const timezone = typeof value.timezone === "string" && value.timezone ? value.timezone : "Asia/Shanghai";
+  try {
+    new Intl.DateTimeFormat("en", { timeZone: timezone }).format();
+  } catch {
+    throw new MachineError(400, "请选择有效的 IANA 时区，例如 Asia/Shanghai");
+  }
+  if (mode !== "windows") return { mode, timezone, windows: [] };
+  if (!Array.isArray(value.windows) || value.windows.length < 1 || value.windows.length > 5) {
+    throw new MachineError(400, "请设置 1 到 5 个时间段");
+  }
+  const occupied = new Set<number>();
+  const windows = value.windows.map((entry) => {
+    const window = (entry ?? {}) as { start?: unknown; end?: unknown };
+    if (typeof window.start !== "string" || typeof window.end !== "string" || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(window.start) || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(window.end)) {
+      throw new MachineError(400, "时间格式需要为 HH:mm");
+    }
+    const toMinutes = (text: string): number => Number(text.slice(0, 2)) * 60 + Number(text.slice(3, 5));
+    const start = toMinutes(window.start);
+    const end = toMinutes(window.end);
+    if (start === end) throw new MachineError(400, "开始和结束时间不能相同；全天保活请用「全天」模式");
+    for (let minute = start; minute !== end; minute = (minute + 1) % 1440) {
+      if (occupied.has(minute)) throw new MachineError(400, "时间段不能重叠");
+      occupied.add(minute);
+    }
+    return { start: window.start, end: window.end };
+  });
+  return { mode, timezone, windows };
+}
+
+async function machineKeepalive(request: Request, env: Env, id: string): Promise<Response> {
+  const method = request.method.toUpperCase();
+  if (method === "GET") {
+    return wrap(async () => json({ ok: true, keepalive: await getKeepalive(env.DB, id) }));
+  }
+  if (method === "PUT") {
+    const gate = await mutationGate(request);
+    if (gate) return gate;
+    const body = await readBody(request);
+    if (!body.ok) return body.response;
+    return wrap(async () => {
+      const machine = await getMachine(env.DB, id);
+      if (!machine) return json({ ok: false, error: "云主机不存在" }, 404);
+      const policy = readKeepaliveBody(body.value);
+      const saved = await putKeepalive(env.DB, id, policy, Date.now());
+      await logOp(env.DB, {
+        actor: await panelActor(request, env),
+        module: "云主机",
+        action: "保活设置",
+        targetId: id,
+        targetName: machine.name,
+        text: `把云主机「${machine.name}」的保活设为${policy.mode === "off" ? "关闭" : policy.mode === "always" ? "全天" : "时段"}`,
+      });
+      return json({ ok: true, keepalive: saved });
+    });
+  }
+  return methodNotAllowed("GET, PUT");
 }

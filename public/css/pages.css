@@ -229,6 +229,18 @@ button.copy-btn:hover { background: var(--surface-hover); }
 
 /* 设置页管理员账号：两列各半 */
 .account-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; align-items: start; }
+
+/* 端口转发与保活弹窗 */
+.port-row { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--r-md); margin-top: 8px; }
+.port-main { display: grid; gap: 1px; min-width: 0; flex: 1; }
+.port-name { font-weight: 600; }
+.port-url { color: var(--accent-text); font-size: var(--fs-sm); overflow-wrap: anywhere; }
+.port-add { display: grid; grid-template-columns: 150px 1fr auto; gap: 8px; align-items: end; margin-top: 14px; }
+.keep-window { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.keep-window input { flex: 1; min-width: 0; }
+@media (max-width: 639px) {
+  .port-add { grid-template-columns: 1fr; }
+}
 .account-col { min-width: 0; }
 @media (max-width: 860px) {
   .account-cols { grid-template-columns: 1fr; }

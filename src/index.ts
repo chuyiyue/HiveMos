@@ -34,6 +34,8 @@ import { handleMemoryRequest } from "./memory-http";
 import { handleSoulRequest } from "./soul-http";
 import { handleTasksRequest } from "./tasks-http";
 import { handleMachinesRequest } from "./machines-http";
+import { runKeepaliveSweep, syncAllConnections } from "./providers";
+import { vaultKeyOf } from "./machines";
 import { handleOverviewRequest } from "./overview-http";
 import { handleRecordsRequest } from "./records-http";
 import { handleOplogRequest } from "./oplog-http";
@@ -140,6 +142,12 @@ export default {
       await syncDueMirrors(env.DB, Date.now());
     } catch {
       // Mirror sources retry on the next sweep; failures keep the old data.
+    }
+    try {
+      await syncAllConnections(env.DB, vaultKeyOf(env), Date.now());
+      await runKeepaliveSweep(env.DB, vaultKeyOf(env), Date.now());
+    } catch {
+      // Connection sync and keepalive retry on the next sweep.
     }
     try {
       // Evidence stamp for the settings page: cron status there is read
