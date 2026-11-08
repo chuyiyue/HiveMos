@@ -336,6 +336,8 @@ class SocketIo {
     const writer = this.socket.writable.getWriter();
     try {
       await writer.write(data as unknown as Uint8Array);
+    } catch {
+      throw new SshProbeError("unreachable", "连接被对端关闭");
     } finally {
       writer.releaseLock();
     }
