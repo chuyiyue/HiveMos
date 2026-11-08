@@ -168,6 +168,9 @@
     if (kind === "worker") {
       btns += "<button type=\"button\" class=\"secondary\" data-mact=\"workers\" data-kind=\"worker\" data-id=\"" + id + "\">" + (item.platform === "vercel" ? "查看项目" : "查看 Workers") + "</button>";
     }
+    if (item.connection_id) {
+      btns += "<button type=\"button\" class=\"secondary\" data-mact=\"snapshots\" data-kind=\"" + kind + "\" data-id=\"" + id + "\">快照</button>";
+    }
     btns += "<button type=\"button\" class=\"secondary\" data-mact=\"group\" data-kind=\"" + kind + "\" data-id=\"" + id + "\">设置分组</button>";
     btns += "<button type=\"button\" class=\"secondary\" data-mact=\"edit\" data-kind=\"" + kind + "\" data-id=\"" + id + "\">编辑</button>";
     btns += "<button type=\"button\" class=\"danger\" data-confirm-delete data-mact=\"delete\" data-kind=\"" + kind + "\" data-id=\"" + id + "\">删除</button>";
@@ -1360,6 +1363,128 @@
         }
       });
     });
+  }
+
+  // ---- 接入设备快照：列表 / 创建 / 删除 / 从快照新建机器 ----
+
+  function snapTime(iso) {
+    var t = Date.parse(iso || "");
+    if (!Number.isFinite(t)) return "";
+    var d = new Date(t);
+    function pad(n) { return String(n).padStart(2, "0"); }
+    return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()) + " " + pad(d.getHours()) + ":" + pad(d.getMinutes());
+  }
+
+  function openSnapshotsDialog(item) {
+    var id = item.id;
+    var ctrl = C.openManageDialog({
+      title: "快照",
+      size: "md",
+      bodyHtml: "<div data-snap-body>" + C.emptyState("正在读取", "稍等片刻") + "</div>",
+    });
+    var bodyEl = ctrl.bodyEl.querySelector("[data-snap-body]");
+    function sourceName(snap) {
+      if (snap.own) return "";
+      var found = null;
+      state.items.forEach(function (entry) { if (entry.remote_id && entry.remote_id === snap.sourceMachineId) found = entry; });
+      return found ? deviceTitle(found) : "其他机器";
+    }
+    function renderSnaps(snaps) {
+      var rows = snaps.length
+        ? snaps
+            .map(function (snap) {
+              var meta = [];
+              var when = snapTime(snap.createdAt);
+              if (when) meta.push(when);
+              if (snap.sizeBytes > 0) meta.push(fmtSize(snap.sizeBytes));
+              var src = sourceName(snap);
+              if (src) meta.push("来自「" + src + "」");
+              var status = snap.status === "pending" ? "保存中" : snap.status === "ready" ? "就绪" : snap.status || "";
+              var sid = C.escapeHtml(snap.id);
+              return (
+                "<div class=\"port-row\"><div class=\"port-main\"><span class=\"port-name\">" +
+                C.escapeHtml(snap.name) +
+                (status ? " <span class=\"subtle\">" + C.escapeHtml(status) + "</span>" : "") +
+                "</span>" +
+                (meta.length ? "<span class=\"subtle\">" + C.escapeHtml(meta.join(" · ")) + "</span>" : "") +
+                "</div>" +
+                "<button type=\"button\" class=\"ghost\" data-snap-spawn=\"" + sid + "\"" + (snap.status && snap.status !== "ready" ? " disabled" : "") + ">新建机器</button>" +
+                "<button type=\"button\" class=\"ghost\" data-confirm-delete data-snap-del=\"" + sid + "\">删除</button></div>"
+              );
+            })
+            .join("")
+        : C.emptyState("还没有快照", "给这台机器创建第一个快照");
+      bodyEl.innerHTML =
+        "<form class=\"port-add\" data-snap-form><label>快照名称<input name=\"name\" maxlength=\"100\" placeholder=\"例如 上线前备份\" /></label>" +
+        "<button type=\"submit\">创建快照</button></form>" +
+        "<p class=\"subtle\">快照保存这台机器的磁盘（根盘与 /data），不保存正在运行的进程；运行中创建的快照会先显示保存中</p>" +
+        rows;
+    }
+    function refresh() {
+      return api("GET", "/api/machines/" + encodeURIComponent(id) + "/snapshots").then(function (res) {
+        if (res.data && res.data.ok) renderSnaps(res.data.snapshots || []);
+        else bodyEl.innerHTML = C.emptyState("读取失败", (res.data && res.data.error) || "请稍后再试");
+      });
+    }
+    ctrl.dialog.addEventListener("submit", function (event) {
+      var form = event.target.closest("[data-snap-form]");
+      if (!form) return;
+      event.preventDefault();
+      var data = new FormData(form);
+      var name = String(data.get("name") || "").trim();
+      if (!name) {
+        C.toast("请填写快照名称", "error");
+        return;
+      }
+      api("POST", "/api/machines/" + encodeURIComponent(id) + "/snapshots", { name: name }).then(function (res) {
+        if (res.data && res.data.ok) {
+          C.toast(res.data.snapshot && res.data.snapshot.status === "pending" ? "快照创建中，保存完成后会变为就绪" : "快照已创建");
+          refresh();
+        } else C.toast((res.data && res.data.error) || "创建失败", "error");
+      });
+    });
+    ctrl.dialog.addEventListener("click", function (event) {
+      var del = event.target.closest("[data-snap-del]");
+      if (del) {
+        var snapId = del.getAttribute("data-snap-del");
+        api("DELETE", "/api/machines/" + encodeURIComponent(id) + "/snapshots/" + encodeURIComponent(snapId)).then(function (res) {
+          if (res.data && res.data.ok) {
+            C.toast("快照已删除");
+            refresh();
+          } else C.toast((res.data && res.data.error) || "删除失败", "error");
+        });
+        return;
+      }
+      var spawn = event.target.closest("[data-snap-spawn]");
+      if (spawn && !spawn.disabled) {
+        var spawnId = spawn.getAttribute("data-snap-spawn");
+        C.askConfirm({
+          anchor: ctrl.confirmSlot,
+          title: "用快照新建机器",
+          text: "用这个快照新建一台机器吗？会占用一个机器名额，新机器会出现在云主机列表里",
+          confirmLabel: "新建机器",
+        }).then(function (yes) {
+          if (!yes) return;
+          spawn.disabled = true;
+          api("POST", "/api/machines/" + encodeURIComponent(id) + "/snapshots/" + encodeURIComponent(spawnId) + "/spawn", {})
+            .then(function (res) {
+              if (res.data && res.data.ok) {
+                C.toast("已新建机器「" + (res.data.name || "") + "」，列表已同步");
+                ctrl.close();
+                load();
+              } else {
+                spawn.disabled = false;
+                C.toast((res.data && res.data.error) || "新建失败", "error");
+              }
+            })
+            .catch(function () {
+              spawn.disabled = false;
+              C.toast("新建失败", "error");
+            });
+        });
+      }
+    });
+    refresh();
   }
 
   // 服务商管理：点卡片选中连接，在同一面板里改名、换凭据、接入设备
@@ -2824,6 +2949,7 @@
         else if (act === "reveal") openRevealDialog(found);
         else if (act === "copyconfig") copyServerConfig(found, mact);
         else if (act === "workers") openWorkerPanel(found, "workers");
+        else if (act === "snapshots") openSnapshotsDialog(found);
         else if (act === "wcopy") copyWorkerConfig(found, mact);
         else if (act === "wsync") syncWorkerEntry(found, mact);
         else if (act === "group") openGroupMoveDialog(found);
