@@ -103,18 +103,38 @@
     );
   }
 
+  var ALERT_TONES = {
+    calendar_sync: { tone: "danger", icon: "calendar", href: "tasks-calendar.html#calendar" },
+    task_stale: { tone: "warn", icon: "tasks", href: "tasks-calendar.html#tasks" },
+    agent_disabled: { tone: "info", icon: "bot", href: "agents.html" },
+  };
+  var ALERT_ORDER = { danger: 0, warn: 1, info: 2 };
   function alertList(alerts) {
+    var sorted = alerts.slice().sort(function (a, b) {
+      var ta = ALERT_TONES[a.kind] ? ALERT_ORDER[ALERT_TONES[a.kind].tone] : 3;
+      var tb = ALERT_TONES[b.kind] ? ALERT_ORDER[ALERT_TONES[b.kind].tone] : 3;
+      return ta - tb;
+    });
     return (
-      "<ol class=\"feed\">" +
-      alerts.map(function (item) {
-        var time = item.at
-          ? "<time datetime=\"" + C.escapeHtml(new Date(item.at).toISOString()) + "\">" + C.escapeHtml(feedTime(item.at)) + "</time>"
-          : "";
-        return "<li>" + time + "<span>" + C.escapeHtml(item.text) + "</span></li>";
-      }).join("") +
-      "</ol>"
+      '<div class="alert-list">' +
+      sorted
+        .map(function (item) {
+          var meta = ALERT_TONES[item.kind] || { tone: "info", icon: "bot", href: "" };
+          var time = item.at
+            ? '<time datetime="' + C.escapeHtml(new Date(item.at).toISOString()) + '">' + C.escapeHtml(feedTime(item.at)) + "</time>"
+            : "";
+          var inner =
+            '<span class="alert-icon tone-' + meta.tone + '">' + C.iconSvg(meta.icon) + "</span>" +
+            '<span class="alert-main"><span class="alert-text">' + C.escapeHtml(item.text) + "</span>" + time + "</span>";
+          return meta.href
+            ? '<a class="alert-row tone-' + meta.tone + '" href="' + meta.href + '">' + inner + "</a>"
+            : '<div class="alert-row tone-' + meta.tone + '">' + inner + "</div>";
+        })
+        .join("") +
+      "</div>"
     );
   }
+
 
   fetch("/api/overview", { headers: { accept: "application/json" }, cache: "no-store" })
     .then(function (response) { return response.json(); })
@@ -126,7 +146,7 @@
         "<div class=\"stack\">" +
         '<div class="overview-split">' +
         C.section("最近动态", "", activity.length ? feedList(activity.slice(0, 10)) : C.emptyState("还没有动态", "各模块的操作会汇总到这里")) +
-        C.section("告警", "", alerts.length ? alertList(alerts) : C.emptyState("还没有告警", "运行中的异常会列在这里")) +
+        C.section("告警", alerts.length ? alerts.length + " 条" : "", alerts.length ? alertList(alerts) : C.emptyState("还没有告警", "运行中的异常会列在这里")) +
         "</div>" +
         statCards(data.stats) +
         "</div>";

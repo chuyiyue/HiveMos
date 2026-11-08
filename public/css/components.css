@@ -721,3 +721,16 @@ button.is-armed, .is-armed {
 .modal-card::-webkit-scrollbar-thumb, .action-menu-card::-webkit-scrollbar-thumb, .perm-menu::-webkit-scrollbar-thumb, .cs-list::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 8px; border: 3px solid transparent; background-clip: padding-box; }
 .modal-card::-webkit-scrollbar-thumb:hover, .action-menu-card::-webkit-scrollbar-thumb:hover, .perm-menu::-webkit-scrollbar-thumb:hover, .cs-list::-webkit-scrollbar-thumb:hover { background: var(--text-3); border: 3px solid transparent; background-clip: padding-box; }
 .modal-card::-webkit-scrollbar-corner, .action-menu-card::-webkit-scrollbar-corner, .perm-menu::-webkit-scrollbar-corner, .cs-list::-webkit-scrollbar-corner { background: transparent; }
+
+.alert-list { display: grid; gap: 8px; }
+.alert-row { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border-radius: var(--r-md); background: var(--bg-sunken); color: var(--text); text-decoration: none; }
+a.alert-row:hover { background: var(--surface-hover); }
+.alert-row.tone-danger { background: var(--danger-soft); }
+.alert-row.tone-warn { background: var(--warning-soft); }
+.alert-icon { flex: none; width: 28px; height: 28px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center; background: var(--surface); color: var(--text-2); }
+.alert-icon.tone-danger { color: var(--danger-text); }
+.alert-icon.tone-warn { color: var(--warning-text); }
+.alert-icon svg { width: 16px; height: 16px; }
+.alert-main { display: grid; gap: 2px; min-width: 0; }
+.alert-text { font-weight: 600; }
+.alert-main time { color: var(--text-3); font-size: var(--fs-sm); }
