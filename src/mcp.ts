@@ -20,6 +20,15 @@ import {
   searchEvents,
   updateEvent,
 } from "./calendar";
+import {
+  MemError,
+  deleteMemory,
+  listMemoriesAudited,
+  memoryPublic,
+  readMemory,
+  searchMemoriesAudited,
+  upsertMemory,
+} from "./memory";
 
 const MAX_BODY_BYTES = 64 * 1024;
 
@@ -159,6 +168,67 @@ const TOOLS = [
       additionalProperties: false,
     },
   },
+  {
+    name: "memory_list",
+    description: "列出记忆，可按作用域过滤；传 since（毫秒时间戳或 ISO 时间）只回增量，含这之后被删的墓碑（带 deleted_at）",
+    inputSchema: {
+      type: "object",
+      properties: {
+        scope: { type: "string", description: "只看指定作用域，缺省为全部" },
+        since: { type: ["number", "string"], description: "增量起点：毫秒时间戳或 ISO 8601 时间" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "memory_search",
+    description: "按关键词搜记忆（标题、内容、标签）",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "关键词" },
+        scope: { type: "string", description: "只在指定作用域内搜，缺省为全部" },
+      },
+      required: ["query"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "memory_get",
+    description: "按 id 取一条记忆的完整信息。成功读取会记一条审计",
+    inputSchema: {
+      type: "object",
+      properties: { id: { type: "string", description: "记忆 id" } },
+      required: ["id"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "memory_upsert",
+    description: "幂等写入记忆：给 id 按 id 更新（已软删会复活），否则按标题+作用域匹配更新，都没有才新建；每次写入版本号递增",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "记忆 id，可选" },
+        title: { type: "string", description: "标题" },
+        scope: { type: "string", description: "作用域，缺省为全局" },
+        content: { type: "string", description: "内容" },
+        tags: { type: "array", items: { type: "string" }, description: "标签，可选" },
+      },
+      required: ["title"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "memory_delete",
+    description: "软删除一条记忆（留墓碑，增量拉取能看到）",
+    inputSchema: {
+      type: "object",
+      properties: { id: { type: "string", description: "记忆 id" } },
+      required: ["id"],
+      additionalProperties: false,
+    },
+  },
 ];
 
 // Every panel tool belongs to a permission domain (see PERMISSION_DOMAINS
@@ -175,6 +245,11 @@ const TOOL_DOMAINS: Record<string, string> = {
   calendar_create_event: "calendar",
   calendar_update_event: "calendar",
   calendar_delete_event: "calendar",
+  memory_list: "memory",
+  memory_search: "memory",
+  memory_get: "memory",
+  memory_upsert: "memory",
+  memory_delete: "memory",
 };
 
 function domainOfTool(name: string): string | null {
@@ -277,6 +352,14 @@ async function callTool(request: Request, env: Env, id: unknown, params: unknown
     if (!fetched.ok) return toolResult(id, fetched.error, true);
     return toolResult(id, fetched.config);
   }
+  if (name.startsWith("memory_")) {
+    try {
+      return await callMemoryTool(env, id, name, record as Record<string, unknown>, auth.agentId);
+    } catch (error) {
+      if (error instanceof MemError) return toolResult(id, error.message, true);
+      throw error;
+    }
+  }
   if (name.startsWith("calendar_")) {
     try {
       return await callCalendarTool(env, id, name, record as Record<string, unknown>, auth.agentId);
@@ -340,6 +423,53 @@ async function callCalendarTool(env: Env, id: unknown, name: string, args: Recor
     if (!eventId) return toolResult(id, "请提供 event_id", true);
     const result = await deleteEvent(env.DB, eventId, args, agentId, now);
     return toolResult(id, result);
+  }
+  return toolResult(id, "未知工具", true);
+}
+
+function parseSince(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) return Math.floor(value);
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) return parsed;
+    const asNumber = Number(value);
+    if (Number.isFinite(asNumber) && asNumber > 0) return Math.floor(asNumber);
+  }
+  return null;
+}
+
+async function callMemoryTool(env: Env, id: unknown, name: string, args: Record<string, unknown>, agentId: string): Promise<Response> {
+  const now = Date.now();
+  const channel = { actor: agentId, source: "mcp", auditReads: true };
+  if (name === "memory_list") {
+    const scope = argString(args, "scope");
+    const since = parseSince(args.since);
+    const rows = await listMemoriesAudited(env.DB, { scope: scope || null, since }, channel, now);
+    return toolResult(id, { memories: rows.map(memoryPublic) });
+  }
+  if (name === "memory_search") {
+    const query = argString(args, "query");
+    if (!query || !query.trim()) return toolResult(id, "请提供 query", true);
+    const scope = argString(args, "scope");
+    const rows = await searchMemoriesAudited(env.DB, query.trim(), scope || null, channel, now);
+    return toolResult(id, { memories: rows.map(memoryPublic) });
+  }
+  if (name === "memory_get") {
+    const memId = argString(args, "id");
+    if (!memId) return toolResult(id, "请提供 id", true);
+    const row = await readMemory(env.DB, memId, channel, now);
+    if (!row) return toolResult(id, "记忆不存在或已删除", true);
+    return toolResult(id, { memory: memoryPublic(row) });
+  }
+  if (name === "memory_upsert") {
+    const row = await upsertMemory(env.DB, args, channel, now);
+    return toolResult(id, { memory: memoryPublic(row) });
+  }
+  if (name === "memory_delete") {
+    const memId = argString(args, "id");
+    if (!memId) return toolResult(id, "请提供 id", true);
+    const row = await deleteMemory(env.DB, memId, channel, now);
+    return toolResult(id, { memory: memoryPublic(row), deleted: true });
   }
   return toolResult(id, "未知工具", true);
 }

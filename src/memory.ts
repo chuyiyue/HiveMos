@@ -5,6 +5,13 @@
 // the same split as mcp_get fetch audit vs panel browsing).
 
 import { prepare } from "./registry";
+import type { D1Database } from "./env";
+
+function rowsOf<T>(value: { results?: T[] } | T[] | null | undefined): T[] {
+  if (Array.isArray(value)) return value;
+  if (value && Array.isArray(value.results)) return value.results;
+  return [];
+}
 
 export class MemError extends Error {
   status: number;
@@ -158,7 +165,7 @@ export async function listMemories(db: D1Database, options: ListOptions = {}): P
   }
   const sql = "SELECT * FROM memories WHERE " + where.join(" AND ") + " ORDER BY updated_at DESC LIMIT 500";
   const result = await prepare(db, sql, values).all<MemoryRow>();
-  return result.results ?? [];
+  return rowsOf(result);
 }
 
 export async function searchMemories(db: D1Database, query: string, scope?: string | null): Promise<MemoryRow[]> {
@@ -172,7 +179,7 @@ export async function searchMemories(db: D1Database, query: string, scope?: stri
   }
   sql += "ORDER BY updated_at DESC LIMIT 200";
   const result = await prepare(db, sql, values).all<MemoryRow>();
-  return result.results ?? [];
+  return rowsOf(result);
 }
 
 interface Channel {
