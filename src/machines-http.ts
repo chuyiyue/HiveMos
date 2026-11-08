@@ -15,6 +15,10 @@ import {
   providerPortRemove,
   providerPortsList,
   providerPower,
+  providerSnapshotCreate,
+  providerSnapshotDelete,
+  providerSnapshotSpawn,
+  providerSnapshotsList,
   putKeepalive,
   renameConnection,
   replaceConnectionCredentials,
@@ -75,6 +79,12 @@ export async function handleMachinesRequest(request: Request, env: Env, ctx: Wai
   if (workerScript && workerScript[1] && workerScript[2]) return machineWorkerDelete(request, env, workerScript[1], decodeURIComponent(workerScript[2]));
   const keepaliveRoute = /^\/api\/machines\/([A-Za-z0-9_-]+)\/keepalive$/.exec(path);
   if (keepaliveRoute && keepaliveRoute[1]) return machineKeepalive(request, env, keepaliveRoute[1]);
+  const snapshotsRoute = /^\/api\/machines\/([A-Za-z0-9_-]+)\/snapshots$/.exec(path);
+  if (snapshotsRoute && snapshotsRoute[1]) return machineSnapshots(request, env, snapshotsRoute[1]);
+  const snapshotSpawnRoute = /^\/api\/machines\/([A-Za-z0-9_-]+)\/snapshots\/([A-Za-z0-9_-]+)\/spawn$/.exec(path);
+  if (snapshotSpawnRoute && snapshotSpawnRoute[1] && snapshotSpawnRoute[2]) return machineSnapshotSpawn(request, env, snapshotSpawnRoute[1], snapshotSpawnRoute[2]);
+  const snapshotOneRoute = /^\/api\/machines\/([A-Za-z0-9_-]+)\/snapshots\/([A-Za-z0-9_-]+)$/.exec(path);
+  if (snapshotOneRoute && snapshotOneRoute[1] && snapshotOneRoute[2]) return machineSnapshotOne(request, env, snapshotOneRoute[1], snapshotOneRoute[2]);
   const one = /^\/api\/machines\/([A-Za-z0-9_-]+)$/.exec(path);
   if (one && one[1]) return machineOne(request, env, one[1]);
   return null;
@@ -662,4 +672,85 @@ async function machineKeepalive(request: Request, env: Env, id: string): Promise
     });
   }
   return methodNotAllowed("GET, PUT");
+}
+
+// Snapshots (InstaBox images) for imported devices. The list is the
+// account's snapshots with an own flag for this machine; writes log to
+// the system log under the 云主机 module like the other device actions.
+
+async function machineSnapshots(request: Request, env: Env, id: string): Promise<Response> {
+  const method = request.method.toUpperCase();
+  if (method === "GET") {
+    return wrap(async () => json({ ok: true, snapshots: await providerSnapshotsList(env.DB, vaultKeyOf(env), id) }));
+  }
+  if (method === "POST") {
+    const gate = await mutationGate(request);
+    if (gate) return gate;
+    const body = await readBody(request);
+    if (!body.ok) return body.response;
+    const name = typeof body.value.name === "string" ? body.value.name.trim() : "";
+    if (!name || Array.from(name).length > 100 || /[\u0000-\u001f\u007f]/.test(name)) {
+      return json({ ok: false, error: "请填写快照名称，最多 100 个字符" }, 400);
+    }
+    return wrap(async () => {
+      const machine = await getMachine(env.DB, id);
+      if (!machine) return json({ ok: false, error: "云主机不存在" }, 404);
+      const created = await providerSnapshotCreate(env.DB, vaultKeyOf(env), id, name);
+      await logOp(env.DB, {
+        actor: await panelActor(request, env),
+        module: "云主机",
+        action: "创建快照",
+        targetId: id,
+        targetName: machine.name,
+        text: `给云主机「${machine.name}」创建了快照「${created.name}」`,
+      });
+      return json({ ok: true, snapshot: created }, 201);
+    });
+  }
+  return methodNotAllowed("GET, POST");
+}
+
+async function machineSnapshotOne(request: Request, env: Env, id: string, snapshotId: string): Promise<Response> {
+  if (request.method.toUpperCase() !== "DELETE") return methodNotAllowed("DELETE");
+  const gate = await mutationGate(request);
+  if (gate) return gate;
+  return wrap(async () => {
+    const machine = await getMachine(env.DB, id);
+    if (!machine) return json({ ok: false, error: "云主机不存在" }, 404);
+    const known = await providerSnapshotsList(env.DB, vaultKeyOf(env), id).catch(() => [] as Awaited<ReturnType<typeof providerSnapshotsList>>);
+    const target = known.find((entry) => entry.id === snapshotId);
+    await providerSnapshotDelete(env.DB, vaultKeyOf(env), id, snapshotId);
+    await logOp(env.DB, {
+      actor: await panelActor(request, env),
+      module: "云主机",
+      action: "删除快照",
+      targetId: id,
+      targetName: machine.name,
+      text: `删除了快照「${target ? target.name : snapshotId}」`,
+    });
+    return json({ ok: true });
+  });
+}
+
+async function machineSnapshotSpawn(request: Request, env: Env, id: string, snapshotId: string): Promise<Response> {
+  if (request.method.toUpperCase() !== "POST") return methodNotAllowed("POST");
+  const gate = await mutationGate(request);
+  if (gate) return gate;
+  return wrap(async () => {
+    const machine = await getMachine(env.DB, id);
+    if (!machine) return json({ ok: false, error: "云主机不存在" }, 404);
+    const created = await providerSnapshotSpawn(env.DB, vaultKeyOf(env), id, snapshotId);
+    if (machine.connection_id) {
+      await syncConnection(env.DB, vaultKeyOf(env), machine.connection_id, Date.now()).catch(() => undefined);
+    }
+    await logOp(env.DB, {
+      actor: await panelActor(request, env),
+      module: "云主机",
+      action: "从快照新建机器",
+      targetId: id,
+      targetName: machine.name,
+      text: `用快照新建了机器「${created.name}」`,
+    });
+    return json({ ok: true, name: created.name }, 201);
+  });
 }

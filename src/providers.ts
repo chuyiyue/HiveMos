@@ -1034,6 +1034,149 @@ export async function providerPortRemove(db: D1Database, key: ContentKey, machin
   await instaboxRequest(ctx.config, "/v1/machines/" + encodeURIComponent(ctx.remoteId) + "/ports/" + port, { method: "DELETE" });
 }
 
+// ---- snapshots (InstaBox images) ----
+// Snapshots are account-level images (GET /v1/snapshots) tagged with the
+// machine they were taken from (sourceMachineId). Creating one is per
+// machine (POST /v1/machines/:id/snapshots, body { name }); deleting is
+// per snapshot (DELETE /v1/snapshots/:id, 404 when already gone); and
+// spawning a machine from a snapshot is POST /v1/machines with
+// { name, snapshotId }. Field shapes follow the official
+// @insforge/instabox-sdk types (Snapshot / CreateSnapshotOpts). A saved
+// snapshot of a running box comes back status "pending" and turns
+// "ready" once stored. The images endpoints are scope-gated
+// (images:read / images:write / images:delete): a 403 from them means
+// the stored key lacks those scopes, and the panel must say so with the
+// scope message below instead of collapsing it into a generic failure.
+
+export const SNAPSHOT_SCOPE_MESSAGE = "当前 API 密钥缺少快照权限（images:read/write/delete），请到 InstaBox 换一把带 images 权限的密钥";
+
+export interface ProviderSnapshot {
+  id: string;
+  name: string;
+  description: string;
+  sourceMachineId: string;
+  own: boolean;
+  status: string;
+  sizeBytes: number;
+  rootSizeBytes: number;
+  dataSizeBytes: number;
+  createdAt: string;
+}
+
+async function instaboxImagesRequest(
+  config: ProviderConfig,
+  path: string,
+  init?: { method?: string; body?: unknown; idempotencyKey?: string },
+): Promise<unknown> {
+  const base = (config["endpoint"] || "https://api.instabox.sh").replace(/\/+$/, "");
+  const headers: Record<string, string> = { "X-API-Key": config["apiKey"] ?? "", accept: "application/json" };
+  if (init?.body !== undefined) headers["content-type"] = "application/json";
+  if (init?.idempotencyKey) headers["Idempotency-Key"] = init.idempotencyKey;
+  let response: Response;
+  try {
+    response = await fetch(base + path, {
+      method: init?.method || "GET",
+      headers,
+      body: init?.body !== undefined ? JSON.stringify(init.body) : undefined,
+      signal: AbortSignal.timeout(20000),
+    });
+  } catch {
+    throw new MachineError(502, "连接 InstaBox 失败，请稍后重试");
+  }
+  if (response.ok) return response.json().catch(() => null);
+  const raw = (await response.json().catch(() => null)) as { error?: { message?: unknown } } | null;
+  const message = typeof raw?.error?.message === "string" ? raw.error.message : "";
+  if (response.status === 403) throw new MachineError(403, SNAPSHOT_SCOPE_MESSAGE);
+  if (response.status === 401) throw new MachineError(502, "InstaBox：API 密钥不正确或无权限");
+  if (response.status === 404) throw new MachineError(404, message || "在 InstaBox 那边找不到这个快照");
+  if (response.status === 409) throw new MachineError(409, message || "操作冲突，请稍后重试");
+  if (response.status === 429) throw new MachineError(502, "InstaBox：请求过于频繁或额度受限，请稍后重试");
+  throw new MachineError(502, "InstaBox 返回异常（HTTP " + response.status + "）");
+}
+
+function snapshotView(raw: unknown, ownRemoteId: string): ProviderSnapshot | null {
+  const snap = (raw ?? {}) as Record<string, unknown>;
+  const id = String(snap.id ?? "");
+  if (!id) return null;
+  const rootSizeBytes = Number(snap.rootSizeBytes) || 0;
+  const dataSizeBytes = Number(snap.dataSizeBytes) || 0;
+  const sourceMachineId = String(snap.sourceMachineId ?? "");
+  return {
+    id,
+    name: String(snap.name ?? id),
+    description: String(snap.description ?? ""),
+    sourceMachineId,
+    own: sourceMachineId !== "" && sourceMachineId === ownRemoteId,
+    status: String(snap.status ?? ""),
+    sizeBytes: rootSizeBytes + dataSizeBytes,
+    rootSizeBytes,
+    dataSizeBytes,
+    createdAt: String(snap.createdAt ?? ""),
+  };
+}
+
+export async function providerSnapshotsList(db: D1Database, key: ContentKey, machineId: string): Promise<ProviderSnapshot[]> {
+  const ctx = await machineConnContext(db, key, machineId);
+  requireInstabox(ctx);
+  const raw = (await instaboxImagesRequest(ctx.config, "/v1/snapshots")) as { snapshots?: unknown[] } | null;
+  if (!raw || !Array.isArray(raw.snapshots)) throw new MachineError(502, "InstaBox 返回了无法识别的响应");
+  return raw.snapshots
+    .map((entry) => snapshotView(entry, ctx.remoteId))
+    .filter((entry): entry is ProviderSnapshot => entry !== null)
+    .sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0));
+}
+
+export async function providerSnapshotCreate(db: D1Database, key: ContentKey, machineId: string, name: string): Promise<ProviderSnapshot> {
+  const ctx = await machineConnContext(db, key, machineId);
+  requireInstabox(ctx);
+  const raw = await instaboxImagesRequest(ctx.config, "/v1/machines/" + encodeURIComponent(ctx.remoteId) + "/snapshots", {
+    method: "POST",
+    body: { name },
+    idempotencyKey: crypto.randomUUID(),
+  });
+  const view = snapshotView(raw, ctx.remoteId);
+  if (!view) throw new MachineError(502, "InstaBox 返回了无法识别的响应");
+  return view;
+}
+
+export async function providerSnapshotDelete(db: D1Database, key: ContentKey, machineId: string, snapshotId: string): Promise<void> {
+  const ctx = await machineConnContext(db, key, machineId);
+  requireInstabox(ctx);
+  try {
+    await instaboxImagesRequest(ctx.config, "/v1/snapshots/" + encodeURIComponent(snapshotId), { method: "DELETE" });
+  } catch (error) {
+    // Already gone upstream counts as deleted (the SDK does the same).
+    if (error instanceof MachineError && error.status === 404) return;
+    throw error;
+  }
+}
+
+function snapshotMachineName(snapshotName: string): string {
+  const cleaned = snapshotName
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40)
+    .replace(/-+$/g, "");
+  return (cleaned || "snapshot") + "-" + crypto.randomUUID().replace(/-/g, "").slice(0, 4);
+}
+
+export async function providerSnapshotSpawn(db: D1Database, key: ContentKey, machineId: string, snapshotId: string): Promise<{ name: string }> {
+  const ctx = await machineConnContext(db, key, machineId);
+  requireInstabox(ctx);
+  const raw = await instaboxImagesRequest(ctx.config, "/v1/snapshots/" + encodeURIComponent(snapshotId));
+  const snap = snapshotView(raw, ctx.remoteId);
+  if (!snap) throw new MachineError(404, "在 InstaBox 那边找不到这个快照");
+  if (snap.status && snap.status !== "ready") throw new MachineError(409, "快照还在保存中，等状态变为就绪后再新建机器");
+  const name = snapshotMachineName(snap.name);
+  await instaboxImagesRequest(ctx.config, "/v1/machines", {
+    method: "POST",
+    body: { name, snapshotId },
+    idempotencyKey: crypto.randomUUID(),
+  });
+  return { name };
+}
+
 // ---- keepalive ----
 
 export interface KeepalivePolicy {
