@@ -1,4 +1,4 @@
-/* 任务与日历合并板块。任务为占位数据（接入后 GET /api/tasks）；
+/* 任务与日历合并板块。任务走 /api/tasks 接口（面板 REST，Agent 侧走 tasks_* 工具）；
    日历为一期真实功能，走 /api/calendar/* 接口（日历/日程/订阅令牌） */
 (function () {
   var C = window.HiveCommon;
@@ -29,19 +29,53 @@
   }
 
   // ------------------------------------------------------------------ tasks
-  var TASKS = [
-    { id: "task_heartbeat", title: "核对云主机心跳", from: "编排", to: "值守", status: "active", updated: "2026-11-07 09:20" },
-    { id: "task_memory", title: "把部署约定写入记忆", from: "研究", to: "档案", status: "queued", updated: "2026-11-07 09:12" },
-    { id: "task_rotate", title: "轮换网关密钥展示", from: "编排", to: "编排", status: "done", updated: "2026-11-06 17:45" },
+  var STATUS_OPTIONS = [
+    ["queued", "排队"],
+    ["active", "进行中"],
+    ["done", "已完成"],
   ];
+  var taskState = { loaded: false, loading: false, error: "", tasks: [] };
+
+  function taskById(id) {
+    for (var i = 0; i < taskState.tasks.length; i++) if (taskState.tasks[i].id === id) return taskState.tasks[i];
+    return null;
+  }
+
+  function loadTasks() {
+    if (taskState.loading) return;
+    taskState.loading = true;
+    api("GET", "/api/tasks").then(function (res) {
+      taskState.loading = false;
+      if (res.status === 401) { location.assign("/login.html?next=" + encodeURIComponent(location.pathname)); return; }
+      if (!res.data.ok) { taskState.error = res.data.error || "任务读取失败"; render(); return; }
+      taskState.error = "";
+      taskState.tasks = res.data.tasks || [];
+      taskState.loaded = true;
+      render();
+    }).catch(function () {
+      taskState.loading = false;
+      taskState.error = "任务读取失败，请稍后重试";
+      render();
+    });
+  }
+
+  function refreshTasks() {
+    taskState.loaded = false;
+    loadTasks();
+  }
 
   // 添加与编辑共用同一套字段构建；item 为空是添加，传入条目是编辑并预填
   function taskFields(item) {
-    var v = item || { title: "", from: "", to: "" };
+    var v = item || { title: "", from: "", assignee: "", note: "", status: "queued" };
+    var options = STATUS_OPTIONS.map(function (pair) {
+      return "<option value=\"" + pair[0] + "\"" + (v.status === pair[0] ? " selected" : "") + ">" + pair[1] + "</option>";
+    }).join("");
     return (
-      "<label>标题<input name=\"title\" maxlength=\"80\" autocomplete=\"off\" value=\"" + C.escapeHtml(v.title) + "\" /></label>" +
-      "<label>从<input name=\"from\" maxlength=\"40\" autocomplete=\"off\" placeholder=\"发起的 Agent\" value=\"" + C.escapeHtml(v.from) + "\" /></label>" +
-      "<label>到<input name=\"to\" maxlength=\"40\" autocomplete=\"off\" placeholder=\"接收的 Agent\" value=\"" + C.escapeHtml(v.to) + "\" /></label>"
+      "<label>标题<input name=\"title\" maxlength=\"80\" autocomplete=\"off\" value=\"" + C.escapeHtml(v.title || "") + "\" /></label>" +
+      "<label>从<input name=\"from\" maxlength=\"40\" autocomplete=\"off\" placeholder=\"发起的 Agent\" value=\"" + C.escapeHtml(v.from || "") + "\" /></label>" +
+      "<label>到<input name=\"assignee\" maxlength=\"40\" autocomplete=\"off\" placeholder=\"接收的 Agent\" value=\"" + C.escapeHtml(v.assignee || "") + "\" /></label>" +
+      "<label>备注<textarea name=\"note\" rows=\"3\" maxlength=\"2000\">" + C.escapeHtml(v.note || "") + "</textarea></label>" +
+      "<label>状态<select name=\"status\">" + options + "</select></label>"
     );
   }
 
@@ -54,29 +88,76 @@
       onSubmit: function (ctrl) {
         var title = val(ctrl, "title");
         if (!title) { ctrl.setError("请填写标题"); return; }
-        if (editing) {
-          item.title = title;
-          item.from = val(ctrl, "from") || "管理员";
-          item.to = val(ctrl, "to") || "未指派";
-          item.updated = now();
-        } else {
-          TASKS.unshift({ id: "task_" + Date.now(), title: title, from: val(ctrl, "from") || "管理员", to: val(ctrl, "to") || "未指派", status: "queued", updated: now() });
-        }
-        ctrl.close();
-        render();
+        var payload = {
+          title: title,
+          from: val(ctrl, "from"),
+          assignee: val(ctrl, "assignee"),
+          note: val(ctrl, "note"),
+          status: val(ctrl, "status") || "queued",
+        };
+        ctrl.setBusy(true);
+        var request = editing
+          ? api("PATCH", "/api/tasks/" + encodeURIComponent(item.id), payload)
+          : api("POST", "/api/tasks", payload);
+        request.then(function (res) {
+          if (!res.data.ok) { ctrl.setBusy(false); ctrl.setError(res.data.error || "保存失败"); return; }
+          ctrl.close();
+          refreshTasks();
+        }).catch(function () {
+          ctrl.setBusy(false);
+          ctrl.setError("保存失败，请稍后重试");
+        });
       },
     });
   }
 
-  function openTaskMenu(item) {
+  function completeTask(item) {
+    api("POST", "/api/tasks/" + encodeURIComponent(item.id) + "/complete").then(function (res) {
+      if (!res.data.ok) { taskState.error = res.data.error || "操作失败"; render(); return; }
+      refreshTasks();
+    }).catch(function () {
+      taskState.error = "操作失败，请稍后重试";
+      render();
+    });
+  }
+
+  function deleteTask(item, anchor) {
+    C.askConfirm({
+      anchor: anchor,
+      title: "删除任务",
+      text: "确认删除任务「" + item.title + "」吗？删除后无法恢复",
+      confirmLabel: "删除",
+      danger: true,
+    }).then(function (yes) {
+      if (!yes) return;
+      api("DELETE", "/api/tasks/" + encodeURIComponent(item.id)).then(function (res) {
+        if (!res.data.ok) { taskState.error = res.data.error || "删除失败"; render(); return; }
+        refreshTasks();
+      });
+    });
+  }
+
+  function openTaskMenu(item, anchor) {
+    var items = [
+      {
+        label: "编辑",
+        onSelect: function () { openTaskDialog(item); },
+      },
+    ];
+    if (item.status !== "done") {
+      items.push({
+        label: "标记完成",
+        onSelect: function () { completeTask(item); },
+      });
+    }
+    items.push({
+      label: "删除",
+      danger: true,
+      onSelect: function () { deleteTask(item, anchor); },
+    });
     C.openActionMenu({
       title: item.title,
-      items: [
-        {
-          label: "编辑",
-          onSelect: function () { openTaskDialog(item); },
-        },
-      ],
+      items: items,
     });
   }
 
@@ -753,13 +834,22 @@
 
   // ---------------------------------------------------------------- render
   function render() {
-    var taskCards = TASKS.map(function (item) {
-      return C.record({ id: item.id, title: item.title, status: item.status, facts: [["从", C.escapeHtml(item.from)], ["到", C.escapeHtml(item.to)], ["更新时间", C.escapeHtml(item.updated)]], extra: "<div class=\"row-actions\"><button type=\"button\" class=\"secondary\" data-action=\"task-menu\" data-id=\"" + C.escapeHtml(item.id) + "\">高级</button></div>" });
+    var taskCards = taskState.tasks.map(function (item) {
+      var facts = [["从", C.escapeHtml(item.from || "管理员")], ["到", C.escapeHtml(item.assignee || "未指派")]];
+      if (item.note) facts.push(["备注", C.escapeHtml(item.note)]);
+      facts.push(["更新时间", C.escapeHtml(C.formatMinute(Date.parse(item.updated_at)))]);
+      if (item.completed_at) facts.push(["完成时间", C.escapeHtml(C.formatMinute(Date.parse(item.completed_at)))]);
+      return C.record({ id: item.id, title: item.title, status: item.status, facts: facts, extra: "<div class=\"row-actions\"><button type=\"button\" class=\"secondary\" data-action=\"task-menu\" data-id=\"" + C.escapeHtml(item.id) + "\">高级</button></div>" });
     }).join("");
+    var tasksBody;
+    if (taskState.error) tasksBody = C.emptyState("任务读取失败", taskState.error);
+    else if (!taskState.loaded) tasksBody = C.emptyState("正在读取任务", "请稍候");
+    else if (!taskState.tasks.length) tasksBody = C.emptyState("还没有任务", "点上方「添加任务」新建第一条");
+    else tasksBody = C.list(taskCards);
     var tasksHtml =
       "<div class=\"stack\">" +
       "<button type=\"button\" class=\"add-button\" data-add=\"task\">添加任务</button>" +
-      C.section("任务", String(TASKS.length) + " 条", C.list(taskCards)) +
+      C.section("任务", String(taskState.tasks.length) + " 条", tasksBody) +
       C.section("失败队列", "", C.emptyState("失败队列是空的", "失败的传递会留在这里，方便原样重试")) +
       "</div>";
 
@@ -786,6 +876,7 @@
       history.replaceState(null, "", "#" + activeTab);
       render();
       if (activeTab === "calendar" && !cal.loaded) loadCalendar();
+      if (activeTab === "tasks" && !taskState.loaded) loadTasks();
       return;
     }
     var actionEl = target.closest("[data-action]");
@@ -795,9 +886,8 @@
       else if (action === "add-calendar") { setNotice("", false); openAddCalendar(); }
       else if (action === "add-feed") openAddFeed();
       else if (action === "task-menu") {
-        var task = null;
-        TASKS.forEach(function (t) { if (t.id === actionEl.getAttribute("data-id")) task = t; });
-        if (task) openTaskMenu(task);
+        var task = taskById(actionEl.getAttribute("data-id"));
+        if (task) openTaskMenu(task, actionEl.closest("article") || actionEl);
       }
       else if (action === "cal-prev") { cal.month--; if (cal.month < 0) { cal.month = 11; cal.year--; } cal.loaded = false; loadCalendar(); }
       else if (action === "cal-next") { cal.month++; if (cal.month > 11) { cal.month = 0; cal.year++; } cal.loaded = false; loadCalendar(); }
@@ -831,4 +921,5 @@
   });
   render();
   if (activeTab === "calendar") loadCalendar();
+  else loadTasks();
 })();

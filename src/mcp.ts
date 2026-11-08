@@ -39,6 +39,16 @@ import {
   searchMemoriesAudited,
   upsertMemory,
 } from "./memory";
+import {
+  TaskError,
+  agentName,
+  completeTask,
+  createTask,
+  deleteTask,
+  listTasksForAgent,
+  taskPublic,
+  updateTask,
+} from "./tasks";
 
 const MAX_BODY_BYTES = 64 * 1024;
 
@@ -270,6 +280,61 @@ const TOOLS = [
       additionalProperties: false,
     },
   },
+  {
+    name: "tasks_list",
+    description: "列出任务（面板与 Agent 之间传递的工作项），可按状态或分配对象过滤。状态为 queued（排队）、active（进行中）、done（已完成）",
+    inputSchema: {
+      type: "object",
+      properties: {
+        status: { type: "string", description: "只看指定状态：queued、active 或 done" },
+        assignee: { type: "string", description: "只看分配给这个对象（名字）的任务" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "tasks_create",
+    description: "新建任务。标题必填，可给备注、分配对象与初始状态（缺省 queued）",
+    inputSchema: {
+      type: "object",
+      properties: {
+        title: { type: "string", description: "标题" },
+        note: { type: "string", description: "备注" },
+        assignee: { type: "string", description: "分配对象（名字），缺省不分配" },
+        status: { type: "string", description: "初始状态：queued、active 或 done，缺省 queued" },
+      },
+      required: ["title"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "tasks_update",
+    description: "修改任务，只传要改的字段：标题、备注、状态或分配对象。状态改成 done 时会记下完成时间",
+    inputSchema: {
+      type: "object",
+      properties: {
+        task_id: { type: "string", description: "任务 id" },
+        title: { type: "string" },
+        note: { type: "string" },
+        status: { type: "string", description: "queued、active 或 done" },
+        assignee: { type: "string", description: "新的分配对象（名字）" },
+      },
+      required: ["task_id"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "tasks_complete",
+    description: "把任务标记为已完成，并记下完成时间",
+    inputSchema: {
+      type: "object",
+      properties: {
+        task_id: { type: "string", description: "任务 id" },
+      },
+      required: ["task_id"],
+      additionalProperties: false,
+    },
+  },
 ];
 
 // Every panel tool belongs to a permission domain (see PERMISSION_DOMAINS
@@ -294,6 +359,10 @@ const TOOL_DOMAINS: Record<string, string> = {
   soul_list: "soul",
   soul_get: "soul",
   soul_update: "soul",
+  tasks_list: "tasks",
+  tasks_create: "tasks",
+  tasks_update: "tasks",
+  tasks_complete: "tasks",
 };
 
 function domainOfTool(name: string): string | null {
@@ -414,6 +483,14 @@ async function callTool(request: Request, env: Env, id: unknown, params: unknown
       return await callCalendarTool(env, id, name, record as Record<string, unknown>, auth.agentId);
     } catch (error) {
       if (error instanceof CalError) return toolResult(id, error.message, true);
+      throw error;
+    }
+  }
+  if (name.startsWith("tasks_")) {
+    try {
+      return await callTasksTool(env, id, name, record as Record<string, unknown>, auth.agentId);
+    } catch (error) {
+      if (error instanceof TaskError) return toolResult(id, error.message, true);
       throw error;
     }
   }
@@ -552,6 +629,31 @@ async function callMemoryTool(env: Env, id: unknown, name: string, args: Record<
     if (!memId) return toolResult(id, "请提供 id", true);
     const row = await deleteMemory(env.DB, memId, channel, now);
     return toolResult(id, { memory: memoryPublic(row), deleted: true });
+async function callTasksTool(env: Env, id: unknown, name: string, args: Record<string, unknown>, agentId: string): Promise<Response> {
+  const now = Date.now();
+  if (name === "tasks_list") {
+    const status = argString(args, "status");
+    const assignee = argString(args, "assignee");
+    const tasks = await listTasksForAgent(env.DB, { status: status ?? null, assignee: assignee ?? null }, agentId, now);
+    return toolResult(id, { tasks: tasks.map(taskPublic) });
+  }
+  if (name === "tasks_create") {
+    const from = await agentName(env.DB, agentId);
+    const created = await createTask(env.DB, { ...args, from: from ?? undefined }, agentId, "agent", now);
+    return toolResult(id, { task: taskPublic(created) });
+  }
+  if (name === "tasks_update") {
+    const taskId = argString(args, "task_id");
+    if (!taskId) return toolResult(id, "请提供 task_id", true);
+    const { task_id: _omit, ...fields } = args;
+    const updated = await updateTask(env.DB, taskId, fields, agentId, now);
+    return toolResult(id, { task: taskPublic(updated) });
+  }
+  if (name === "tasks_complete") {
+    const taskId = argString(args, "task_id");
+    if (!taskId) return toolResult(id, "请提供 task_id", true);
+    const completed = await completeTask(env.DB, taskId, agentId, now);
+    return toolResult(id, { task: taskPublic(completed) });
   }
   return toolResult(id, "未知工具", true);
 }
