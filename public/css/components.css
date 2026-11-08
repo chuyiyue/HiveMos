@@ -702,3 +702,10 @@ button.is-armed, .is-armed {
 .pager-size select { width: auto; min-height: 32px; padding: 4px 8px; }
 .pager-info { color: var(--text-3); font-size: var(--fs-sm); }
 .pager-btns { display: inline-flex; gap: 8px; margin-left: auto; }
+
+.toasts { position: fixed; right: 16px; bottom: 16px; z-index: 200; display: grid; gap: 8px; width: min(360px, calc(100% - 32px)); }
+.toast { display: flex; align-items: center; padding: 12px 14px; border-radius: 12px; background: #292524; color: #fafaf9; box-shadow: 0 10px 30px rgba(28, 25, 23, 0.28); font-size: var(--fs-sm); cursor: pointer; animation: toast-in 0.18s ease-out; }
+.toast > span { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.toast.is-danger { background: var(--danger); color: #fff; }
+.toast.is-out { opacity: 0; transform: translateY(4px); transition: opacity 0.25s ease, transform 0.25s ease; }
+@keyframes toast-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }

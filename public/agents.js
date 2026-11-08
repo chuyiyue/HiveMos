@@ -35,10 +35,15 @@
   }
 
   function noticeHtml() {
-    if (!state.notice) return "";
-    var kind = state.noticeKind === "ok" ? "ok" : "danger";
-    return '<p class="callout ' + kind + '" role="status">' + C.escapeHtml(state.notice) + "</p>";
+    if (state.notice) {
+      var text = state.notice;
+      var kind = state.noticeKind;
+      state.notice = "";
+      C.toast(text, kind === "ok" ? "ok" : "danger");
+    }
+    return "";
   }
+
 
   function findAgent(id) {
     return state.agents.find(function (item) {

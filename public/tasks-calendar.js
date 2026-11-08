@@ -429,8 +429,7 @@
   }
 
   function setNotice(text, danger) {
-    cal.notice = text || "";
-    cal.noticeDanger = !!danger;
+    if (text) C.toast(text, danger ? "danger" : "ok");
   }
 
   function calendarRecord(item) {
@@ -545,7 +544,6 @@
       '<button type="button" class="secondary" data-action="cal-next">下个月</button>';
     return (
       "<div class=\"stack\">" +
-      (cal.notice ? '<p class="callout' + (cal.noticeDanger ? " danger" : "") + '" role="status">' + C.escapeHtml(cal.notice) + "</p>" : "") +
       (cal.error ? '<p class="callout danger" role="alert">' + C.escapeHtml(cal.error) + "</p>" : "") +
       C.section("日历", cal.calendars.length + " 个", calendarListHtml()) +
       C.section("月视图", cal.year + " 年 " + (cal.month + 1) + " 月", monthGridHtml(), nav) +

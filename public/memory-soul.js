@@ -122,8 +122,7 @@
   }
 
   function setMemNotice(text, kind) {
-    memNotice = text;
-    memNoticeKind = kind === "danger" ? "danger" : "ok";
+    if (text) C.toast(text, kind === "danger" ? "danger" : "ok");
   }
 
   var SOULS = [];
@@ -289,9 +288,6 @@
       "<div class=\"stack\">" +
       "<div class=\"tag-row\">" + groupChips + "</div>" +
       tagChips +
-      (memNotice
-        ? "<p class=\"callout " + memNoticeKind + "\" role=\"status\">" + C.escapeHtml(memNotice) + "</p>"
-        : "") +
       "</div>"
     );
   }

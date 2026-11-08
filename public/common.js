@@ -86,6 +86,41 @@
   }
 
   // Group picker used by create/edit dialogs: blank value means ungrouped.
+  // Toast bubbles, SMSinBox style: stacked bottom-right, auto-dismiss,
+  // click to dismiss sooner. When a native dialog is open the bubble is
+  // hosted inside it so it stays in the top layer with the dialog.
+  function toast(message, tone) {
+    if (!message) return;
+    var host = document.querySelector("dialog[open]") || document.body;
+    var box = null;
+    for (var i = 0; i < host.children.length; i++) {
+      if (host.children[i].classList && host.children[i].classList.contains("toasts")) box = host.children[i];
+    }
+    if (!box) {
+      box = document.createElement("div");
+      box.className = "toasts";
+      box.setAttribute("aria-live", "polite");
+      host.append(box);
+    }
+    var el = document.createElement("div");
+    el.className = "toast" + (tone === "danger" ? " is-danger" : "");
+    var span = document.createElement("span");
+    span.textContent = message;
+    el.append(span);
+    box.append(el);
+    var gone = false;
+    function dismiss() {
+      if (gone) return;
+      gone = true;
+      el.classList.add("is-out");
+      window.setTimeout(function () {
+        el.remove();
+      }, 260);
+    }
+    el.addEventListener("click", dismiss);
+    window.setTimeout(dismiss, tone === "danger" ? 5200 : 3600);
+  }
+
   function groupSelect(name, groups, current) {
     var html =
       '<select data-field="' +
@@ -2446,6 +2481,7 @@
     agentAvatarHtml: agentAvatarHtml,
     addBar: addBar,
     groupSelect: groupSelect,
+    toast: toast,
     groupedSections: groupedSections,
   };
 })();
