@@ -39,6 +39,7 @@ export interface VaultEntryRow {
   password_enc: string;
   tail: string;
   note: string;
+  group_id: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -52,8 +53,16 @@ export interface GatewayRow {
   key_enc: string;
   tail: string;
   status: string;
+  group_id: string | null;
   created_at: number;
   updated_at: number;
+}
+
+export interface VaultGroupRow {
+  id: string;
+  name: string;
+  created_at: number;
+  member_count: number;
 }
 
 export interface EmailRow {
@@ -131,6 +140,85 @@ function tailOf(secret: string): string {
   return secret.slice(-4);
 }
 
+// ---- groups (one pool shared by entries and gateways) ---------------------
+
+export function groupPublic(row: VaultGroupRow): Record<string, unknown> {
+  return {
+    id: row.id,
+    name: row.name,
+    created_at: row.created_at,
+    member_count: row.member_count,
+  };
+}
+
+async function getGroup(db: D1Database, id: string): Promise<VaultGroupRow | null> {
+  return prepare(
+    db,
+    "SELECT id, name, created_at, " +
+      "(SELECT COUNT(*) FROM vault_entries WHERE group_id = vault_groups.id) + " +
+      "(SELECT COUNT(*) FROM gateways WHERE group_id = vault_groups.id) AS member_count " +
+      "FROM vault_groups WHERE id = ?",
+    [id],
+  ).first<VaultGroupRow>();
+}
+
+export async function listGroups(db: D1Database): Promise<VaultGroupRow[]> {
+  return rowsOf(
+    await prepare(
+      db,
+      "SELECT id, name, created_at, " +
+        "(SELECT COUNT(*) FROM vault_entries WHERE group_id = vault_groups.id) + " +
+        "(SELECT COUNT(*) FROM gateways WHERE group_id = vault_groups.id) AS member_count " +
+        "FROM vault_groups ORDER BY created_at ASC, id ASC",
+    ).all<VaultGroupRow>(),
+  );
+}
+
+export async function createGroup(db: D1Database, body: Record<string, unknown>, now: number): Promise<VaultGroupRow> {
+  const row: VaultGroupRow = {
+    id: newId("vg"),
+    name: reqText(body, "name", NAME_MAX, "分组名"),
+    created_at: now,
+    member_count: 0,
+  };
+  await prepare(db, "INSERT INTO vault_groups (id, name, created_at) VALUES (?, ?, ?)", [row.id, row.name, row.created_at]).run();
+  return row;
+}
+
+export async function updateGroup(db: D1Database, id: string, body: Record<string, unknown>): Promise<VaultGroupRow> {
+  const row = await getGroup(db, id);
+  if (!row) throw new VaultError("分组不存在", 404);
+  const name = optText(body, "name", NAME_MAX, "分组名");
+  if (name !== undefined) {
+    if (!name) throw new VaultError("请填写分组名");
+    row.name = name;
+  }
+  await prepare(db, "UPDATE vault_groups SET name = ? WHERE id = ?", [row.name, row.id]).run();
+  return row;
+}
+
+export async function deleteGroup(db: D1Database, id: string): Promise<VaultGroupRow> {
+  const row = await getGroup(db, id);
+  if (!row) throw new VaultError("分组不存在", 404);
+  await prepare(db, "UPDATE vault_entries SET group_id = NULL WHERE group_id = ?", [id]).run();
+  await prepare(db, "UPDATE gateways SET group_id = NULL WHERE group_id = ?", [id]).run();
+  await prepare(db, "DELETE FROM vault_groups WHERE id = ?", [id]).run();
+  return row;
+}
+
+// Resolves an optional group reference for entries/gateways. Absent means
+// "leave unchanged" for updates; null or blank means ungrouped; a present
+// id must exist in the vault pool.
+async function optGroupId(db: D1Database, body: Record<string, unknown>): Promise<string | null | undefined> {
+  const value = body["group_id"];
+  if (value === undefined) return undefined;
+  if (value === null || value === "") return null;
+  if (typeof value !== "string") throw new VaultError("分组不正确");
+  const group = await getGroup(db, value);
+  if (!group) throw new VaultError("分组不存在");
+  return value;
+}
+
 // ---- entries --------------------------------------------------------------
 
 export function entryPublic(row: VaultEntryRow): Record<string, unknown> {
@@ -141,6 +229,7 @@ export function entryPublic(row: VaultEntryRow): Record<string, unknown> {
     username: row.username,
     tail: row.tail,
     note: row.note,
+    group_id: row.group_id ?? null,
     has_password: row.password_enc !== "",
     created_at: row.created_at,
     updated_at: row.updated_at,
@@ -160,6 +249,7 @@ export async function createEntry(db: D1Database, env: Env, body: Record<string,
   const url = optText(body, "url", URL_MAX, "网址") ?? "";
   const username = optText(body, "username", USERNAME_MAX, "账号") ?? "";
   const note = optText(body, "note", NOTE_MAX, "备注") ?? "";
+  const groupId = (await optGroupId(db, body)) ?? null;
   const password = body["password"];
   if (typeof password !== "string" || !password) throw new VaultError("请填写密码");
   if (password.length > SECRET_MAX) throw new VaultError("密码太长了");
@@ -171,13 +261,14 @@ export async function createEntry(db: D1Database, env: Env, body: Record<string,
     password_enc: await sealSecret(env, password),
     tail: tailOf(password),
     note,
+    group_id: groupId,
     created_at: now,
     updated_at: now,
   };
   await prepare(
     db,
-    "INSERT INTO vault_entries (id, name, url, username, password_enc, tail, note, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    [row.id, row.name, row.url, row.username, row.password_enc, row.tail, row.note, row.created_at, row.updated_at],
+    "INSERT INTO vault_entries (id, name, url, username, password_enc, tail, note, group_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    [row.id, row.name, row.url, row.username, row.password_enc, row.tail, row.note, row.group_id, row.created_at, row.updated_at],
   ).run();
   return row;
 }
@@ -196,6 +287,8 @@ export async function updateEntry(db: D1Database, env: Env, id: string, body: Re
   if (username !== undefined) row.username = username;
   const note = optText(body, "note", NOTE_MAX, "备注");
   if (note !== undefined) row.note = note;
+  const groupId = await optGroupId(db, body);
+  if (groupId !== undefined) row.group_id = groupId;
   const password = body["password"];
   if (typeof password === "string" && password !== "") {
     if (password.length > SECRET_MAX) throw new VaultError("密码太长了");
@@ -205,8 +298,8 @@ export async function updateEntry(db: D1Database, env: Env, id: string, body: Re
   row.updated_at = now;
   await prepare(
     db,
-    "UPDATE vault_entries SET name = ?, url = ?, username = ?, password_enc = ?, tail = ?, note = ?, updated_at = ? WHERE id = ?",
-    [row.name, row.url, row.username, row.password_enc, row.tail, row.note, row.updated_at, row.id],
+    "UPDATE vault_entries SET name = ?, url = ?, username = ?, password_enc = ?, tail = ?, note = ?, group_id = ?, updated_at = ? WHERE id = ?",
+    [row.name, row.url, row.username, row.password_enc, row.tail, row.note, row.group_id, row.updated_at, row.id],
   ).run();
   return row;
 }
@@ -229,6 +322,7 @@ export function gatewayPublic(row: GatewayRow): Record<string, unknown> {
     models: row.models,
     tail: row.tail,
     status: row.status,
+    group_id: row.group_id ?? null,
     has_key: row.key_enc !== "",
     created_at: row.created_at,
     updated_at: row.updated_at,
@@ -252,6 +346,7 @@ export async function createGateway(db: D1Database, env: Env, body: Record<strin
   const proto = optText(body, "proto", PROTO_MAX, "协议") ?? "";
   const baseUrl = optText(body, "base_url", URL_MAX, "地址") ?? "";
   const models = optText(body, "models", MODELS_MAX, "模型") ?? "";
+  const groupId = (await optGroupId(db, body)) ?? null;
   const key = body["key"];
   if (typeof key !== "string" || !key) throw new VaultError("请填写密钥");
   if (key.length > SECRET_MAX) throw new VaultError("密钥太长了");
@@ -264,13 +359,14 @@ export async function createGateway(db: D1Database, env: Env, body: Record<strin
     key_enc: await sealSecret(env, key),
     tail: tailOf(key),
     status: cleanStatus(body["status"], "paused"),
+    group_id: groupId,
     created_at: now,
     updated_at: now,
   };
   await prepare(
     db,
-    "INSERT INTO gateways (id, name, proto, base_url, models, key_enc, tail, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    [row.id, row.name, row.proto, row.base_url, row.models, row.key_enc, row.tail, row.status, row.created_at, row.updated_at],
+    "INSERT INTO gateways (id, name, proto, base_url, models, key_enc, tail, status, group_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    [row.id, row.name, row.proto, row.base_url, row.models, row.key_enc, row.tail, row.status, row.group_id, row.created_at, row.updated_at],
   ).run();
   return row;
 }
@@ -290,6 +386,8 @@ export async function updateGateway(db: D1Database, env: Env, id: string, body: 
   const models = optText(body, "models", MODELS_MAX, "模型");
   if (models !== undefined) row.models = models;
   if (body["status"] !== undefined) row.status = cleanStatus(body["status"], row.status);
+  const groupId = await optGroupId(db, body);
+  if (groupId !== undefined) row.group_id = groupId;
   const key = body["key"];
   if (typeof key === "string" && key !== "") {
     if (key.length > SECRET_MAX) throw new VaultError("密钥太长了");
@@ -299,8 +397,8 @@ export async function updateGateway(db: D1Database, env: Env, id: string, body: 
   row.updated_at = now;
   await prepare(
     db,
-    "UPDATE gateways SET name = ?, proto = ?, base_url = ?, models = ?, key_enc = ?, tail = ?, status = ?, updated_at = ? WHERE id = ?",
-    [row.name, row.proto, row.base_url, row.models, row.key_enc, row.tail, row.status, row.updated_at, row.id],
+    "UPDATE gateways SET name = ?, proto = ?, base_url = ?, models = ?, key_enc = ?, tail = ?, status = ?, group_id = ?, updated_at = ? WHERE id = ?",
+    [row.name, row.proto, row.base_url, row.models, row.key_enc, row.tail, row.status, row.group_id, row.updated_at, row.id],
   ).run();
   return row;
 }

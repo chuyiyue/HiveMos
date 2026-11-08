@@ -11,16 +11,21 @@ import {
   createEmail,
   createEntry,
   createGateway,
+  createGroup,
   deleteEmail,
   deleteEntry,
   deleteGateway,
+  deleteGroup,
   emailPublic,
   entryPublic,
   gatewayPublic,
+  groupPublic,
   listAccessLog,
   listEmails,
   listEntries,
   listGateways,
+  listGroups,
+  updateGroup,
   revealSecret,
   updateEmail,
   updateEntry,
@@ -44,6 +49,9 @@ export async function handleVaultRequest(request: Request, env: Env, ctx: WaitCt
     if (path === "/api/vault/emails") return await emails(request, env);
     const emailOne = /^\/api\/vault\/emails\/([A-Za-z0-9_-]+)$/.exec(path);
     if (emailOne && emailOne[1]) return await emailOneHandler(request, env, emailOne[1]);
+    if (path === "/api/vault/groups") return await groups(request, env);
+    const groupOne = /^\/api\/vault\/groups\/([A-Za-z0-9_-]+)$/.exec(path);
+    if (groupOne && groupOne[1]) return await groupOneHandler(request, env, groupOne[1]);
     if (path === "/api/vault/reveal") return await reveal(request, env);
     if (path === "/api/vault/access-log") return await accessLog(request, env);
     return null;
@@ -145,6 +153,35 @@ async function emailOneHandler(request: Request, env: Env, id: string): Promise<
   if (method === "DELETE") {
     const deleted = await deleteEmail(env.DB, id);
     return json({ ok: true, email: emailPublic(deleted) });
+  }
+  return json({ ok: false, error: "方法不允许" }, 405, { allow: "PATCH, DELETE" });
+}
+
+async function groups(request: Request, env: Env): Promise<Response> {
+  const method = request.method.toUpperCase();
+  if (method === "GET") {
+    return json({ ok: true, groups: (await listGroups(env.DB)).map(groupPublic) });
+  }
+  if (method === "POST") {
+    const body = await readBody(request);
+    if (body instanceof Response) return body;
+    const created = await createGroup(env.DB, body, Date.now());
+    return json({ ok: true, group: groupPublic(created) }, 201);
+  }
+  return json({ ok: false, error: "方法不允许" }, 405, { allow: "GET, POST" });
+}
+
+async function groupOneHandler(request: Request, env: Env, id: string): Promise<Response> {
+  const method = request.method.toUpperCase();
+  if (method === "PATCH" || method === "PUT") {
+    const body = await readBody(request);
+    if (body instanceof Response) return body;
+    const updated = await updateGroup(env.DB, id, body);
+    return json({ ok: true, group: groupPublic(updated) });
+  }
+  if (method === "DELETE") {
+    const deleted = await deleteGroup(env.DB, id);
+    return json({ ok: true, group: groupPublic(deleted) });
   }
   return json({ ok: false, error: "方法不允许" }, 405, { allow: "PATCH, DELETE" });
 }
