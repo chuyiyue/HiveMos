@@ -28,10 +28,6 @@
     });
   }
   // 与其它板块同一套卡片菜单入口：record 的 extra 里放「高级」按钮
-  function manageBtn(kind, id) {
-    return '<div class="row-actions"><button type="button" class="secondary" data-manage="' + kind + '" data-id="' + C.escapeHtml(id) + '">高级</button></div>';
-  }
-
   // 记忆走真后端 /api/memory；加改删后一律以服务端返回为准重新拉取
   var MEMORIES = [];
   var memoryLoaded = false;
@@ -87,7 +83,7 @@
 
   function render() {
     var memCards = MEMORIES.map(function (item) {
-      return C.record({ id: item.id, title: item.title, lede: excerptOf(item.content), facts: [["作用域", C.escapeHtml(item.scope)], ["来源", C.escapeHtml(item.source)], ["更新时间", C.escapeHtml(fmtTime(item.updated_at))]], extra: manageBtn("memory", item.id) });
+      return C.record({ id: item.id, title: item.title, lede: excerptOf(item.content), facts: [["作用域", C.escapeHtml(item.scope)], ["来源", C.escapeHtml(item.source)], ["更新时间", C.escapeHtml(fmtTime(item.updated_at))]], expandKey: "memory:" + item.id, expandBody: C.expandActions('<button type="button" class="secondary" data-card-act="edit" data-kind="memory" data-id="' + C.escapeHtml(item.id) + '">编辑</button><button type="button" class="danger" data-card-act="delete" data-kind="memory" data-id="' + C.escapeHtml(item.id) + '">删除</button>') });
     }).join("");
     var memoryBody;
     if (memoryError) memoryBody = C.emptyState("记忆加载失败", memoryError);
@@ -96,14 +92,12 @@
     else memoryBody = C.list(memCards);
     var memoryHtml =
       "<div class=\"stack\">" +
-      "<button type=\"button\" class=\"add-button\" data-add=\"memory\">添加记忆</button>" +
       C.section("记忆", String(MEMORIES.length) + " 条", memoryBody) +
       C.section("冲突", "", C.emptyState("没有待合并的记忆", "同一作用域发生冲突时会列在这里")) +
       "<div id=\"memory-confirm\"></div>" +
       "</div>";
     var soulCards = SOULS.map(function (item) {
-      var extra = manageBtn("soul", item.id) + "<div class=\"confirm-slot\" data-confirm-soul=\"" + C.escapeHtml(item.id) + "\"></div>";
-      return C.record({ id: item.id, title: item.agent_name, lede: "当前版本 v" + item.version, facts: [["版本", "v" + item.version], ["更新时间", C.escapeHtml(C.formatMinute(item.updated_at) || "—")]], extra: extra });
+      return C.record({ id: item.id, title: item.agent_name, lede: "当前版本 v" + item.version, facts: [["版本", "v" + item.version], ["更新时间", C.escapeHtml(C.formatMinute(item.updated_at) || "—")]], expandKey: "soul:" + item.id, expandBody: C.expandActions('<button type="button" class="secondary" data-card-act="edit" data-kind="soul" data-id="' + C.escapeHtml(item.id) + '">编辑</button><button type="button" class="secondary" data-card-act="history" data-kind="soul" data-id="' + C.escapeHtml(item.id) + '">历史版本</button><button type="button" class="danger" data-card-act="delete" data-kind="soul" data-id="' + C.escapeHtml(item.id) + '">删除</button>') + '<div class="confirm-slot" data-confirm-soul="' + C.escapeHtml(item.id) + '"></div>' });
     }).join("");
     var soulBody = !soulsLoaded
       ? C.emptyState("正在加载 Soul", "马上就好")
@@ -112,17 +106,27 @@
         : C.emptyState("还没有 Soul", "给 Agent 添加人格定义后会列在这里");
     var soulHtml =
       "<div class=\"stack\">" +
-      "<button type=\"button\" class=\"add-button\" data-add=\"soul\">添加 Soul</button>" +
       C.section("Soul", String(SOULS.length) + " 份", soulBody) +
       C.section("草稿", "", C.emptyState("没有未发布的草稿", "尚未同步的 Soul 草稿会留在这里")) +
       "</div>";
+    var head =
+      '<div class="page-head"><div class="page-tabs" role="tablist">' +
+      '<button class="page-tab" type="button" role="tab" data-tab="memory" aria-selected="' +
+      (activeTab === "memory" ? "true" : "false") +
+      '">记忆</button>' +
+      '<button class="page-tab" type="button" role="tab" data-tab="soul" aria-selected="' +
+      (activeTab === "soul" ? "true" : "false") +
+      '">Soul</button>' +
+      "</div>" +
+      '<div class="page-head-actions">' +
+      (activeTab === "memory"
+        ? '<button type="button" class="add-button" data-add="memory">添加记忆</button>'
+        : '<button type="button" class="add-button" data-add="soul">添加 Soul</button>') +
+      "</div></div>";
     C.mount(
       C.layout(
         "",
-        "<div class=\"page-tabs\" role=\"tablist\">" +
-          "<button class=\"page-tab\" type=\"button\" role=\"tab\" data-tab=\"memory\" aria-selected=\"" + (activeTab === "memory" ? "true" : "false") + "\">记忆</button>" +
-          "<button class=\"page-tab\" type=\"button\" role=\"tab\" data-tab=\"soul\" aria-selected=\"" + (activeTab === "soul" ? "true" : "false") + "\">Soul</button>" +
-          "</div>" +
+        head +
           "<div data-panel=\"memory\"" + (activeTab === "memory" ? "" : " hidden") + ">" + memoryHtml + "</div>" +
           "<div data-panel=\"soul\"" + (activeTab === "soul" ? "" : " hidden") + ">" + soulHtml + "</div>"
       )
@@ -318,38 +322,6 @@
     });
   }
 
-  function openManageMenu(kind, item) {
-    var items = [
-      {
-        label: "编辑",
-        onSelect: function () {
-          if (kind === "memory") openMemoryDialog(item);
-          else openSoulDialog(item);
-        },
-      },
-    ];
-    if (kind === "soul") {
-      items.push({
-        label: "历史版本",
-        onSelect: function () {
-          openSoulHistory(item);
-        },
-      });
-    }
-    items.push({
-      label: "删除",
-      danger: true,
-      onSelect: function () {
-        if (kind === "memory") removeMemory(item);
-        else deleteSoul(item);
-      },
-    });
-    C.openActionMenu({
-      title: kind === "memory" ? item.title : item.agent_name,
-      items: items,
-    });
-  }
-
   var page = document.getElementById("page");
   page.addEventListener("click", function (event) {
     var target = event.target;
@@ -367,14 +339,19 @@
       else openSoulDialog(null);
       return;
     }
-    var manage = target.closest("[data-manage]");
-    if (manage) {
-      var mkind = manage.getAttribute("data-manage");
-      var mid = manage.getAttribute("data-id");
-      var pool = mkind === "memory" ? MEMORIES : SOULS;
-      var found = null;
-      pool.forEach(function (entry) { if (entry.id === mid) found = entry; });
-      if (found) openManageMenu(mkind, found);
+    var cardAct = target.closest("[data-card-act]");
+    if (cardAct) {
+      var akind = cardAct.getAttribute("data-kind");
+      var aid = cardAct.getAttribute("data-id");
+      var apool = akind === "memory" ? MEMORIES : SOULS;
+      var afound = null;
+      apool.forEach(function (entry) { if (entry.id === aid) afound = entry; });
+      if (afound) {
+        var act = cardAct.getAttribute("data-card-act");
+        if (act === "edit") { if (akind === "memory") openMemoryDialog(afound); else openSoulDialog(afound); }
+        else if (act === "history") openSoulHistory(afound);
+        else if (act === "delete") { if (akind === "memory") removeMemory(afound); else deleteSoul(afound); }
+      }
     }
   });
   render();
