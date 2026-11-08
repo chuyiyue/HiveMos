@@ -75,6 +75,10 @@ export function normalizeTagKey(tag: string): string {
   return tag.trim().replace(/\s+/g, " ").toLowerCase();
 }
 
+// 全站标签总量上限（按归一 key 去重）。AI 打标、手动保存、合并收敛都以此为
+// 唯一口径；前端 public/memory-soul.js 里有一份同值常量，改动时一起改。
+export const MAX_MEMORY_TAGS = 30;
+
 export interface MemoryTagStat {
   name: string;
   count: number;
@@ -108,6 +112,35 @@ export async function listMemoryTagStats(db: D1Database): Promise<MemoryTagStat[
 
 export async function listMemoryTags(db: D1Database): Promise<string[]> {
   return (await listMemoryTagStats(db)).map((stat) => stat.name);
+}
+
+// 手动保存（创建/更新/upsert）前的标签总量校验：只有「本次新引入的库外
+// 标签」会占额度，库内已有标签永远放行；编辑时记忆自带的标签不算新引入。
+// 允许用「本条记忆不再使用、且全库只此一条使用」的标签腾出额度。
+export async function assertTagCapacity(
+  db: D1Database,
+  proposed: string[],
+  previous: string[] = [],
+): Promise<void> {
+  const stats = await listMemoryTagStats(db);
+  const library = new Map<string, number>();
+  for (const stat of stats) library.set(normalizeTagKey(stat.name), stat.count);
+  const previousKeys = new Set(previous.map(normalizeTagKey).filter(Boolean));
+  const proposedKeys = new Set(proposed.map(normalizeTagKey).filter(Boolean));
+  let additions = 0;
+  for (const key of proposedKeys) {
+    if (library.has(key) || previousKeys.has(key)) continue;
+    additions++;
+  }
+  if (additions === 0) return;
+  let freed = 0;
+  for (const key of previousKeys) {
+    if (proposedKeys.has(key)) continue;
+    if (library.has(key) && (library.get(key) ?? 0) <= 1) freed++;
+  }
+  if (stats.length - freed + additions > MAX_MEMORY_TAGS) {
+    throw new MemError("标签总数已达上限 " + MAX_MEMORY_TAGS + "，请选用已有标签或先合并标签", 400);
+  }
 }
 
 // 合并写入前的全量读取：不能走 listMemories 的 500 条上限。
@@ -450,11 +483,23 @@ async function insertMemory(
   return row;
 }
 
-export async function createMemory(db: D1Database, input: Record<string, unknown>, channel: Channel, now: number): Promise<MemoryRow> {
+export interface MemoryWriteOptions {
+  // ingest 的 AI 拆分走旁路：标签问题绝不阻断保存，由调用方显式关闭校验。
+  enforceTagCap?: boolean;
+}
+
+export async function createMemory(
+  db: D1Database,
+  input: Record<string, unknown>,
+  channel: Channel,
+  now: number,
+  options: MemoryWriteOptions = {},
+): Promise<MemoryRow> {
   const title = cleanTitle(input.title);
   const scope = cleanScope(input.scope);
   const content = cleanContent(input.content);
   const tags = cleanTags(input.tags) ?? [];
+  if (options.enforceTagCap !== false) await assertTagCapacity(db, tags);
   const groupId = cleanGroupId(input.group_id) ?? null;
   await requireGroup(db, groupId);
   // 新建只采用各自字段：权重缺省 0，置顶缺省否，不从对方推导。
@@ -521,6 +566,7 @@ export async function upsertMemory(db: D1Database, input: Record<string, unknown
   if (id) target = await getMemoryRow(db, id, true);
   if (!target) target = await findActiveByTitleScope(db, title, scope);
   if (!target) {
+    await assertTagCapacity(db, tags ?? []);
     return insertMemory(
       db,
       {
@@ -542,6 +588,8 @@ export async function upsertMemory(db: D1Database, input: Record<string, unknown
     const clash = await findActiveByTitleScope(db, title, scope);
     if (clash && clash.id !== target.id) throw new MemError("同一作用域下已存在同名记忆", 409);
   }
+  const previousTags = parseTags(target.tags_json);
+  await assertTagCapacity(db, tags ?? previousTags, previousTags);
   return applyUpdate(
     db,
     target,
@@ -549,7 +597,7 @@ export async function upsertMemory(db: D1Database, input: Record<string, unknown
       title,
       scope,
       content,
-      tags: tags ?? parseTags(target.tags_json),
+      tags: tags ?? previousTags,
       groupId: groupId !== undefined ? groupId : target.group_id,
       weight,
       pinnedAt: pinned === undefined ? undefined : pinned ? now : null,
@@ -566,7 +614,8 @@ export async function updateMemory(db: D1Database, id: string, input: Record<str
   const title = input.title === undefined ? row.title : cleanTitle(input.title);
   const scope = input.scope === undefined ? row.scope : cleanScope(input.scope);
   const content = input.content === undefined ? row.content : cleanContent(input.content);
-  const tags = cleanTags(input.tags) ?? parseTags(row.tags_json);
+  const previousTags = parseTags(row.tags_json);
+  const tags = cleanTags(input.tags) ?? previousTags;
   const groupId = cleanGroupId(input.group_id);
   if (groupId !== undefined) await requireGroup(db, groupId);
   const weight = cleanWeight(input.weight);
@@ -575,6 +624,7 @@ export async function updateMemory(db: D1Database, id: string, input: Record<str
     const clash = await findActiveByTitleScope(db, title, scope);
     if (clash && clash.id !== row.id) throw new MemError("同一作用域下已存在同名记忆", 409);
   }
+  await assertTagCapacity(db, tags, previousTags);
   return applyUpdate(
     db,
     row,

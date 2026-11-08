@@ -9,6 +9,7 @@ import { readChatResponse, resolveAiModel } from "./ai-model";
 import type { Env } from "./env";
 import { prepare } from "./registry";
 import {
+  MAX_MEMORY_TAGS,
   MemError,
   applyAiTags,
   createMemory,
@@ -86,10 +87,15 @@ async function runAi(
   }
 }
 
+const TAG_NAME_MAX = 32;
+
 // AI 返回标签的唯一 normalize 入口（拆分、单条补标、批量补标共用）：
 // trim + 折叠空白；与已有标签库按大小写/空格归一匹配，等价的直接换成
 // 库里现有写法；同 key 去重；最后截断到 3 个。超过 32 字的新词丢弃
 // （已有标签本身较长时仍按库里的写法保留）。
+// 总量硬约束：库已达 MAX_MEMORY_TAGS 时新标签一律丢弃；未达上限时放行新
+// 标签，但累计（含同批后续调用）不得越过上限。新标签会写回 existing，
+// 让同一次拆分/批量补标共享同一份额度。
 export function normalizeAiTags(value: unknown, existing: string[], limit = TAG_LIMIT): string[] {
   if (!Array.isArray(value)) return [];
   const library = new Map<string, string>();
@@ -97,6 +103,7 @@ export function normalizeAiTags(value: unknown, existing: string[], limit = TAG_
     const key = normalizeTagKey(tag);
     if (key && !library.has(key)) library.set(key, tag.trim().replace(/\s+/g, " "));
   }
+  let librarySize = library.size;
   const tags: string[] = [];
   const seen = new Set<string>();
   for (const item of value) {
@@ -104,8 +111,15 @@ export function normalizeAiTags(value: unknown, existing: string[], limit = TAG_
     const raw = item.trim().replace(/\s+/g, " ");
     if (!raw) continue;
     const key = normalizeTagKey(raw);
-    const canonical = library.get(key) ?? (raw.length <= 32 ? raw : "");
-    if (!canonical || seen.has(key)) continue;
+    let canonical = library.get(key);
+    if (!canonical) {
+      if (librarySize >= MAX_MEMORY_TAGS || raw.length > TAG_NAME_MAX) continue;
+      canonical = raw;
+      library.set(key, canonical);
+      librarySize++;
+      existing.push(canonical);
+    }
+    if (seen.has(key)) continue;
     seen.add(key);
     tags.push(canonical);
     if (tags.length >= limit) break;
@@ -177,16 +191,22 @@ const SPLIT_SYSTEM =
 const TAG_SYSTEM =
   "你负责给一条记忆打标签。你只输出一个 JSON 对象，不要输出其他文字。格式为 {\"tags\":[\"标签\"]}，给 1 到 3 个中文短标签，概括这条记忆的主题";
 
+// 大分类示例：提示词、库满约束、存量收敛共用同一份宽泛类目口径。
+const BIG_CATEGORY_HINT = "偏好、凭据、项目、沟通、设备、账户、约定、环境、流程、人物关系、时间安排、健康、财务";
+
 const TAG_RULES =
-  "标签规则：优先复用已有标签库里的标签；意思相近时必须用已有标签，禁止创造同义新词；每条记忆最多 3 个标签（1 到 3 个）；标签是简短的类目词，不要把一次性的内容词（具体令牌、人名、产品名）当标签。";
+  "标签规则：标签必须是大分类（宽泛类别），例如" + BIG_CATEGORY_HINT + "这类，不要用过于具体的词；禁止用专有名词、机器名、人名、产品名、一次性事件、具体令牌或临时内容作标签；优先复用已有标签库里的标签，意思相近时必须用已有标签，禁止创造同义新词；每条记忆最多 3 个标签（1 到 3 个）。";
+
+const TAG_LIBRARY_FULL = "当前标签库已有 " + MAX_MEMORY_TAGS + " 个标签，达到总量上限，只能从已有标签库里选，不得新建标签。";
 
 // 三条打标路径共用的提示词组装：规则写死，标签库按全量去重清单注入；
-// 新系统没有标签时只给规则，不留空库占位。
+// 新系统没有标签时只给规则，不留空库占位；库满时明确禁止新建标签。
 function tagSystem(base: string, existing: string[]): string {
   const library = existing.length
     ? "已有标签库（优先复用）：" + existing.join("、")
-    : "已有标签库：暂无（新系统，没有可复用的标签，按规则直接给出类目标签）。";
-  return base + "\n" + TAG_RULES + "\n" + library;
+    : "已有标签库：暂无（新系统，没有可复用的标签，按规则直接给出大分类标签）。";
+  const full = existing.length >= MAX_MEMORY_TAGS ? "\n" + TAG_LIBRARY_FULL : "";
+  return base + "\n" + TAG_RULES + "\n" + library + full;
 }
 
 export async function splitAndTag(env: Env, text: string, existing: string[]): Promise<SplitPoint[] | null> {
@@ -220,7 +240,8 @@ async function insertPoint(
   let title = original;
   for (let attempt = 0; attempt < 20; attempt++) {
     try {
-      return await createMemory(db, { ...base, title }, channel, now);
+      // AI 打标是旁路：ingest 不因标签总量校验失败而丢内容。
+      return await createMemory(db, { ...base, title }, channel, now, { enforceTagCap: false });
     } catch (error) {
       if (error instanceof MemError && error.status === 409) {
         title = original.slice(0, TITLE_MAX_CHARS - 4) + "（" + (attempt + 2) + "）";
@@ -389,6 +410,12 @@ export async function tagUntaggedMemories(
 const MERGE_SYSTEM =
   "你负责整理记忆的标签库：把意思相近、重复的标签分到同一组，并给每组选一个保留标签。你只输出一个 JSON 对象，不要输出其他文字。对象格式为 {\"要改的标签\":\"保留的标签\"}：键是会被替换掉的标签，值是该组保留的标签。规则：只能用清单里已有的标签原文，禁止新造标签；每组的保留标签必须是这一组里使用条数最多的那个已有标签；意思不同的标签不要硬合并；没有可合并的标签就输出空对象 {}。";
 
+// 超过上限时的收敛提示词：目标不是近义合并，而是把全库压到不超过 30 个
+// 大分类。canonical 可以取清单里已有的宽泛标签，也可以新建宽泛类名；
+// 大小写/写法不同的同一标签要统一成一种写法（如 github → GitHub）。
+const MERGE_CONVERGE_SYSTEM =
+  "你负责整理记忆的标签库：当前标签总数超过上限，需要把全库收敛成不超过 " + MAX_MEMORY_TAGS + " 个大分类。你只输出一个 JSON 对象，不要输出其他文字。对象格式为 {\"要改的标签\":\"大分类名\"}：键必须是清单里已有的标签原文；值是它归入的大分类名，优先使用清单里已有的宽泛标签，必要时可以用新的宽泛类名（如 " + BIG_CATEGORY_HINT + "）。规则：把过细、一次性、专有名词、机器名、人名、产品名标签都归入对应的大分类；大小写和写法不同的同一标签统一成同一种写法（例如 github 统一成 GitHub）；每个标签只归一个分类；清单里过于具体的标签都要落到某个大分类，直到分类总数不超过 " + MAX_MEMORY_TAGS + " 个；已经在宽泛分类里的标签保持不动。";
+
 export type MergeMappingFn = (env: Env, stats: MemoryTagStat[]) => Promise<Record<string, string> | null>;
 
 export function parseMergePayload(text: string | null): Record<string, string> | null {
@@ -411,7 +438,8 @@ export function parseMergePayload(text: string | null): Record<string, string> |
 
 export async function askMergeMapping(env: Env, stats: MemoryTagStat[]): Promise<Record<string, string> | null> {
   const user = "标签清单（括号内是使用条数）：\n" + stats.map((stat) => stat.name + "（" + stat.count + " 条）").join("\n");
-  const raw = await runAi(env, MERGE_SYSTEM, user, MERGE_MAX_TOKENS, MERGE_TIMEOUT_MS);
+  const system = stats.length > MAX_MEMORY_TAGS ? MERGE_CONVERGE_SYSTEM : MERGE_SYSTEM;
+  const raw = await runAi(env, system, user, MERGE_MAX_TOKENS, MERGE_TIMEOUT_MS);
   return parseMergePayload(raw);
 }
 
@@ -491,6 +519,68 @@ export function planTagMerge(mapping: Record<string, string>, stats: MemoryTagSt
   return plan;
 }
 
+// 超过上限时的收敛校验：键必须命中已有标签；值可以是已有标签，也可以是
+// 新的宽泛类名（大小写/写法归一时优先换成库里现有的写法）。映射链会传递
+// 解析到最终分类，避免 A→B、B→C 后 A 落在一个已不存在的标签上。
+// 不合法的条目直接丢弃，最终只留「当前写法 → 最终分类」的真实改动。
+export function planTagConverge(mapping: Record<string, string>, stats: MemoryTagStat[]): Record<string, string> {
+  const byKey = new Map<string, MemoryTagStat>();
+  for (const stat of stats) byKey.set(normalizeTagKey(stat.name), stat);
+  const direct = new Map<string, string>();
+  for (const [rawFrom, rawTo] of Object.entries(mapping)) {
+    if (typeof rawTo !== "string") continue;
+    const from = normalizeTagKey(rawFrom);
+    if (!from || !byKey.has(from)) continue;
+    let canonical = rawTo.trim().replace(/\s+/g, " ");
+    if (!canonical || canonical.length > TAG_NAME_MAX) continue;
+    const existing = byKey.get(normalizeTagKey(canonical));
+    if (existing) canonical = existing.name;
+    direct.set(from, canonical);
+  }
+  function resolve(key: string): string {
+    let canonical = direct.get(key) as string;
+    const seen = new Set<string>([key]);
+    for (let step = 0; step <= stats.length; step++) {
+      const targetKey = normalizeTagKey(canonical);
+      const next = direct.get(targetKey);
+      if (next === undefined || seen.has(targetKey)) return canonical;
+      seen.add(targetKey);
+      canonical = next;
+    }
+    return canonical;
+  }
+  const groups = new Map<string, { canonical: string; members: string[] }>();
+  for (const key of direct.keys()) {
+    const canonical = resolve(key);
+    const groupKey = normalizeTagKey(canonical);
+    const group = groups.get(groupKey) ?? { canonical, members: [] };
+    group.members.push(key);
+    groups.set(groupKey, group);
+  }
+  const plan: Record<string, string> = {};
+  for (const group of groups.values()) {
+    for (const member of group.members) {
+      const stat = byKey.get(member);
+      if (!stat || stat.name === group.canonical) continue;
+      plan[stat.name] = group.canonical;
+    }
+  }
+  return plan;
+}
+
+// 应用收敛映射后的标签库总量：移除被改写的标签，加入新出现的分类名。
+export function convergeTagTotal(plan: Record<string, string>, stats: MemoryTagStat[]): number {
+  const library = new Set(stats.map((stat) => normalizeTagKey(stat.name)));
+  const removed = new Set<string>();
+  const added = new Set<string>();
+  for (const [from, to] of Object.entries(plan)) {
+    removed.add(normalizeTagKey(from));
+    const key = normalizeTagKey(to);
+    if (!removed.has(key) && !library.has(key)) added.add(key);
+  }
+  return stats.length - removed.size + added.size;
+}
+
 // 映射落到记忆上：按归一键替换，同一组撞出的重复自然去掉。
 // 合并只减少同义项，不因为这个动作再砍标签数量（不截断）。
 function mapMemoryTags(tags: string[], replace: Map<string, string>): string[] {
@@ -526,12 +616,18 @@ export async function mergeSimilarTags(
   if (stats.length > MERGE_TAG_LIMIT) {
     throw new MemError("当前有 " + stats.length + " 个标签，超过 " + MERGE_TAG_LIMIT + " 个上限，请先手动整理再合并", 400);
   }
+  // 超过上限走收敛：目标是把全库压到不超过 MAX_MEMORY_TAGS 个大分类；
+  // 未超过时维持原来的近义合并口径。两条路径都是全有全无。
+  const converging = stats.length > MAX_MEMORY_TAGS;
   const mapping = await ask(env, stats);
   if (!mapping) throw new MemError("AI 暂不可用，标签没有做任何改动", 502);
-  const plan = planTagMerge(mapping, stats);
+  const plan = converging ? planTagConverge(mapping, stats) : planTagMerge(mapping, stats);
   if (Object.keys(plan).length === 0) {
     if (Object.keys(mapping).length > 0) throw new MemError("AI 返回的标签合并结果不合法，标签没有做任何改动", 502);
     return { mapping: {}, updated: 0 };
+  }
+  if (converging && convergeTagTotal(plan, stats) > MAX_MEMORY_TAGS) {
+    throw new MemError("AI 未能把标签收敛到 " + MAX_MEMORY_TAGS + " 个以内，标签没有做任何改动", 502);
   }
   const replace = new Map<string, string>();
   for (const [from, to] of Object.entries(plan)) replace.set(normalizeTagKey(from), to);
