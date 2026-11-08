@@ -199,6 +199,7 @@ button.copy-btn:hover { background: var(--surface-hover); }
 .form-grid { display: grid; gap: 12px; }
 .auth-type { display: grid; gap: 6px; font-size: var(--fs-sm); color: var(--text-2); }
 .page-tabs.auth-tabs { width: 100%; margin-bottom: 0; }
+.page-tab:disabled { opacity: .45; cursor: not-allowed; }
 .auth-tabs .page-tab { flex: 1 1 0; font-size: var(--fs-md); }
 .tag-field { display: grid; gap: 6px; font-size: var(--fs-sm); color: var(--text-2); }
 .tag-field .perm-menu { max-height: 148px; }

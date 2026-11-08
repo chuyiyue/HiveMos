@@ -709,12 +709,13 @@
       title: "添加云主机",
       wide: true,
       bodyHtml:
-        "<fieldset class=\"auth-type\"><legend>服务商</legend>" +
-        "<label><input type=\"radio\" name=\"wiz_provider\" value=\"huawei\" checked /> 华为云（API）</label>" +
-        "<label><input type=\"radio\" name=\"wiz_provider\" value=\"mcp\" /> MCP 通用</label>" +
-        "<label><input type=\"radio\" name=\"wiz_provider\" value=\"other\" disabled /> 阿里云（即将支持）</label>" +
-        "<label><input type=\"radio\" name=\"wiz_provider\" value=\"other2\" disabled /> 腾讯云（即将支持）</label>" +
-        "</fieldset>" +
+        "<div class=\"auth-type\"><span>服务商</span>" +
+        "<div class=\"page-tabs auth-tabs\" role=\"tablist\" aria-label=\"服务商\">" +
+        "<button type=\"button\" class=\"page-tab\" role=\"tab\" data-wiz-provider=\"huawei\" aria-selected=\"true\">华为云（API）</button>" +
+        "<button type=\"button\" class=\"page-tab\" role=\"tab\" data-wiz-provider=\"mcp\" aria-selected=\"false\">MCP 通用</button>" +
+        "<button type=\"button\" class=\"page-tab\" role=\"tab\" data-wiz-provider=\"aliyun\" aria-selected=\"false\" disabled>阿里云（即将支持）</button>" +
+        "<button type=\"button\" class=\"page-tab\" role=\"tab\" data-wiz-provider=\"tencent\" aria-selected=\"false\" disabled>腾讯云（即将支持）</button>" +
+        "</div></div>" +
         "<div data-wiz-config>" + wizardConfigFields("huawei") + "</div>" +
         "<label>连接名称（可留空）<input name=\"conn_name\" maxlength=\"60\" autocomplete=\"off\" placeholder=\"留空按服务商与区域自动命名\" /></label>" +
         "<label>导入到分组" + C.groupSelect("group_id", state.groups, "") + "</label>" +
@@ -760,13 +761,15 @@
       });
       return config;
     }
-    form.addEventListener("change", function (event) {
-      var t = event.target;
-      if (t && t.name === "wiz_provider") {
-        wiz.provider = t.value;
-        configBox.innerHTML = wizardConfigFields(wiz.provider);
-        invalidate("尚未测试");
-      }
+    form.addEventListener("click", function (event) {
+      var tab = event.target.closest("[data-wiz-provider]");
+      if (!tab || tab.disabled) return;
+      form.querySelectorAll("[data-wiz-provider]").forEach(function (b) {
+        b.setAttribute("aria-selected", b === tab ? "true" : "false");
+      });
+      wiz.provider = tab.getAttribute("data-wiz-provider");
+      configBox.innerHTML = wizardConfigFields(wiz.provider);
+      invalidate("尚未测试");
     });
     form.addEventListener("input", function (event) {
       var t = event.target;
