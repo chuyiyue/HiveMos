@@ -1057,10 +1057,10 @@ async function expectKexReply(layer: PacketLayer): Promise<Uint8Array> {
 }
 
 async function authMethods(layer: PacketLayer, username: string): Promise<string[]> {
-  await layer.send(new Writer().u8(50).str(username).str("session").str("none").build());
+  await layer.send(new Writer().u8(50).str(username).str("ssh-connection").str("none").build());
   const reply = await layer.recv();
-  if (reply[0] === 51) return []; // already authenticated (should not happen)
-  if (reply[0] !== 52) return [];
+  if (reply[0] === 52) return []; // already authenticated (should not happen)
+  if (reply[0] !== 51) return [];
   const r = new Reader(reply.slice(1));
   return r.strText().split(",").map((s) => s.trim());
 }
@@ -1071,19 +1071,19 @@ function authFailed(): SshProbeError {
 
 async function passwordAuth(layer: PacketLayer, target: SshProbeTarget, method: string): Promise<void> {
   await layer.send(
-    new Writer().u8(50).str(target.username).str("session").str(method).bool(true).str(target.secret).build(),
+    new Writer().u8(50).str(target.username).str("ssh-connection").str(method).bool(false).str(target.secret).build(),
   );
   const reply = await layer.recv();
-  if (reply[0] === 51) return;
+  if (reply[0] === 52) return;
   throw authFailed();
 }
 
 async function keyboardInteractiveAuth(layer: PacketLayer, target: SshProbeTarget): Promise<void> {
   await layer.send(
-    new Writer().u8(50).str(target.username).str("session").str("keyboard-interactive").str("").str("").build(),
+    new Writer().u8(50).str(target.username).str("ssh-connection").str("keyboard-interactive").str("").str("").build(),
   );
   let reply = await layer.recv();
-  if (reply[0] === 51) return;
+  if (reply[0] === 52) return;
   if (reply[0] !== 60) throw authFailed();
   const r = new Reader(reply.slice(1));
   r.strText(); // name
@@ -1098,7 +1098,7 @@ async function keyboardInteractiveAuth(layer: PacketLayer, target: SshProbeTarge
   }
   await layer.send(w.build());
   reply = await layer.recv();
-  if (reply[0] === 51) return;
+  if (reply[0] === 52) return;
   throw authFailed();
 }
 
@@ -1107,7 +1107,7 @@ async function publicKeyAuth(layer: PacketLayer, target: SshProbeTarget, session
   const requestBody = new Writer()
     .u8(50)
     .str(target.username)
-    .str("session")
+    .str("ssh-connection")
     .str("publickey")
     .bool(true)
     .str(loaded.sigAlgo === "rsa-sha2-256" ? "rsa-sha2-256" : loaded.algo)
@@ -1118,7 +1118,7 @@ async function publicKeyAuth(layer: PacketLayer, target: SshProbeTarget, session
   const signatureBlob = new Writer().str(loaded.sigAlgo).str(signature).build();
   await layer.send(concat(requestBody, new Writer().str(signatureBlob).build()));
   const reply = await layer.recv();
-  if (reply[0] === 51) return;
+  if (reply[0] === 52) return;
   throw authFailed();
 }
 
