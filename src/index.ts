@@ -38,6 +38,8 @@ import { handleOverviewRequest } from "./overview-http";
 import { handleRecordsRequest } from "./records-http";
 import { handleOplogRequest } from "./oplog-http";
 import { handleSystemRequest, recordCronRun } from "./system-http";
+import { handleSettingsRequest } from "./settings-http";
+import { cronSweepDue } from "./settings";
 import { handleVaultRequest } from "./vault-http";
 import { handleExtrasRequest } from "./extras-http";
 import { syncDueMirrors } from "./calendar";
@@ -119,6 +121,10 @@ export default {
       if (oplog) return oplog;
       const system = await handleSystemRequest(request, env, wait, path);
       if (system) return system;
+      // Feature settings (定时任务频率 / 侧边栏自动展示上限) live behind the
+      // same admin gate.
+      const settings = await handleSettingsRequest(request, env, path);
+      if (settings) return settings;
       const vault = await handleVaultRequest(request, env, wait, path);
       if (vault) return vault;
       const extras = await handleExtrasRequest(request, env, wait, path);
@@ -131,6 +137,17 @@ export default {
   },
 
   async scheduled(event: ScheduledEvent, env: Env, ctx: WaitCtx): Promise<void> {
+    const now = event.scheduledTime || Date.now();
+    // The trigger is hourly (wrangler.jsonc), the sweep runs at the interval
+    // chosen in 功能设置. Between due runs this handler returns without
+    // touching anything: no snapshot refresh, no mirror sync, no probe, and
+    // no stamp — the stamp only moves when a sweep actually ran.
+    try {
+      if (!(await cronSweepDue(env.DB, now))) return;
+    } catch {
+      // Unreadable state means "run": a broken settings row must never stop
+      // the sweep. The sweep still stamps the run below.
+    }
     try {
       await refreshActiveSnapshots(env, ctx);
     } catch {
@@ -149,8 +166,9 @@ export default {
     }
     try {
       // Evidence stamp for the settings page: cron status there is read
-      // from this marker, never from the declared trigger config.
-      await recordCronRun(env.DB, event.scheduledTime || Date.now());
+      // from this marker, never from the declared trigger config. It is also
+      // the interval gate's clock, so it is written only after a real sweep.
+      await recordCronRun(env.DB, now);
     } catch {
       // The stamp is best-effort; a failed write must not fail the sweep.
     }

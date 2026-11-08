@@ -4,15 +4,21 @@
 // so this panel and the overview page can never disagree.
 //
 // Cron status is evidence-based, not config-based: wrangler.jsonc declares
-// the schedule, but a declaration is not a registration (the account's cron
+// the trigger, but a declaration is not a registration (the account's cron
 // quota can silently refuse it). The scheduled handler stamps
 // schema_meta[cron_last_run_at] after every sweep via recordCronRun, and
-// this endpoint reports "active" only when a stamp exists and is fresh.
+// this endpoint reports "active" only when a stamp exists and is fresh
+// relative to the interval chosen in 功能设置.
+//
+// Two clocks, on purpose: the trigger fires hourly (CRON_TRIGGER below), and
+// the sweep only runs when the configured interval has elapsed. Freshness
+// therefore follows the interval, not the trigger.
 
 import { json } from "./http";
 import type { D1Database, Env, WaitCtx } from "./env";
 import { buildOverviewStats } from "./overview-http";
 import { MCP_TOOL_COUNT } from "./mcp";
+import { CRON_LAST_RUN_KEY, HOUR_MS, readCronState } from "./settings";
 import { APP_VERSION, BUILD_COMMIT } from "./version";
 
 // Constants that mirror wrangler.jsonc; the Worker cannot read its own
@@ -20,12 +26,12 @@ import { APP_VERSION, BUILD_COMMIT } from "./version";
 const DATABASE_NAME = "hivemos"; // d1_databases[0].database_name
 const CUSTOM_DOMAIN = "mos.loko.pp.ua"; // routes[0].pattern
 const WORKERS_DEV_URL = "https://hivemos.lokfu.workers.dev"; // workers_dev subdomain
-const CRON_SCHEDULE = "0 */6 * * *"; // triggers.crons[0]
+const CRON_TRIGGER = "0 * * * *"; // triggers.crons[0]: hourly, gated by the interval
 
-const CRON_LAST_RUN_KEY = "cron_last_run_at";
-// The sweep is declared every 6 hours. Allow one fully missed run plus
-// grace before the panel stops calling the schedule active.
-const CRON_FRESH_MS = 13 * 60 * 60 * 1000;
+// The trigger fires hourly and the sweep interval comes from 功能设置. Allow
+// two fully missed triggers on top of the interval before the panel stops
+// calling the schedule active.
+const CRON_STALE_GRACE_MS = 2 * HOUR_MS;
 
 export async function handleSystemRequest(
   request: Request,
@@ -48,7 +54,8 @@ export async function handleSystemRequest(
 
 async function buildSystemInfo(db: D1Database, now: number) {
   const stats = await buildOverviewStats(db, now);
-  const cronLastRun = await readCronLastRun(db);
+  const cronState = await readCronState(db);
+  const cronLastRun = cronState.last_run_at;
   return {
     version: APP_VERSION,
     build_commit: BUILD_COMMIT,
@@ -70,9 +77,11 @@ async function buildSystemInfo(db: D1Database, now: number) {
       vault_entries: stats.vault_entries,
     },
     cron: {
-      schedule: CRON_SCHEDULE,
+      schedule: CRON_TRIGGER,
+      interval_hours: cronState.interval_hours,
       last_run_at: cronLastRun,
-      active: cronLastRun != null && now - cronLastRun <= CRON_FRESH_MS,
+      active:
+        cronLastRun != null && now - cronLastRun <= cronState.interval_hours * HOUR_MS + CRON_STALE_GRACE_MS,
     },
     generated_at: now,
   };
@@ -91,22 +100,9 @@ async function countEvents(db: D1Database): Promise<number> {
   }
 }
 
-async function readCronLastRun(db: D1Database): Promise<number | null> {
-  try {
-    const row = await db
-      .prepare("SELECT value FROM schema_meta WHERE key = ?")
-      .bind(CRON_LAST_RUN_KEY)
-      .first<{ value: string }>();
-    if (!row) return null;
-    const parsed = Number(row.value);
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
 // Called by the scheduled handler in index.ts after each sweep. Writing
-// the stamp is best-effort: a failed stamp must never fail the sweep.
+// the stamp is best-effort: a failed stamp must never fail the sweep. It is
+// also the interval gate's clock, so it is only written when a sweep ran.
 export async function recordCronRun(db: D1Database, at: number): Promise<void> {
   await db
     .prepare(

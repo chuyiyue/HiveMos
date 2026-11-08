@@ -17,7 +17,10 @@
     "binding": "AI"
   },
   "triggers": {
-    "crons": ["0 */6 * * *"]
+    // The Worker is triggered hourly; the scheduled handler then honours the
+    // interval chosen in 功能设置 (default 6 hours) and returns without
+    // sweeping when it is not due yet.
+    "crons": ["0 * * * *"]
   },
   // database_id 可留空：当前 Wrangler 的配置校验不强制填写。
   "d1_databases": [
