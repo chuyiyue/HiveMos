@@ -320,6 +320,54 @@ export async function getApi(db: D1Database, id: string): Promise<ApiRow | null>
   return prepare(db, "SELECT " + API_COLUMNS + " " + API_FROM + " WHERE a.id = ?", [id]).first<ApiRow>();
 }
 
+export interface ApiSummary {
+  id: string;
+  name: string;
+  base_url: string;
+  auth_note: string;
+  note: string;
+  status: string;
+  group_id: string | null;
+  updated_at: number;
+}
+
+export function apiSummary(row: ApiRow): ApiSummary {
+  return {
+    id: row.id,
+    name: row.name,
+    base_url: row.base_url,
+    auth_note: row.auth_note,
+    note: row.note,
+    status: row.status,
+    group_id: row.group_id,
+    updated_at: row.updated_at,
+  };
+}
+
+export async function getApiByName(db: D1Database, name: string): Promise<ApiRow | null> {
+  return prepare(db, "SELECT " + API_COLUMNS + " " + API_FROM + " WHERE a.name = ?", [name]).first<ApiRow>();
+}
+
+export async function getApiForAgent(
+  db: D1Database,
+  apiId: string,
+  name: string,
+  agentId: string,
+  now: number,
+): Promise<ApiRow | null> {
+  let row: ApiRow | null = null;
+  if (apiId) row = await getApi(db, apiId);
+  if (!row && name) row = await getApiByName(db, name);
+  if (!row) return null;
+  await prepare(db, "INSERT INTO mcp_fetch_audit (id, agent_id, server_id, created_at) VALUES (?, ?, ?, ?)", [
+    crypto.randomUUID(),
+    agentId,
+    row.id,
+    now,
+  ]).run();
+  return row;
+}
+
 export async function createApi(db: D1Database, input: Record<string, unknown>, now: number): Promise<ApiRow> {
   const name = readName(input.name);
   const baseUrl = readOptionalText(input, "base_url", 300, "端点");

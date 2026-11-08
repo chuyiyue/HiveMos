@@ -495,7 +495,9 @@
   // picks where it opens (centered dialog vs side panel) and passes an
   // onChanged(message) callback so its own list can refresh.
   var PERM_DOMAINS = [
-    ["registry", "MCP 与 Skills", "MCP 与 Skills 的搜索、列表与取配置"],
+    ["mcp", "MCP", "MCP 注册表的搜索、列表与取配置"],
+    ["skills", "Skills", "Skills 的列表与取用"],
+    ["api", "API", "API 条目的列表与取用"],
     ["memory", "记忆", "记忆的读写与同步"],
     ["soul", "Soul", "Soul 的读写与同步"],
     ["tasks", "任务", "任务的查看与处理"],

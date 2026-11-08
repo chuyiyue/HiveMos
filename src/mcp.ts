@@ -60,7 +60,7 @@ import {
   vaultKeyOf,
 } from "./machines";
 
-import { ExtraError, getSkillForAgent, listSkills, skillSummary } from "./extras";
+import { apiSummary, ExtraError, getApiForAgent, getSkillForAgent, listApis, listSkills, skillSummary } from "./extras";
 
 const MAX_BODY_BYTES = 64 * 1024;
 
@@ -415,15 +415,32 @@ const TOOLS = [
       additionalProperties: false,
     },
   },
+  {
+    name: "apis_list",
+    description: "列出 API 页签登记的接口摘要（名称、端点、鉴权说明、备注），不含任何凭据",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "apis_get",
+    description: "按 api_id 或 name 取一个 API 条目的完整信息。成功时记一条获取审计",
+    inputSchema: {
+      type: "object",
+      properties: {
+        api_id: { type: "string", description: "API 条目 id" },
+        name: { type: "string", description: "API 条目名称" },
+      },
+      additionalProperties: false,
+    },
+  },
 ];
 
 // Every panel tool belongs to a permission domain (see PERMISSION_DOMAINS
 // in registry.ts). All current tools are registry-domain; future boards add
 // their own entries here.
 const TOOL_DOMAINS: Record<string, string> = {
-  mcp_search: "registry",
-  mcp_list: "registry",
-  mcp_get: "registry",
+  mcp_search: "mcp",
+  mcp_list: "mcp",
+  mcp_get: "mcp",
   calendar_list_calendars: "calendar",
   calendar_list_events: "calendar",
   calendar_get_event: "calendar",
@@ -446,8 +463,10 @@ const TOOL_DOMAINS: Record<string, string> = {
   machines_list: "machines",
   machines_get: "machines",
   machines_report: "machines",
-  skills_list: "registry",
-  skills_get: "registry",
+  skills_list: "skills",
+  skills_get: "skills",
+  apis_list: "api",
+  apis_get: "api",
   machines_get_access: "machines",
 };
 
@@ -576,6 +595,14 @@ async function callTool(request: Request, env: Env, id: unknown, params: unknown
       return await callMachinesTool(env, id, name, record as Record<string, unknown>, auth.agentId);
     } catch (error) {
       if (error instanceof MachineError) return toolResult(id, error.message, true);
+      throw error;
+    }
+  }
+  if (name.startsWith("apis_")) {
+    try {
+      return await callApisTool(env, id, name, record as Record<string, unknown>, auth.agentId);
+    } catch (error) {
+      if (error instanceof ExtraError) return toolResult(id, error.message, true);
       throw error;
     }
   }
@@ -818,6 +845,23 @@ async function callSkillsTool(env: Env, id: unknown, name: string, args: Record<
     const row = await getSkillForAgent(env.DB, skillId.trim(), skillName.trim(), agentId, now);
     if (!row) return toolResult(id, "技能不存在", true);
     return toolResult(id, { skill: row });
+  }
+  return toolResult(id, "未知工具", true);
+}
+
+async function callApisTool(env: Env, id: unknown, name: string, args: Record<string, unknown>, agentId: string): Promise<Response> {
+  const now = Date.now();
+  if (name === "apis_list") {
+    const rows = await listApis(env.DB, null);
+    return toolResult(id, { apis: rows.map(apiSummary) });
+  }
+  if (name === "apis_get") {
+    const apiId = argString(args, "api_id") ?? "";
+    const apiName = argString(args, "name") ?? "";
+    if (!apiId.trim() && !apiName.trim()) return toolResult(id, "请提供 api_id 或 name", true);
+    const row = await getApiForAgent(env.DB, apiId.trim(), apiName.trim(), agentId, now);
+    if (!row) return toolResult(id, "API 条目不存在", true);
+    return toolResult(id, { api: apiSummary(row) });
   }
   return toolResult(id, "未知工具", true);
 }

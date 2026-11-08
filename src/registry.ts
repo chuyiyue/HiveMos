@@ -1267,7 +1267,11 @@ export async function deleteGroup(db: D1Database, id: string): Promise<{ ok: tru
 
 // System feature domains an agent can be granted, one per board. Stored on
 // the agent as a JSON array; anything not listed is denied at the MCP edge.
-export const PERMISSION_DOMAINS = ["registry", "memory", "soul", "tasks", "calendar", "vault", "machines"];
+export const PERMISSION_DOMAINS = ["mcp", "skills", "api", "memory", "soul", "tasks", "calendar", "vault", "machines"];
+
+// The old single "registry" domain covered the whole MCP 与 Skills board;
+// it now splits per tab (MCP / Skills / API). Stored grants expand on read.
+const LEGACY_REGISTRY_EXPANSION = ["mcp", "skills", "api"];
 
 // Stored JSON that is missing or unreadable falls back to the historical
 // capability set: registry only.
@@ -1280,8 +1284,11 @@ export function parsePermissions(raw: string | null | undefined): string[] {
       parsed = null;
     }
   }
-  if (!Array.isArray(parsed)) return ["registry"];
+  if (!Array.isArray(parsed)) return [...LEGACY_REGISTRY_EXPANSION];
   const wanted = new Set(parsed.filter((item): item is string => typeof item === "string"));
+  if (wanted.has("registry")) {
+    for (const domain of LEGACY_REGISTRY_EXPANSION) wanted.add(domain);
+  }
   return PERMISSION_DOMAINS.filter((domain) => wanted.has(domain));
 }
 
@@ -1398,7 +1405,7 @@ export async function createAgent(env: Env, value: unknown): Promise<{ ok: true;
       await sha256Hex(token),
       tokenEnc,
       resolved.groupId,
-      JSON.stringify(["registry"]),
+      JSON.stringify(["mcp", "skills", "api"]),
       now,
     ]).run();
   } catch (error) {
@@ -1406,7 +1413,7 @@ export async function createAgent(env: Env, value: unknown): Promise<{ ok: true;
     return dbFailure();
   }
   await auditAgentQuietly(db, id, "create");
-  return { ok: true, agent: { id, name, status: "active", group_id: resolved.groupId, permissions: ["registry"], last_seen_at: null, pinned_at: null, created_at: now, call_count: 0, avatar_icon: null, avatar_url: null, has_custom_avatar: false, token } };
+  return { ok: true, agent: { id, name, status: "active", group_id: resolved.groupId, permissions: ["mcp", "skills", "api"], last_seen_at: null, pinned_at: null, created_at: now, call_count: 0, avatar_icon: null, avatar_url: null, has_custom_avatar: false, token } };
 }
 
 export async function updateAgent(db: D1Database, id: string, value: unknown): Promise<{ ok: true; agent: PublicAgent } | Failure> {
