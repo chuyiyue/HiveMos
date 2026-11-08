@@ -127,6 +127,13 @@
 
 .sidebar-devices {
   margin-top: auto;
+  min-height: 0;
+  max-height: 40vh;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  overflow: auto;
+}
+
 /* pin 列表为空时 shell 会给本区加 hidden：不能 display:none（自动边距失效、账号区会浮上去），
    改成零高占位继续吸收上方空间，账号区照常贴底 */
 .sidebar-devices[hidden] {
@@ -139,12 +146,6 @@
 }
 /* 折叠图标栏里 pin 区整体不渲染，改由账号区自己吸收空间贴底 */
 :root[data-sidebar="collapsed"] .sidebar-footer { margin-top: auto; }
-  min-height: 0;
-  max-height: 40vh;
-  padding-top: 12px;
-  border-top: 1px solid var(--border);
-  overflow: auto;
-}
 
 .sidebar-label-row {
   display: flex;
