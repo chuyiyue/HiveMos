@@ -69,6 +69,30 @@ export interface PublicServer {
   updated_at: number;
 }
 
+// Library avatar icon ids. Mirror of the catalog in public/avatars.js —
+// keep the two lists in sync; PATCH validates against this set.
+export const AVATAR_ICON_IDS: ReadonlySet<string> = new Set([
+  "robot", "terminal", "code", "chip", "brain", "network", "rocket", "satellite", "spark", "message",
+  "cat", "owl", "fox", "octopus", "whale", "bird", "fish", "panda", "turtle", "butterfly",
+  "ghost", "alien", "eye", "bulb", "cube", "wrench", "crown", "shield", "bolt", "planet",
+]);
+
+// Accepts only absolute http/https image links, stored verbatim (the
+// browser loads them directly; the Worker never fetches them).
+export function parseAvatarUrl(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > 2048) return null;
+  let url: URL;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+  return trimmed;
+}
+
 export interface PublicAgent {
   id: string;
   name: string;
@@ -78,6 +102,9 @@ export interface PublicAgent {
   last_seen_at: number | null;
   pinned_at: number | null;
   created_at: number;
+  avatar_icon: string | null;
+  avatar_url: string | null;
+  has_custom_avatar: boolean;
 }
 
 export interface PublicGroup {
@@ -105,6 +132,9 @@ interface AgentRow {
   last_seen_at: number | string | null;
   pinned_at: number | string | null;
   created_at: number | string;
+  avatar_icon?: string | null;
+  avatar_url?: string | null;
+  has_custom_avatar?: number | string | null;
 }
 
 export interface AuditItem {
@@ -1213,11 +1243,14 @@ function toPublicAgent(row: AgentRow): PublicAgent {
     last_seen_at: asNumber(row.last_seen_at),
     pinned_at: asNumber(row.pinned_at),
     created_at: asNumber(row.created_at) ?? 0,
+    avatar_icon: row.avatar_icon ?? null,
+    avatar_url: row.avatar_url ?? null,
+    has_custom_avatar: asNumber(row.has_custom_avatar) === 1,
   };
 }
 
 async function getAgentRow(db: D1Database, id: string): Promise<AgentRow | null> {
-  return prepare(db, "SELECT id, name, status, group_id, permissions, last_seen_at, pinned_at, created_at FROM agents WHERE id = ?", [id]).first<AgentRow>();
+  return prepare(db, "SELECT id, name, status, group_id, permissions, last_seen_at, pinned_at, created_at, avatar_icon, avatar_url, EXISTS(SELECT 1 FROM agent_avatars WHERE agent_id = agents.id) AS has_custom_avatar FROM agents WHERE id = ?", [id]).first<AgentRow>();
 }
 
 // Resolves an optional group reference for the agent scope. Absent or blank
@@ -1235,7 +1268,7 @@ async function resolveAgentGroupId(db: D1Database, value: unknown): Promise<{ ok
 export async function listAgents(db: D1Database): Promise<PublicAgent[]> {
   const listed = await prepare(
     db,
-    "SELECT id, name, status, group_id, permissions, last_seen_at, pinned_at, created_at FROM agents ORDER BY created_at DESC",
+    "SELECT id, name, status, group_id, permissions, last_seen_at, pinned_at, created_at, avatar_icon, avatar_url, EXISTS(SELECT 1 FROM agent_avatars WHERE agent_id = agents.id) AS has_custom_avatar FROM agents ORDER BY created_at DESC",
   ).all<AgentRow>();
   return rowsOf(listed).map(toPublicAgent);
 }
@@ -1246,6 +1279,9 @@ export interface SidebarAgent {
   status: string;
   last_seen_at: number | null;
   pinned: boolean;
+  avatar_icon: string | null;
+  avatar_url: string | null;
+  has_custom_avatar: boolean;
 }
 
 // The sidebar rail is assembled here so every client shows the same list:
@@ -1260,16 +1296,19 @@ export async function listSidebarAgents(db: D1Database, limit: number): Promise<
     status: row.status,
     last_seen_at: asNumber(row.last_seen_at),
     pinned,
+    avatar_icon: row.avatar_icon ?? null,
+    avatar_url: row.avatar_url ?? null,
+    has_custom_avatar: asNumber(row.has_custom_avatar) === 1,
   });
   const pinnedListed = await prepare(
     db,
-    "SELECT id, name, status, group_id, permissions, last_seen_at, pinned_at, created_at FROM agents WHERE pinned_at IS NOT NULL ORDER BY pinned_at ASC, created_at ASC",
+    "SELECT id, name, status, group_id, permissions, last_seen_at, pinned_at, created_at, avatar_icon, avatar_url, EXISTS(SELECT 1 FROM agent_avatars WHERE agent_id = agents.id) AS has_custom_avatar FROM agents WHERE pinned_at IS NOT NULL ORDER BY pinned_at ASC, created_at ASC",
   ).all<AgentRow>();
   const pinned = rowsOf(pinnedListed).map((row) => toItem(row, true));
   if (pinned.length >= limit) return pinned;
   const fillListed = await prepare(
     db,
-    "SELECT id, name, status, group_id, permissions, last_seen_at, pinned_at, created_at FROM agents WHERE status = 'active' AND pinned_at IS NULL ORDER BY last_seen_at DESC, created_at DESC LIMIT ?",
+    "SELECT id, name, status, group_id, permissions, last_seen_at, pinned_at, created_at, avatar_icon, avatar_url, EXISTS(SELECT 1 FROM agent_avatars WHERE agent_id = agents.id) AS has_custom_avatar FROM agents WHERE status = 'active' AND pinned_at IS NULL ORDER BY last_seen_at DESC, created_at DESC LIMIT ?",
     [limit - pinned.length],
   ).all<AgentRow>();
   return pinned.concat(rowsOf(fillListed).map((row) => toItem(row, false)));
@@ -1299,7 +1338,7 @@ export async function createAgent(db: D1Database, value: unknown): Promise<{ ok:
     if (isUniqueError(error)) return { ok: false, status: 409, error: "这个名字已存在" };
     return dbFailure();
   }
-  return { ok: true, agent: { id, name, status: "active", group_id: resolved.groupId, permissions: ["registry"], last_seen_at: null, pinned_at: null, created_at: now, token } };
+  return { ok: true, agent: { id, name, status: "active", group_id: resolved.groupId, permissions: ["registry"], last_seen_at: null, pinned_at: null, created_at: now, avatar_icon: null, avatar_url: null, has_custom_avatar: false, token } };
 }
 
 export async function updateAgent(db: D1Database, id: string, value: unknown): Promise<{ ok: true; agent: PublicAgent } | Failure> {
@@ -1335,10 +1374,102 @@ export async function updateAgent(db: D1Database, id: string, value: unknown): P
     if (body.status !== "active" && body.status !== "disabled") return { ok: false, status: 400, error: "状态不正确" };
     status = body.status;
   }
+  // Avatar sources are mutually exclusive: setting one clears the others
+  // (the uploaded image row is dropped below once the update lands).
+  let avatarIcon = existing.avatar_icon ?? null;
+  let avatarUrl = existing.avatar_url ?? null;
+  let clearUploadedAvatar = false;
+  if ("avatar_icon" in body) {
+    if (body.avatar_icon == null || body.avatar_icon === "") {
+      avatarIcon = null;
+    } else if (typeof body.avatar_icon === "string" && AVATAR_ICON_IDS.has(body.avatar_icon)) {
+      avatarIcon = body.avatar_icon;
+    } else {
+      return { ok: false, status: 400, error: "头像图标不正确" };
+    }
+    if (avatarIcon) {
+      avatarUrl = null;
+      clearUploadedAvatar = true;
+    }
+  }
+  if ("avatar_url" in body) {
+    if (body.avatar_url == null || body.avatar_url === "") {
+      avatarUrl = null;
+    } else {
+      const parsed = parseAvatarUrl(body.avatar_url);
+      if (!parsed) return { ok: false, status: 400, error: "图片链接不正确" };
+      avatarUrl = parsed;
+    }
+    if (avatarUrl) {
+      avatarIcon = null;
+      clearUploadedAvatar = true;
+    }
+  }
   try {
-    await prepare(db, "UPDATE agents SET name = ?, group_id = ?, permissions = ?, pinned_at = ?, status = ? WHERE id = ?", [name, groupId, JSON.stringify(permissions), pinnedAt, status, id]).run();
+    await prepare(db, "UPDATE agents SET name = ?, group_id = ?, permissions = ?, pinned_at = ?, status = ?, avatar_icon = ?, avatar_url = ? WHERE id = ?", [name, groupId, JSON.stringify(permissions), pinnedAt, status, avatarIcon, avatarUrl, id]).run();
   } catch (error) {
     if (isUniqueError(error)) return { ok: false, status: 409, error: "这个名字已存在" };
+    return dbFailure();
+  }
+  if (clearUploadedAvatar) {
+    try {
+      await prepare(db, "DELETE FROM agent_avatars WHERE agent_id = ?", [id]).run();
+    } catch {
+      return dbFailure();
+    }
+  }
+  const fresh = await getAgentRow(db, id);
+  if (!fresh) return { ok: false, status: 404, error: "未找到" };
+  return { ok: true, agent: toPublicAgent(fresh) };
+}
+
+// ---- Uploaded avatar images ----
+
+export interface AgentAvatarImage {
+  content_type: string;
+  data: ArrayBuffer;
+}
+
+export async function getAgentAvatar(db: D1Database, id: string): Promise<AgentAvatarImage | null> {
+  const row = await prepare(db, "SELECT content_type, data FROM agent_avatars WHERE agent_id = ?", [id]).first<{
+    content_type: string;
+    data: ArrayBuffer;
+  }>();
+  if (!row) return null;
+  return { content_type: row.content_type, data: row.data };
+}
+
+// Storing an upload makes it the single avatar source: the library icon
+// and the external link are cleared in the same step.
+export async function setAgentAvatar(
+  db: D1Database,
+  id: string,
+  contentType: string,
+  data: Uint8Array,
+): Promise<{ ok: true; agent: PublicAgent } | Failure> {
+  const existing = await getAgentRow(db, id);
+  if (!existing) return { ok: false, status: 404, error: "未找到" };
+  try {
+    await prepare(
+      db,
+      "INSERT INTO agent_avatars (agent_id, content_type, data, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(agent_id) DO UPDATE SET content_type = excluded.content_type, data = excluded.data, updated_at = excluded.updated_at",
+      [id, contentType, data, Date.now()],
+    ).run();
+    await prepare(db, "UPDATE agents SET avatar_icon = NULL, avatar_url = NULL WHERE id = ?", [id]).run();
+  } catch {
+    return dbFailure();
+  }
+  const fresh = await getAgentRow(db, id);
+  if (!fresh) return { ok: false, status: 404, error: "未找到" };
+  return { ok: true, agent: toPublicAgent(fresh) };
+}
+
+export async function clearAgentAvatar(db: D1Database, id: string): Promise<{ ok: true; agent: PublicAgent } | Failure> {
+  const existing = await getAgentRow(db, id);
+  if (!existing) return { ok: false, status: 404, error: "未找到" };
+  try {
+    await prepare(db, "DELETE FROM agent_avatars WHERE agent_id = ?", [id]).run();
+  } catch {
     return dbFailure();
   }
   const fresh = await getAgentRow(db, id);
