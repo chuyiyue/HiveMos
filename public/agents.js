@@ -85,16 +85,17 @@
       C.escapeHtml(agent.name) +
       "</h3>" +
       pill(active ? "ok" : "idle", active ? "已启用" : "已停用") +
-      '</div><div class="row-actions"><button type="button" class="secondary" data-action="menu" data-id="' +
-      C.escapeHtml(agent.id) +
-      '">高级</button></div><div class="confirm-slot" data-confirm-for="' +
+      '</div><div class="confirm-slot" data-confirm-for="' +
       C.escapeHtml(agent.id) +
       '"></div></div><dl class="kv">' +
       kv("标识", '<span class="mono">' + C.escapeHtml(agent.id) + "</span>") +
       kv("权限", C.escapeHtml(permText(agent))) +
       kv("最近调用", C.escapeHtml(seen || "还没有调用")) +
       kv("创建", C.escapeHtml(C.formatMinute(agent.created_at) || "未知")) +
-      "</dl></article>"
+      "</dl>" +
+      C.expandPanel("agent:" + agent.id, agentExpandBody(agent)) +
+      C.expandToggle("agent:" + agent.id) +
+      "</article>"
     );
   }
 
@@ -131,19 +132,30 @@
         emptyText: "点上方「添加设备」创建第一个",
       });
     }
-    var addBar = C.addBar({ addLabel: "添加设备", addAction: "open-create", groupAction: "add-group" });
-    var agentsPanel = '<div class="stack">' + noticeHtml() + addBar + body + "</div>";
+    var agentsPanel = '<div class="stack">' + noticeHtml() + body + "</div>";
+    var head =
+      '<div class="page-head"><div class="page-tabs" role="tablist">' +
+      '<button class="page-tab" type="button" role="tab" data-tab="agents" aria-selected="' +
+      (state.activeTab === "agents" ? "true" : "false") +
+      '">Agents</button>' +
+      '<button class="page-tab" type="button" role="tab" data-tab="apps" aria-selected="' +
+      (state.activeTab === "apps" ? "true" : "false") +
+      '">应用</button>' +
+      "</div>" +
+      '<div class="page-head-actions" data-head-actions="agents"' +
+      (state.activeTab === "agents" ? "" : " hidden") +
+      ">" +
+      C.addBar({ addLabel: "添加设备", addAction: "open-create", groupAction: "add-group" }) +
+      "</div>" +
+      '<div class="page-head-actions" data-head-actions="apps"' +
+      (state.activeTab === "apps" ? "" : " hidden") +
+      ">" +
+      C.addBar({ addLabel: "添加应用", addAction: "app-add", groupAction: "app-add-group" }) +
+      "</div></div>";
     C.mount(
       C.layout(
         "",
-        '<div class="page-tabs" role="tablist">' +
-          '<button class="page-tab" type="button" role="tab" data-tab="agents" aria-selected="' +
-          (state.activeTab === "agents" ? "true" : "false") +
-          '">Agents</button>' +
-          '<button class="page-tab" type="button" role="tab" data-tab="apps" aria-selected="' +
-          (state.activeTab === "apps" ? "true" : "false") +
-          '">应用</button>' +
-          "</div>" +
+        head +
           '<div data-panel="agents"' +
           (state.activeTab === "agents" ? "" : " hidden") +
           ">" +
@@ -167,6 +179,9 @@
     document.querySelectorAll("[data-panel]").forEach(function (panel) {
       panel.hidden = panel.getAttribute("data-panel") !== name;
     });
+    document.querySelectorAll("[data-head-actions]").forEach(function (el) {
+      el.hidden = el.getAttribute("data-head-actions") !== name;
+    });
     history.replaceState(null, "", "#" + name);
   }
 
@@ -183,15 +198,45 @@
         activateTab(tab.getAttribute("data-tab"));
         return;
       }
+      var permBtn = target.closest("[data-perm]");
+      if (permBtn) {
+        if (state.busy) return;
+        var permAgent = findAgent(permBtn.getAttribute("data-id") || "");
+        if (!permAgent) return;
+        var domain = permBtn.getAttribute("data-perm");
+        var next = new Set(permAgent.permissions || []);
+        if (next.has(domain)) next.delete(domain);
+        else next.add(domain);
+        permBtn.setAttribute("aria-checked", next.has(domain) ? "true" : "false");
+        var ordered = PERM_DOMAINS.map(function (entry) {
+          return entry[0];
+        }).filter(function (entry) {
+          return next.has(entry);
+        });
+        savePermissions(permAgent, ordered);
+        return;
+      }
       var button = target.closest("[data-action]");
       if (!button || state.busy) return;
       var action = button.getAttribute("data-action");
       var id = button.getAttribute("data-id") || "";
       if (action === "open-create") openCreate();
       else if (action === "add-group") openGroup();
-      else if (action === "menu") {
+      else if (action === "rename") {
         var agent = findAgent(id);
-        if (agent) openMenu(agent);
+        if (agent) openRename(agent);
+      } else if (action === "move") {
+        var agent2 = findAgent(id);
+        if (agent2) openMove(agent2);
+      } else if (action === "pin") {
+        var agent3 = findAgent(id);
+        if (agent3) togglePin(agent3);
+      } else if (action === "rotate") {
+        var agent4 = findAgent(id);
+        if (agent4) rotate(agent4);
+      } else if (action === "disable") {
+        var agent5 = findAgent(id);
+        if (agent5) disable(agent5);
       } else if (action === "rename-group") {
         var group = findGroup(id);
         if (group) openRenameGroup(group);
@@ -200,9 +245,12 @@
         if (target2) deleteGroup(target2, button);
       } else if (action === "app-add") openAppDialog(null);
       else if (action === "app-add-group") openAppGroupDialog(null);
-      else if (action === "app-menu") {
+      else if (action === "app-edit") {
         var app = findApp(id);
-        if (app) openAppMenu(app);
+        if (app) openAppDialog(app);
+      } else if (action === "app-delete") {
+        var app2 = findApp(id);
+        if (app2) deleteApp(app2);
       } else if (action === "app-rename-group") {
         var appGroup = findAppGroup(id);
         if (appGroup) openAppGroupDialog(appGroup);
@@ -446,56 +494,83 @@
     });
   }
 
-  // ---- 卡片高级菜单 ----
+  // ---- 卡片展开区（就地展开面板，替代中央菜单） ----
 
-  function openMenu(agent) {
-    var items = [
-      {
-        label: "改名",
-        onSelect: function () {
-          openRename(agent);
-        },
-      },
-      {
-        label: "移动分组",
-        hint: groupNameOf(agent),
-        onSelect: function () {
-          openMove(agent);
-        },
-      },
-      {
-        label: "高级设置",
-        hint: "系统功能权限",
-        onSelect: function () {
-          openPermissions(agent);
-        },
-      },
-      {
-        label: agent.pinned_at ? "取消固定" : "固定到侧边栏",
-        hint: agent.pinned_at ? "已固定在侧边栏" : "固定后在侧边栏常驻展示",
-        onSelect: function () {
-          togglePin(agent);
-        },
-      },
-    ];
-    if (agent.status === "active") {
-      items.push({
-        label: "轮换令牌",
-        hint: "旧令牌立即失效",
-        onSelect: function () {
-          rotate(agent);
-        },
-      });
-      items.push({
-        label: "停用",
-        danger: true,
-        onSelect: function () {
-          disable(agent);
-        },
-      });
-    }
-    C.openActionMenu({ title: agent.name, items: items });
+  function permRowsHtml(agent) {
+    var enabled = new Set(agent.permissions || []);
+    return PERM_DOMAINS.map(function (entry) {
+      var on = enabled.has(entry[0]);
+      return (
+        '<div class="perm-row"><div class="perm-meta"><strong>' +
+        C.escapeHtml(entry[1]) +
+        '</strong><span class="subtle">' +
+        C.escapeHtml(entry[0] + " · " + entry[2]) +
+        '</span></div><button type="button" class="switch" role="switch" aria-checked="' +
+        (on ? "true" : "false") +
+        '" data-perm="' +
+        C.escapeHtml(entry[0]) +
+        '" data-id="' +
+        C.escapeHtml(agent.id) +
+        '" aria-label="' +
+        C.escapeHtml(entry[1]) +
+        '"><span class="switch-knob"></span></button></div>'
+      );
+    }).join("");
   }
+
+  function agentExpandBody(agent) {
+    var active = agent.status === "active";
+    var id = C.escapeHtml(agent.id);
+    var actions =
+      '<button type="button" class="secondary" data-action="rename" data-id="' + id + '">改名</button>' +
+      '<button type="button" class="secondary" data-action="move" data-id="' + id + '">移动分组</button>' +
+      '<button type="button" class="secondary" data-action="pin" data-id="' + id + '">' +
+      (agent.pinned_at ? "取消固定" : "固定到侧边栏") +
+      "</button>";
+    if (active) {
+      actions +=
+        '<button type="button" class="secondary" data-action="rotate" data-id="' + id + '">轮换令牌</button>' +
+        '<button type="button" class="danger" data-action="disable" data-id="' + id + '">停用</button>';
+    }
+    return (
+      '<p class="subtle expand-note">移动分组：当前在「' +
+      C.escapeHtml(groupNameOf(agent)) +
+      '」。轮换令牌后旧令牌立即失效</p>' +
+      C.expandActions(actions) +
+      '<h3 class="expand-subhead">系统功能权限</h3>' +
+      '<p class="subtle expand-note">这个 Agent 通过面板 MCP 能访问的系统功能，拨动开关立即生效</p>' +
+      '<div class="perm-list">' +
+      permRowsHtml(agent) +
+      "</div>"
+    );
+  }
+
+  function savePermissions(agent, perms) {
+    if (state.busy) return;
+    state.busy = true;
+    api("PATCH", "/api/agents/" + encodeURIComponent(agent.id), { permissions: perms })
+      .then(function (result) {
+        state.busy = false;
+        if (authRedirect(result.status)) return;
+        if (!result.data || result.data.ok !== true) {
+          state.notice = (result.data && result.data.error) || "权限没有保存，请重试";
+          state.noticeKind = "danger";
+          render();
+          return;
+        }
+        state.notice = "已保存权限";
+        state.noticeKind = "ok";
+        loadAll();
+      })
+      .catch(function () {
+        state.busy = false;
+        state.notice = "网络异常，请重试";
+        state.noticeKind = "danger";
+        render();
+      });
+  }
+
+  // ---- 卡片高级菜单 ----
 
   function togglePin(agent) {
     if (state.busy) return;
@@ -586,50 +661,6 @@
         ctrl.setBusy(false);
         ctrl.setError("网络异常，请重试");
       });
-  }
-
-  function openPermissions(agent) {
-    var enabled = new Set(agent.permissions || []);
-    var rows = PERM_DOMAINS.map(function (entry) {
-      var on = enabled.has(entry[0]);
-      return (
-        '<div class="perm-row"><div class="perm-meta"><strong>' +
-        C.escapeHtml(entry[1]) +
-        '</strong><span class="subtle">' +
-        C.escapeHtml(entry[0] + " · " + entry[2]) +
-        '</span></div><button type="button" class="switch" role="switch" aria-checked="' +
-        (on ? "true" : "false") +
-        '" data-domain="' +
-        C.escapeHtml(entry[0]) +
-        '" aria-label="' +
-        C.escapeHtml(entry[1]) +
-        '"><span class="switch-knob"></span></button></div>'
-      );
-    }).join("");
-    var ctrl = C.openFormDialog({
-      title: "高级设置",
-      bodyHtml:
-        '<p class="subtle field-hint">设置这个 Agent 通过面板 MCP 能访问的系统功能，保存后立即生效</p><div class="perm-list">' +
-        rows +
-        "</div>",
-      submitLabel: "保存权限",
-      onSubmit: function (c) {
-        var perms = PERM_DOMAINS.filter(function (entry) {
-          var btn = c.form.querySelector('[data-domain="' + entry[0] + '"]');
-          return btn && btn.getAttribute("aria-checked") === "true";
-        }).map(function (entry) {
-          return entry[0];
-        });
-        patchAgent(c, agent.id, { permissions: perms }, "已保存权限");
-      },
-    });
-    ctrl.dialog.addEventListener("click", function (event) {
-      var target = event.target;
-      if (!(target instanceof Element)) return;
-      var btn = target.closest(".switch");
-      if (!btn) return;
-      btn.setAttribute("aria-checked", btn.getAttribute("aria-checked") === "true" ? "false" : "true");
-    });
   }
 
   function rotate(agent) {
@@ -744,10 +775,16 @@
         ["最近使用", C.escapeHtml(item.last_used || "还没有使用")],
         ["说明", C.escapeHtml(item.note || "无")],
       ],
-      extra:
-        '<div class="row-actions"><button type="button" class="secondary" data-action="app-menu" data-id="' +
-        C.escapeHtml(item.id) +
-        '">高级</button></div><div class="confirm-slot" data-confirm-app-item="' +
+      expandKey: "app:" + item.id,
+      expandBody:
+        C.expandActions(
+          '<button type="button" class="secondary" data-action="app-edit" data-id="' +
+            C.escapeHtml(item.id) +
+            '">编辑</button><button type="button" class="danger" data-action="app-delete" data-id="' +
+            C.escapeHtml(item.id) +
+            '">删除</button>',
+        ) +
+        '<div class="confirm-slot" data-confirm-app-item="' +
         C.escapeHtml(item.id) +
         '"></div>',
     });
@@ -768,7 +805,6 @@
   function appsHtml() {
     return (
       '<div class="stack">' +
-      C.addBar({ addLabel: "添加应用", addAction: "app-add", groupAction: "app-add-group" }) +
       C.groupedSections({
         groups: state.apps.groups,
         items: state.apps.items,
@@ -908,27 +944,6 @@
       state.notice = "已删除分组";
       state.noticeKind = "ok";
       render();
-    });
-  }
-
-  function openAppMenu(item) {
-    C.openActionMenu({
-      title: item.name,
-      items: [
-        {
-          label: "编辑",
-          onSelect: function () {
-            openAppDialog(item);
-          },
-        },
-        {
-          label: "删除",
-          danger: true,
-          onSelect: function () {
-            deleteApp(item);
-          },
-        },
-      ],
     });
   }
 
