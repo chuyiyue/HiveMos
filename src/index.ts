@@ -30,6 +30,7 @@ import { clientAddress, isCrossSite, json, readCookie, readJsonLimited } from ".
 import { handleMcp } from "./mcp";
 import { handleRegistryRequest } from "./registry-http";
 import { handleCalendarFeed, handleCalendarRequest } from "./calendar-http";
+import { handleSoulRequest } from "./soul-http";
 import { syncDueMirrors } from "./calendar";
 import { refreshActiveSnapshots } from "./registry";
 import { issueSession, publicUser, requireAdminUser } from "./session";
@@ -93,6 +94,8 @@ export default {
       if (registry) return registry;
       const calendar = await handleCalendarRequest(request, env, wait, path);
       if (calendar) return calendar;
+      const soul = await handleSoulRequest(request, env, wait, path);
+      if (soul) return soul;
       if (path === "/api" || path.startsWith("/api/")) return json({ ok: false, error: "未找到" }, 404);
       return env.ASSETS.fetch(request);
     } catch {

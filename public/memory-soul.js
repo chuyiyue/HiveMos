@@ -1,4 +1,4 @@
-/* mock: 记忆与 Soul 合并板块。记忆为占位摘要（接入后 GET /api/memories），Soul 为版本占位（接入后 GET /api/souls）。添加先在页内生效 */
+/* mock: 记忆与 Soul 合并板块。记忆为占位摘要（接入后 GET /api/memories），Soul 走 /api/soul 真实接口，全量版本与历史都在服务端。记忆添加先在页内生效 */
 (function () {
   var C = window.HiveCommon;
   var activeTab = location.hash === "#soul" ? "soul" : "memory";
@@ -11,6 +11,22 @@
     var el = ctrl.form.querySelector("[name=\"" + name + "\"]");
     return el ? el.value.trim() : "";
   }
+
+  // Soul 页签的接口助手（记忆页签仍是页内数据，不走这里）
+  function soulApi(method, url, body) {
+    var headers = { accept: "application/json" };
+    var options = { method: method, headers: headers, cache: "no-store" };
+    if (body !== undefined) {
+      headers["content-type"] = "application/json";
+      options.body = JSON.stringify(body);
+    }
+    return fetch(url, options).then(function (response) {
+      return response
+        .json()
+        .catch(function () { return {}; })
+        .then(function (data) { return { status: response.status, data: data || {} }; });
+    });
+  }
   // 与其它板块同一套卡片菜单入口：record 的 extra 里放「高级」按钮
   function manageBtn(kind, id) {
     return '<div class="row-actions"><button type="button" class="secondary" data-manage="' + kind + '" data-id="' + C.escapeHtml(id) + '">高级</button></div>';
@@ -21,11 +37,8 @@
     { id: "mem_deploy", title: "部署走 Wrangler", scope: "编排", source: "研究", updated: "2026-11-07 09:12", excerpt: "控制面只部署在 Cloudflare Workers，不引入构建步骤" },
     { id: "mem_name", title: "如何称呼操作者", scope: "全局", source: "管理员", updated: "2026-11-01 16:40", excerpt: "操作者在界面中显示为管理员" },
   ];
-  var SOULS = [
-    { id: "soul_orch", agent: "编排", version: "v12", status: "synced", updated: "2026-11-07 08:55" },
-    { id: "soul_research", agent: "研究", version: "v7", status: "syncing", updated: "2026-11-07 09:16" },
-    { id: "soul_ops", agent: "值守", version: "v3", status: "paused", updated: "2026-11-06 19:04" },
-  ];
+  var SOULS = [];
+  var soulsLoaded = false;
 
   function render() {
     var memCards = MEMORIES.map(function (item) {
@@ -38,12 +51,18 @@
       C.section("冲突", "", C.emptyState("没有待合并的记忆", "同一作用域发生冲突时会列在这里")) +
       "</div>";
     var soulCards = SOULS.map(function (item) {
-      return C.record({ id: item.id, title: item.agent, status: item.status, lede: "当前版本 " + item.version, facts: [["版本", C.escapeHtml(item.version)], ["同步时间", C.escapeHtml(item.updated)]], extra: manageBtn("soul", item.id) });
+      var extra = manageBtn("soul", item.id) + "<div class=\"confirm-slot\" data-confirm-soul=\"" + C.escapeHtml(item.id) + "\"></div>";
+      return C.record({ id: item.id, title: item.agent_name, lede: "当前版本 v" + item.version, facts: [["版本", "v" + item.version], ["更新时间", C.escapeHtml(C.formatMinute(item.updated_at) || "—")]], extra: extra });
     }).join("");
+    var soulBody = !soulsLoaded
+      ? C.emptyState("正在加载 Soul", "马上就好")
+      : SOULS.length
+        ? C.list(soulCards)
+        : C.emptyState("还没有 Soul", "给 Agent 添加人格定义后会列在这里");
     var soulHtml =
       "<div class=\"stack\">" +
       "<button type=\"button\" class=\"add-button\" data-add=\"soul\">添加 Soul</button>" +
-      C.section("Soul", String(SOULS.length) + " 份", C.list(soulCards)) +
+      C.section("Soul", String(SOULS.length) + " 份", soulBody) +
       C.section("草稿", "", C.emptyState("没有未发布的草稿", "尚未同步的 Soul 草稿会留在这里")) +
       "</div>";
     C.mount(
@@ -92,46 +111,165 @@
   }
 
   function soulFields(item) {
-    var v = item || { agent: "", version: "" };
+    var v = item || { agent_name: "", content: "" };
     return (
-      "<label>Agent<input name=\"agent\" maxlength=\"40\" autocomplete=\"off\" value=\"" + C.escapeHtml(v.agent) + "\" /></label>" +
-      "<label>版本<input name=\"version\" maxlength=\"20\" autocomplete=\"off\" placeholder=\"v1\" value=\"" + C.escapeHtml(v.version) + "\" /></label>"
+      "<label>Agent<input name=\"agent\" maxlength=\"80\" autocomplete=\"off\" value=\"" + C.escapeHtml(v.agent_name) + "\" /></label>" +
+      "<label>内容<textarea name=\"content\" rows=\"12\" placeholder=\"这个 Agent 的人格与行为定义全文\">" + C.escapeHtml(v.content) + "</textarea></label>"
     );
   }
+
+  function loadSouls() {
+    return soulApi("GET", "/api/soul")
+      .then(function (res) {
+        if (res.status === 200 && res.data.souls) {
+          SOULS = res.data.souls;
+          soulsLoaded = true;
+          render();
+        }
+      })
+      .catch(function () {
+        // 加载失败时保持未加载状态，下一次成功写入后会重新拉取
+      });
+  }
+
   function openSoulDialog(item) {
+    if (item && item.content === undefined) {
+      // 列表只带摘要，编辑前先取回全文再打开弹窗
+      soulApi("GET", "/api/soul/" + encodeURIComponent(item.id)).then(function (res) {
+        if (res.status === 200 && res.data.soul) openSoulDialog(res.data.soul);
+      });
+      return;
+    }
     var editing = !!item;
     C.openFormDialog({
       title: editing ? "编辑 Soul" : "添加 Soul",
+      wide: true,
       bodyHtml: soulFields(item),
       submitLabel: editing ? "保存" : "添加",
       onSubmit: function (ctrl) {
         var agent = val(ctrl, "agent");
         if (!agent) { ctrl.setError("请填写 Agent"); return; }
-        if (editing) {
-          item.agent = agent;
-          item.version = val(ctrl, "version") || "v1";
-          item.updated = now();
-        } else {
-          SOULS.push({ id: "soul_" + Date.now(), agent: agent, version: val(ctrl, "version") || "v1", status: "paused", updated: now() });
-        }
-        ctrl.close();
-        render();
+        var contentEl = ctrl.form.querySelector("[name=\"content\"]");
+        var content = contentEl ? contentEl.value : "";
+        ctrl.setBusy(true);
+        var request = editing
+          ? soulApi("PATCH", "/api/soul/" + encodeURIComponent(item.id), { agent_name: agent, content: content })
+          : soulApi("POST", "/api/soul", { agent_name: agent, content: content });
+        request
+          .then(function (res) {
+            ctrl.setBusy(false);
+            if ((res.status === 200 || res.status === 201) && res.data.soul) {
+              ctrl.close();
+              loadSouls();
+            } else {
+              ctrl.setError(C.explain(res.data.error, "保存失败，请稍后重试"));
+            }
+          })
+          .catch(function () {
+            ctrl.setBusy(false);
+            ctrl.setError("网络异常，请重试");
+          });
       },
     });
   }
 
+  function openSoulHistory(item) {
+    var ctrl = C.openFormDialog({
+      title: item.agent_name + " 的历史版本",
+      wide: true,
+      bodyHtml: C.emptyState("正在加载历史版本", "马上就好"),
+      submitLabel: "关闭",
+      onSubmit: function (c) {
+        c.close();
+      },
+    });
+    soulApi("GET", "/api/soul/" + encodeURIComponent(item.id) + "/versions").then(function (res) {
+      var versions = (res.data && res.data.versions) || [];
+      var cards = versions
+        .map(function (v) {
+          var sourceLabel = v.source === "mcp" ? "Agent 写入" : v.source === "rollback" ? "回滚生成" : "面板编辑";
+          var excerpt = String(v.content || "").slice(0, 120);
+          var action =
+            v.version === item.version
+              ? "<span class=\"subtle\">当前版本</span>"
+              : "<div class=\"row-actions\"><button type=\"button\" class=\"secondary\" data-rollback=\"" + v.version + "\">回滚到此版</button></div>";
+          return C.record({
+            title: "v" + v.version,
+            lede: excerpt,
+            facts: [
+              ["来源", sourceLabel],
+              ["时间", C.escapeHtml(C.formatMinute(v.created_at) || "—")],
+            ],
+            extra: action,
+          });
+        })
+        .join("");
+      ctrl.showResult(cards ? C.list(cards) : C.emptyState("没有历史版本", ""), "关闭");
+      Array.prototype.forEach.call(ctrl.form.querySelectorAll("[data-rollback]"), function (btn) {
+        btn.addEventListener("click", function () {
+          var target = Number(btn.getAttribute("data-rollback"));
+          btn.disabled = true;
+          soulApi("POST", "/api/soul/" + encodeURIComponent(item.id) + "/rollback", { version: target })
+            .then(function (r) {
+              if (r.status === 200 && r.data.soul) {
+                ctrl.close();
+                loadSouls();
+              } else {
+                btn.disabled = false;
+              }
+            })
+            .catch(function () {
+              btn.disabled = false;
+            });
+        });
+      });
+    });
+  }
+
+  function deleteSoul(item) {
+    var anchor = document.querySelector("[data-confirm-soul=\"" + item.id + "\"]");
+    C.askConfirm({
+      anchor: anchor,
+      title: "删除 Soul",
+      text: "确认删除「" + item.agent_name + "」的 Soul 吗？全部历史版本会一并删除",
+      confirmLabel: "删除",
+      danger: true,
+    }).then(function (yes) {
+      if (!yes) return;
+      soulApi("DELETE", "/api/soul/" + encodeURIComponent(item.id)).then(function (res) {
+        if (res.status === 200) loadSouls();
+      });
+    });
+  }
+
   function openManageMenu(kind, item) {
-    C.openActionMenu({
-      title: kind === "memory" ? item.title : item.agent,
-      items: [
-        {
-          label: "编辑",
-          onSelect: function () {
-            if (kind === "memory") openMemoryDialog(item);
-            else openSoulDialog(item);
-          },
+    var items = [
+      {
+        label: "编辑",
+        onSelect: function () {
+          if (kind === "memory") openMemoryDialog(item);
+          else openSoulDialog(item);
         },
-      ],
+      },
+    ];
+    if (kind === "soul") {
+      items.push({
+        label: "历史版本",
+        onSelect: function () {
+          openSoulHistory(item);
+        },
+      });
+      items.push({
+        label: "删除",
+        danger: true,
+        onSelect: function () {
+          deleteSoul(item);
+        },
+      });
+    }
+    C.openActionMenu({
+      title: kind === "memory" ? item.title : item.agent_name,
+      items: items,
     });
   }
 
@@ -163,4 +301,5 @@
     }
   });
   render();
+  loadSouls();
 })();
