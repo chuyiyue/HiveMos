@@ -260,11 +260,11 @@ async function workerStatsRun(request: Request, env: Env, id: string): Promise<R
 async function workerAssetsRun(request: Request, env: Env, id: string): Promise<Response> {
   if (request.method !== "GET") return methodNotAllowed("GET");
   const kind = new URL(request.url).searchParams.get("kind") || "";
-  if (kind !== "zones" && kind !== "d1" && kind !== "r2" && kind !== "kv") {
+  if (kind !== "zones" && kind !== "d1" && kind !== "r2" && kind !== "kv" && kind !== "vdomains" && kind !== "deployments") {
     return json({ ok: false, error: "未知的资产类型" });
   }
   return wrap(async () => {
-    const result = await listWorkerAssets(env.DB, vaultKeyOf(env), id, kind as "zones" | "d1" | "r2" | "kv", ACTOR, Date.now());
+    const result = await listWorkerAssets(env.DB, vaultKeyOf(env), id, kind as "zones" | "d1" | "r2" | "kv" | "vdomains" | "deployments", ACTOR, Date.now());
     return json({ ok: true, kind: result.kind, items: result.items, fetched_at: result.fetched_at });
   });
 }

@@ -1079,13 +1079,67 @@ export interface WorkerAccountStats {
   fetched_at: number;
 }
 
+export interface VercelAccountStats {
+  projects_total: number | null;
+  domains_total: number | null;
+  latest_deploy_at: number | null;
+  fetched_at: number;
+}
+
+interface VercelBody {
+  projects?: unknown[];
+  domains?: Array<{ name?: string; createdAt?: number }>;
+  deployments?: Array<{ name?: string; url?: string; state?: string; created?: number }>;
+  error?: { message?: string };
+}
+
+async function vercelGetJson(token: string, url: string): Promise<VercelBody> {
+  let response: Response;
+  try {
+    response = await fetch(url, { headers: { authorization: "Bearer " + token, accept: "application/json" } });
+  } catch {
+    throw new MachineError(502, "连接 Vercel 失败，请稍后重试");
+  }
+  const body = (await response.json().catch(() => null)) as VercelBody | null;
+  if (!response.ok || !body) {
+    throw new MachineError(502, body?.error?.message ? "Vercel：" + body.error.message : "Vercel 返回了无法识别的响应");
+  }
+  return body;
+}
+
 export async function getWorkerAccountStats(
   db: D1Database,
   key: ContentKey,
   id: string,
   now: number,
-): Promise<WorkerAccountStats> {
-  const { accountId, token } = await cloudflareWorkerRow(db, key, id);
+): Promise<WorkerAccountStats | VercelAccountStats> {
+  const row = await getMachine(db, id);
+  if (!row) throw new MachineError(404, "机器不存在");
+  if (row.kind !== "worker") throw new MachineError(400, "只有 Workers 条目有此数据");
+  if (!row.api_token_enc) throw new MachineError(400, "先补上 API 令牌");
+  const token = await openMachineSecret(key, row.api_token_enc);
+  if ((row.platform || "cloudflare") === "vercel") {
+    const team = row.team_id ? "&teamId=" + encodeURIComponent(row.team_id) : "";
+    let projects_total: number | null = null;
+    let domains_total: number | null = null;
+    let latest_deploy_at: number | null = null;
+    try {
+      const body = await vercelGetJson(token, "https://api.vercel.com/v9/projects?limit=100" + team);
+      if (Array.isArray(body.projects)) projects_total = body.projects.length;
+    } catch { /* metric stays null */ }
+    try {
+      const body = await vercelGetJson(token, "https://api.vercel.com/v5/domains?limit=100" + team);
+      if (Array.isArray(body.domains)) domains_total = body.domains.length;
+    } catch { /* metric stays null */ }
+    try {
+      const body = await vercelGetJson(token, "https://api.vercel.com/v6/deployments?limit=1" + team);
+      const first = Array.isArray(body.deployments) ? body.deployments[0] : undefined;
+      if (first && typeof first.created === "number") latest_deploy_at = first.created;
+    } catch { /* metric stays null */ }
+    return { projects_total, domains_total, latest_deploy_at, fetched_at: now };
+  }
+  if (!row.cf_account_id) throw new MachineError(400, "先填写 Cloudflare 账号 ID");
+  const accountId = row.cf_account_id;
   const acct = encodeURIComponent(accountId);
   let workers_total: number | null = null;
   let requests_24h: number | null = null;
@@ -1131,7 +1185,7 @@ export async function getWorkerAccountStats(
   return { workers_total, requests_24h, d1_count, d1_bytes, zones_total, fetched_at: now };
 }
 
-export type WorkerAssetKind = "zones" | "d1" | "r2" | "kv";
+export type WorkerAssetKind = "zones" | "d1" | "r2" | "kv" | "vdomains" | "deployments";
 
 export async function listWorkerAssets(
   db: D1Database,
@@ -1141,6 +1195,35 @@ export async function listWorkerAssets(
   actor: string,
   now: number,
 ): Promise<{ kind: WorkerAssetKind; items: Array<Record<string, unknown>>; fetched_at: number }> {
+  if (kind === "vdomains" || kind === "deployments") {
+    const vrow = await getMachine(db, id);
+    if (!vrow) throw new MachineError(404, "机器不存在");
+    if (vrow.kind !== "worker") throw new MachineError(400, "只有 Workers 条目有此数据");
+    if ((vrow.platform || "cloudflare") !== "vercel") throw new MachineError(400, "仅 Vercel 账号支持此列表");
+    if (!vrow.api_token_enc) throw new MachineError(400, "先补上 API 令牌");
+    const vtoken = await openMachineSecret(key, vrow.api_token_enc);
+    const vteam = vrow.team_id ? "&teamId=" + encodeURIComponent(vrow.team_id) : "";
+    let vitems: Array<Record<string, unknown>> = [];
+    if (kind === "vdomains") {
+      const body = await vercelGetJson(vtoken, "https://api.vercel.com/v5/domains?limit=100" + vteam);
+      const rows = Array.isArray(body.domains) ? body.domains : [];
+      vitems = rows.map((domain) => ({
+        name: String(domain.name ?? ""),
+        created_at: typeof domain.createdAt === "number" ? new Date(domain.createdAt).toISOString() : null,
+      }));
+    } else {
+      const body = await vercelGetJson(vtoken, "https://api.vercel.com/v6/deployments?limit=20" + vteam);
+      const rows = Array.isArray(body.deployments) ? body.deployments : [];
+      vitems = rows.map((deployment) => ({
+        name: String(deployment.name ?? ""),
+        url: String(deployment.url ?? ""),
+        state: String(deployment.state ?? ""),
+        created_at: typeof deployment.created === "number" ? new Date(deployment.created).toISOString() : null,
+      }));
+    }
+    await writeAudit(db, { machineId: id, actor, source: "panel", action: "worker_assets", detail: { kind, count: vitems.length } }, now);
+    return { kind, items: vitems, fetched_at: now };
+  }
   const { accountId, token } = await cloudflareWorkerRow(db, key, id);
   const acct = encodeURIComponent(accountId);
   let items: Array<Record<string, unknown>> = [];
