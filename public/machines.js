@@ -5,15 +5,19 @@
    保存后用存好的配置真连 SSH 探活回填主机名、系统、内核与架构；卡片只
    展示备注、主机名、系统与主机 IP，用户名只在编辑弹窗里出现，密码经
    「查看 SSH 密码」走 reveal 接口；打开列表时对过期条目后台补测（暂无
-   Cron，阈值 10 分钟）；云主机只记厂商与接入方式备注；Workers 存 Cloudflare
-   账号 ID 与 API 令牌（加密保存），可实时查看该账号名下的 Workers。 */
+   Cron，阈值 10 分钟）。
+   云主机走服务商连接向导（华为云 API / MCP 通用）导入设备，凭据加密存、
+   设备可改本地别名、可从连接手动同步；Workers 存 Cloudflare 账号 ID 与
+   API 令牌（加密保存），可实时查看该账号名下的 Workers。
+   分组：三页签共用一个分组池（groups 表 scope=machines），按分组分区
+   展示、未分组置后；分组可改名/删除，删组后条目回未分组、不删条目。 */
 (function () {
   var C = window.HiveCommon;
   var activeTab = location.hash === "#hosts" ? "hosts" : location.hash === "#workers" ? "workers" : "servers";
   var API_KIND = { server: "server", host: "cloud", worker: "worker" };
   var TITLE_FOR = { server: "服务器", host: "云主机", worker: "Worker" };
 
-  var state = { items: [], connections: [], loaded: false, loadError: "" };
+  var state = { items: [], connections: [], groups: [], loaded: false, loadError: "" };
 
   function api(method, url, body) {
     var headers = { accept: "application/json" };
@@ -69,6 +73,7 @@
     }
     if (kind === "worker")
       btns += "<button type=\"button\" class=\"secondary\" data-mact=\"workers\" data-kind=\"worker\" data-id=\"" + id + "\">查看 Workers</button>";
+    btns += "<button type=\"button\" class=\"secondary\" data-mact=\"group\" data-kind=\"" + kind + "\" data-id=\"" + id + "\">设置分组</button>";
     btns += "<button type=\"button\" class=\"secondary\" data-mact=\"edit\" data-kind=\"" + kind + "\" data-id=\"" + id + "\">编辑</button>";
     btns += "<button type=\"button\" class=\"danger\" data-mact=\"delete\" data-kind=\"" + kind + "\" data-id=\"" + id + "\">删除</button>";
     var body = "";
@@ -124,51 +129,66 @@
   }
 
 
+  function cardFor(uiKind, item) {
+    if (uiKind === "worker") {
+      var facts = [["版本", C.escapeHtml(item.version || "未记录")], ["更新时间", C.escapeHtml(C.formatMinute(item.updated_at) || "—")]];
+      if (item.cf_account_id) facts.push(["Cloudflare 账号", C.escapeHtml(item.cf_account_id)]);
+      if (item.api_token_tail) facts.push(["API 令牌", "末四位 " + C.escapeHtml(item.api_token_tail)]);
+      return card("worker", item, facts);
+    }
+    if (uiKind === "server") {
+      return card("server", item, [
+        ["备注", C.escapeHtml(item.note || "无")],
+        ["主机名", C.escapeHtml(item.hostname || "尚未探活")],
+        ["系统", C.escapeHtml(item.os || "尚未探活")],
+        ["主机 IP", C.escapeHtml(item.ip || "未填写")],
+      ]);
+    }
+    if (item.connection_id) {
+      return card(uiKind, item, [
+        ["系统", C.escapeHtml(item.os || "未同步")],
+        ["规格", C.escapeHtml(item.spec || "未同步")],
+        ["主机 IP", C.escapeHtml(item.ip || "未同步")],
+        ["服务商", C.escapeHtml(item.vendor || "")],
+        ["远端名称", C.escapeHtml(item.remote_name || "")],
+        ["最近同步", C.escapeHtml(item.last_sync_at ? C.formatMinute(item.last_sync_at) || "—" : "尚未同步")],
+      ]);
+    }
+    var facts = [
+      ["规格", C.escapeHtml(item.spec)],
+      ["绑定", C.escapeHtml(item.binding || "未绑定")],
+      ["最近心跳", C.escapeHtml(heartbeatText(item))],
+    ];
+    if (item.note) facts.push(["备注", C.escapeHtml(item.note)]);
+    if (item.vendor) facts.push(["厂商", C.escapeHtml(item.vendor)]);
+    if (item.access_note) facts.push(["接入备注", C.escapeHtml(item.access_note)]);
+    return card(uiKind, item, facts);
+  }
+
+  function groupActionsHtml(group) {
+    var gid = C.escapeHtml(group.id);
+    return (
+      "<button type=\"button\" class=\"secondary\" data-mgroup=\"rename\" data-id=\"" + gid + "\">改名</button>" +
+      "<button type=\"button\" class=\"danger\" data-mgroup=\"delete\" data-id=\"" + gid + "\">删除</button>" +
+      "<span class=\"confirm-slot\" data-confirm-group=\"" + gid + "\"></span>"
+    );
+  }
+
   function listSection(uiKind, title, unit) {
-    var items = byKind(uiKind);
     if (!state.loaded) return C.section(title, "", C.emptyState("正在加载", "正在读取云主机数据"));
     if (state.loadError) return C.section(title, "", '<p class="callout danger" role="alert">' + C.escapeHtml(state.loadError) + "</p>");
-    var cards;
-    if (uiKind === "worker") {
-      cards = items.map(function (item) {
-        var facts = [["版本", C.escapeHtml(item.version || "未记录")], ["更新时间", C.escapeHtml(C.formatMinute(item.updated_at) || "—")]];
-        if (item.cf_account_id) facts.push(["Cloudflare 账号", C.escapeHtml(item.cf_account_id)]);
-        if (item.api_token_tail) facts.push(["API 令牌", "末四位 " + C.escapeHtml(item.api_token_tail)]);
-        return card("worker", item, facts);
-      });
-    } else if (uiKind === "server") {
-      cards = items.map(function (item) {
-        return card("server", item, [
-          ["备注", C.escapeHtml(item.note || "无")],
-          ["主机名", C.escapeHtml(item.hostname || "尚未探活")],
-          ["系统", C.escapeHtml(item.os || "尚未探活")],
-          ["主机 IP", C.escapeHtml(item.ip || "未填写")],
-        ]);
-      });
-    } else {
-      cards = items.map(function (item) {
-        if (item.connection_id) {
-          return card(uiKind, item, [
-            ["系统", C.escapeHtml(item.os || "未同步")],
-            ["规格", C.escapeHtml(item.spec || "未同步")],
-            ["主机 IP", C.escapeHtml(item.ip || "未同步")],
-            ["服务商", C.escapeHtml(item.vendor || "")],
-            ["远端名称", C.escapeHtml(item.remote_name || "")],
-            ["最近同步", C.escapeHtml(item.last_sync_at ? C.formatMinute(item.last_sync_at) || "—" : "尚未同步")],
-          ]);
-        }
-        var facts = [
-          ["规格", C.escapeHtml(item.spec)],
-          ["绑定", C.escapeHtml(item.binding || "未绑定")],
-          ["最近心跳", C.escapeHtml(heartbeatText(item))],
-        ];
-        if (item.note) facts.push(["备注", C.escapeHtml(item.note)]);
-        if (item.vendor) facts.push(["厂商", C.escapeHtml(item.vendor)]);
-        if (item.access_note) facts.push(["接入备注", C.escapeHtml(item.access_note)]);
-        return card(uiKind, item, facts);
-      });
-    }
-    return C.section(title, String(items.length) + " " + unit, C.cardList(cards.join("")));
+    return C.groupedSections({
+      groups: state.groups,
+      items: byKind(uiKind),
+      groupOf: function (item) { return item.group_id || null; },
+      renderItem: function (item) { return cardFor(uiKind, item); },
+      groupActions: groupActionsHtml,
+      ungroupedTitle: state.groups.length ? "未分组" : title,
+      cardGrid: true,
+      emptyTitle: "暂无内容",
+      emptyText: "点上方按钮添加",
+      emptyGroupText: "添加或编辑条目时选择这个分组即可归入",
+    });
   }
 
   function render() {
@@ -204,6 +224,7 @@
         : activeTab === "hosts"
           ? '<button type="button" class="add-button" data-add="host">添加云主机</button>'
           : '<button type="button" class="add-button" data-add="worker">添加 Worker</button>') +
+      '<button type="button" class="secondary add-group-button" data-add-group>添加分组</button>' +
       "</div></div>";
     C.mount(
       C.layout(
@@ -219,10 +240,12 @@
   function load() {
     var machinesReq = api("GET", "/api/machines");
     var connsReq = api("GET", "/api/machines/providers").catch(function () { return { data: {} }; });
-    return Promise.all([machinesReq, connsReq])
+    var groupsReq = api("GET", "/api/groups?scope=machines").catch(function () { return { data: {} }; });
+    return Promise.all([machinesReq, connsReq, groupsReq])
       .then(function (results) {
         var res = results[0];
         var connRes = results[1];
+        var groupsRes = results[2];
         state.loaded = true;
         if (res.data && res.data.ok) {
           state.items = res.data.machines || [];
@@ -231,6 +254,7 @@
           state.loadError = (res.data && res.data.error) || "云主机数据读取失败";
         }
         if (connRes.data && connRes.data.ok) state.connections = connRes.data.connections || [];
+        if (groupsRes.data && groupsRes.data.ok) state.groups = groupsRes.data.groups || [];
         render();
         scheduleProbeRefresh();
       })
@@ -270,14 +294,16 @@
         "<label>规格<input name=\"spec\" maxlength=\"60\" autocomplete=\"off\" placeholder=\"例如 2 核 / 4 GB / 40 GB\" value=\"" + C.escapeHtml(v.spec || "") + "\" /></label>" +
         "<label>厂商<input name=\"vendor\" maxlength=\"60\" autocomplete=\"off\" placeholder=\"例如 Vultr\" value=\"" + C.escapeHtml(v.vendor || "") + "\" /></label>" +
         "<label>接入方式备注<textarea name=\"access_note\" rows=\"2\" maxlength=\"200\" placeholder=\"例如 厂商面板开机，密钥在保险库\">" + C.escapeHtml(v.access_note || "") + "</textarea></label>" +
-        "<label>绑定<input name=\"binding\" maxlength=\"60\" autocomplete=\"off\" placeholder=\"例如 值守（留空为未绑定）\" value=\"" + C.escapeHtml(item ? v.binding || "" : "") + "\" /></label>"
+        "<label>绑定<input name=\"binding\" maxlength=\"60\" autocomplete=\"off\" placeholder=\"例如 值守（留空为未绑定）\" value=\"" + C.escapeHtml(item ? v.binding || "" : "") + "\" /></label>" +
+        "<label>分组" + C.groupSelect("group_id", state.groups, v.group_id || "") + "</label>"
       );
     }
     return (
       nameField +
       "<label>说明<input name=\"lede\" maxlength=\"60\" autocomplete=\"off\" placeholder=\"例如 本控制面\" value=\"" + C.escapeHtml(v.description || "") + "\" /></label>" +
       "<label>Cloudflare 账号 ID<input name=\"cf_account_id\" maxlength=\"64\" autocomplete=\"off\" value=\"" + C.escapeHtml(v.cf_account_id || "") + "\" /></label>" +
-      "<label>API 令牌<input name=\"api_token\" type=\"password\" maxlength=\"16384\" autocomplete=\"off\" placeholder=\"" + (item ? "留空表示不修改" : "有 Workers 读取权限的令牌") + "\" /></label>"
+      "<label>API 令牌<input name=\"api_token\" type=\"password\" maxlength=\"16384\" autocomplete=\"off\" placeholder=\"" + (item ? "留空表示不修改" : "有 Workers 读取权限的令牌") + "\" /></label>" +
+      "<label>分组" + C.groupSelect("group_id", state.groups, v.group_id || "") + "</label>"
     );
   }
 
@@ -316,12 +342,14 @@
             vendor: val(ctrl, "vendor"),
             access_note: val(ctrl, "access_note"),
             binding: val(ctrl, "binding"),
+            group_id: val(ctrl, "group_id") || null,
           };
         } else {
           payload = {
             name: name,
             description: val(ctrl, "lede"),
             cf_account_id: val(ctrl, "cf_account_id"),
+            group_id: val(ctrl, "group_id") || null,
           };
           var token = val(ctrl, "api_token");
           if (token) payload.api_token = token;
@@ -424,6 +452,7 @@
       "<details><summary>高级</summary>" +
       "<label>SSH 端口<input name=\"ssh_port\" type=\"number\" min=\"1\" max=\"65535\" value=\"" + (v.ssh_port != null ? v.ssh_port : 22) + "\" /></label>" +
       "<label>SSH 地址<input name=\"ssh_host\" maxlength=\"120\" autocomplete=\"off\" placeholder=\"留空时用 IP\" value=\"" + C.escapeHtml(v.ssh_host || "") + "\" /></label>" +
+      "<label>分组" + C.groupSelect("group_id", state.groups, v.group_id || "") + "</label>" +
       "</details>";
     return html;
   }
@@ -446,6 +475,7 @@
           if (!secret) { c.setError(authType === "key" ? "请粘贴私钥" : "请填写密码"); return; }
         }
         var payload = { auth_type: authType, note: val(c, "note"), ssh_port: Number(val(c, "ssh_port")) || 22 };
+        payload.group_id = val(c, "group_id") || null;
         if (ip) payload.ip = ip;
         payload.ssh_host = val(c, "ssh_host") || ip;
         if (sshUser) payload.ssh_user = sshUser;
@@ -481,6 +511,70 @@
       if (t && t.name === "auth_type" && slot) {
         slot.innerHTML = secretFieldHtml(t.value === "key" ? "key" : "password", editing);
       }
+    });
+  }
+
+  // ---- 分组（全板块共用一个池，scope=machines） ----
+
+  function openGroupDialog(group) {
+    var editing = !!group;
+    C.openFormDialog({
+      title: editing ? "分组改名" : "添加分组",
+      bodyHtml: "<label>分组名<input name=\"name\" maxlength=\"64\" autocomplete=\"off\" value=\"" + (editing ? C.escapeHtml(group.name) : "") + "\" /></label>",
+      submitLabel: editing ? "保存" : "添加分组",
+      onSubmit: function (ctrl) {
+        var name = val(ctrl, "name");
+        if (!name) { ctrl.setError("请填写分组名"); return; }
+        ctrl.setBusy(true);
+        var request = editing
+          ? api("PATCH", "/api/groups/" + encodeURIComponent(group.id), { name: name })
+          : api("POST", "/api/groups", { scope: "machines", name: name });
+        request
+          .then(function (res) {
+            ctrl.setBusy(false);
+            if (!res.data || !res.data.ok) { ctrl.setError((res.data && res.data.error) || "保存失败，请重试"); return; }
+            ctrl.close();
+            load();
+          })
+          .catch(function () { ctrl.setBusy(false); ctrl.setError("网络异常，请重试"); });
+      },
+    });
+  }
+
+  function deleteGroupFlow(group, btn) {
+    var section = btn.closest("section");
+    var slot = section ? section.querySelector('[data-confirm-group="' + group.id + '"]') : null;
+    C.askConfirm({
+      anchor: slot || btn,
+      title: "删除分组",
+      text: "确认删除分组「" + group.name + "」吗？组内条目会回到未分组，不会被删除",
+      confirmLabel: "删除",
+      danger: true,
+    }).then(function (yes) {
+      if (!yes) return;
+      api("DELETE", "/api/groups/" + encodeURIComponent(group.id)).then(function (res) {
+        if (res.data && res.data.ok) load();
+      });
+    });
+  }
+
+  function openGroupMoveDialog(item) {
+    C.openFormDialog({
+      title: "设置分组",
+      bodyHtml: "<label>分组" + C.groupSelect("group_id", state.groups, item.group_id || "") + "</label>",
+      submitLabel: "保存",
+      onSubmit: function (ctrl) {
+        ctrl.setBusy(true);
+        api("PATCH", "/api/machines/" + encodeURIComponent(item.id), { group_id: val(ctrl, "group_id") || null })
+          .then(function (res) {
+            ctrl.setBusy(false);
+            if (!res.data || !res.data.ok) { ctrl.setError((res.data && res.data.error) || "保存失败，请重试"); return; }
+            ctrl.close();
+            C.closeCurrentOverlay();
+            load();
+          })
+          .catch(function () { ctrl.setBusy(false); ctrl.setError("网络异常，请重试"); });
+      },
     });
   }
 
@@ -537,13 +631,14 @@
         "<label>本地名称<input name=\"name\" maxlength=\"60\" autocomplete=\"off\" value=\"" + C.escapeHtml(item.name) + "\" /></label>" +
         "<label>备注<input name=\"note\" maxlength=\"200\" autocomplete=\"off\" value=\"" + C.escapeHtml(item.note || "") + "\" /></label>" +
         "<label>绑定<input name=\"binding\" maxlength=\"60\" autocomplete=\"off\" value=\"" + C.escapeHtml(item.binding || "") + "\" /></label>" +
+        "<label>分组" + C.groupSelect("group_id", state.groups, item.group_id || "") + "</label>" +
         "<p class=\"subtle\">远端名称：" + C.escapeHtml(item.remote_name || "") + "（由服务商同步，不在这里改）</p>",
       submitLabel: "保存",
       onSubmit: function (ctrl) {
         var name = val(ctrl, "name");
         if (!name) { ctrl.setError("请填写本地名称"); return; }
         ctrl.setBusy(true);
-        api("PATCH", "/api/machines/" + encodeURIComponent(item.id), { name: name, note: val(ctrl, "note"), binding: val(ctrl, "binding") })
+        api("PATCH", "/api/machines/" + encodeURIComponent(item.id), { name: name, note: val(ctrl, "note"), binding: val(ctrl, "binding"), group_id: val(ctrl, "group_id") || null })
           .then(function (res) {
             ctrl.setBusy(false);
             if (!res.data || !res.data.ok) { ctrl.setError((res.data && res.data.error) || "保存失败，请重试"); return; }
@@ -588,6 +683,7 @@
         "</fieldset>" +
         "<div data-wiz-config>" + wizardConfigFields("huawei") + "</div>" +
         "<label>连接名称（可留空）<input name=\"conn_name\" maxlength=\"60\" autocomplete=\"off\" placeholder=\"留空按服务商与区域自动命名\" /></label>" +
+        "<label>导入到分组" + C.groupSelect("group_id", state.groups, "") + "</label>" +
         "<div class=\"manage-actions\"><button type=\"button\" class=\"secondary\" data-wiz-test>测试连接</button><span class=\"subtle\" data-wiz-status>尚未测试</span></div>" +
         "<div data-wiz-devices></div>",
       submitLabel: "保存",
@@ -602,6 +698,7 @@
           name: val(c, "conn_name"),
           config: wiz.config || {},
           device_ids: ids,
+          group_id: val(c, "group_id") || null,
         })
           .then(function (res) {
             c.setBusy(false);
@@ -754,6 +851,19 @@
       render();
       return;
     }
+    var addGroupBtn = target.closest("[data-add-group]");
+    if (addGroupBtn) { openGroupDialog(null); return; }
+    var mgroup = target.closest("[data-mgroup]");
+    if (mgroup) {
+      var mgroupId = mgroup.getAttribute("data-id");
+      var mgroupFound = null;
+      state.groups.forEach(function (entry) { if (entry.id === mgroupId) mgroupFound = entry; });
+      if (mgroupFound) {
+        if (mgroup.getAttribute("data-mgroup") === "rename") openGroupDialog(mgroupFound);
+        else deleteGroupFlow(mgroupFound, mgroup);
+      }
+      return;
+    }
     var add = target.closest("[data-add]");
     if (add) {
       var addKind = add.getAttribute("data-add");
@@ -790,6 +900,7 @@
         if (act === "probe") probeServer(found, mact);
         else if (act === "reveal") openRevealDialog(found);
         else if (act === "workers") openWorkersDialog(found);
+        else if (act === "group") openGroupMoveDialog(found);
         else if (act === "edit") {
           if (mkind === "server") openServerDialog(found);
           else if (mkind === "host" && found.connection_id) openCloudAliasDialog(found);
