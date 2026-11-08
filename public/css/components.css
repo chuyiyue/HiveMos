@@ -1,6 +1,6 @@
 label { display: grid; gap: 6px; font-size: var(--fs-sm); color: var(--text-2); }
 
-input, textarea {
+input, textarea, select {
   width: 100%;
   min-height: 38px;
   padding: 8px 12px;
@@ -13,7 +13,7 @@ input, textarea {
 
 textarea { min-height: 88px; resize: vertical; }
 
-input:focus, textarea:focus {
+input:focus, textarea:focus, select:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--focus-ring);
   outline: none;
@@ -313,7 +313,7 @@ dialog.action-menu::backdrop { background: var(--overlay); }
   min-height: 28px;
   height: 28px;
   padding: 0;
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   background: var(--bg-sunken);
   border: 1px solid var(--border-strong);
 }
@@ -343,7 +343,7 @@ article.record {
   padding: 18px 20px;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 16px;
+  border-radius: var(--r-xl);
   box-shadow: none;
   scroll-margin-top: calc(var(--topbar-height, 56px) + 12px);
 }
@@ -428,7 +428,7 @@ article.record {
    let the hover wash bleed a little past the text without moving layout. */
 .record-info[data-manage] {
   cursor: pointer;
-  border-radius: 12px;
+  border-radius: var(--r-lg);
   margin: -10px -12px -6px;
   padding: 10px 12px 6px;
   -webkit-tap-highlight-color: transparent;
@@ -505,7 +505,7 @@ dialog.side-panel .modal-card {
 }
 
 @media (min-width: 640px) {
-  dialog.side-panel .modal-card { border-radius: 16px 0 0 16px; }
+  dialog.side-panel .modal-card { border-radius: var(--r-xl) 0 0 var(--r-xl); }
 }
 
 dialog.side-panel[open] { animation: side-panel-in 0.22s ease; }

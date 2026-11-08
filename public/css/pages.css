@@ -135,13 +135,13 @@ button.copy-btn:hover { background: var(--surface-hover); }
 .cal-dow {
   text-align: center;
   color: var(--text-3);
-  font-size: 12px;
+  font-size: var(--fs-xs);
   padding: 4px 0;
 }
 .cal-cell {
   min-height: 72px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--r-sm);
   padding: 6px;
   background: var(--surface);
 }
@@ -153,7 +153,7 @@ button.copy-btn:hover { background: var(--surface-hover); }
   border-color: var(--accent);
 }
 .cal-day {
-  font-size: 13px;
+  font-size: var(--fs-sm);
   color: var(--text-2);
 }
 .cal-today .cal-day {
@@ -163,10 +163,10 @@ button.copy-btn:hover { background: var(--surface-hover); }
 .cal-event {
   display: block;
   margin-top: 4px;
-  font-size: 12px;
+  font-size: var(--fs-xs);
   color: var(--text);
   background: var(--accent-soft);
-  border-radius: 4px;
+  border-radius: var(--r-xs);
   padding: 2px 4px;
   white-space: nowrap;
   overflow: hidden;
@@ -246,7 +246,7 @@ button.copy-btn:hover { background: var(--surface-hover); }
 .stack-form { margin-top: 4px; }
 
 .auth-subtitle { color: var(--text-2); margin: 0 0 4px; }
-.auth-note { color: var(--text-3); font-size: 13px; text-align: center; margin: 16px 0 0; }
+.auth-note { color: var(--text-3); font-size: var(--fs-sm); text-align: center; margin: 16px 0 0; }
 .auth-card .callout { margin: 14px 0 0; }
 
 .page-tabs { display: flex; width: fit-content; max-width: 100%; padding: 3px; gap: 3px; margin-bottom: 16px; background: var(--bg-sunken); border-radius: var(--r-md); }
