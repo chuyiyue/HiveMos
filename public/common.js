@@ -345,7 +345,8 @@
     disarmDelete();
     if (currentOverlay) currentOverlay.close();
     var dialog = document.createElement("dialog");
-    dialog.className = panel ? "modal side-panel" : "modal manage-dialog" + (options.wide ? " wide" : "");
+    var sizeCls = options.size === "lg" || options.wide ? " size-lg" : options.size === "sm" ? " size-sm" : " size-md";
+    dialog.className = panel ? "modal side-panel" : "modal manage-dialog" + sizeCls;
     dialog.setAttribute("data-manage-dialog", "");
     dialog.setAttribute("aria-label", options.title || "管理");
     var card = document.createElement("div");
@@ -837,6 +838,7 @@
     }
 
     var ctrl = (options.panel ? openSidePanel : openManageDialog)({
+      size: "lg",
       title: seed ? seed.name : "Agent",
       bodyHtml: seed
         ? agentManageBody(seed, groupNameOf(seed), { partial: partial, tab: currentTab })
@@ -1301,7 +1303,7 @@
       var linkTimer = null;
 
       var dialog = document.createElement("dialog");
-      dialog.className = "modal wide";
+      dialog.className = "modal size-sm";
       dialog.setAttribute("aria-label", "更换头像");
       var card = document.createElement("div");
       card.className = "modal-card";
@@ -2146,7 +2148,9 @@
   // outside #page, so a page render() (innerHTML swap) never destroys it;
   // it removes itself from the DOM when closed. Pages must use this instead
   // of inline page forms or window.prompt.
-  // options: { title, bodyHtml, submitLabel, cancelLabel, wide, onSubmit, onClose }
+  // options: { title, bodyHtml, submitLabel, cancelLabel, size, wide, onSubmit, onClose }
+  // size picks a width tier (see components.css); forms default to sm
+  // and wide stays as an alias of lg.
   // onSubmit(ctrl) decides what happens next: ctrl.setError() keeps the
   // dialog open with a message, ctrl.showResult() swaps in a result view,
   // ctrl.close() dismisses it.
@@ -2154,7 +2158,8 @@
     options = options || {};
     if (currentFormDialog) currentFormDialog.close();
     var dialog = document.createElement("dialog");
-    dialog.className = "modal" + (options.wide ? " wide" : "");
+    dialog.className =
+      "modal" + (options.size === "lg" || options.wide ? " size-lg" : options.size === "md" ? " size-md" : " size-sm");
     dialog.setAttribute("aria-label", options.title || "表单");
     var card = document.createElement("div");
     card.className = "modal-card";

@@ -175,6 +175,7 @@
   function openEntryManage(item) {
     wireManage(
       C.openManageDialog({
+        size: "sm",
         title: item.name,
         bodyHtml:
           C.manageInfoHead({ icon: "lock", title: item.name, sub: "账号密码" }) + entryManageBody(item),
@@ -186,6 +187,7 @@
     var id = C.escapeHtml(item.id);
     wireManage(
       C.openManageDialog({
+        size: "sm",
         title: item.name,
         bodyHtml:
           C.manageInfoHead({ icon: "gateway", title: item.name, sub: "模型网关" }) +
@@ -209,6 +211,7 @@
     var id = C.escapeHtml(item.id);
     wireManage(
       C.openManageDialog({
+        size: "sm",
         title: item.address,
         bodyHtml:
           C.manageInfoHead({ icon: "lock", title: item.address, sub: "邮箱" }) +

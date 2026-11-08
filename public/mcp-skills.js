@@ -227,6 +227,7 @@
         "</ul>"
       : C.emptyState("还没有工具快照", "http 与 sse 可以用卡片上的刷新快照探活，stdio 请用手填快照");
     var ctrl = C.openManageDialog({
+      size: "lg",
       title: server.title,
       bodyHtml:
         C.manageInfoHead({
@@ -691,7 +692,7 @@
       title: creating ? "登记条目" : "编辑条目",
       bodyHtml: formFieldsHtml(),
       submitLabel: creating ? "登记条目" : "保存修改",
-      wide: true,
+      size: "lg",
       onSubmit: function (c) {
         saveServer(c);
       },
@@ -733,7 +734,7 @@
         C.escapeHtml(state.snapshotText) +
         "</textarea>",
       submitLabel: "保存手填快照",
-      wide: true,
+      size: "md",
       onSubmit: function (c) {
         saveSnapshot(c);
       },
@@ -1186,7 +1187,7 @@
       title: (editing ? "编辑" : "添加") + (scope === "skills" ? "技能" : " API"),
       bodyHtml: bodyHtml,
       submitLabel: editing ? "保存" : scope === "skills" ? "添加技能" : "添加 API",
-      wide: scope === "skills",
+      size: scope === "skills" ? "md" : "sm",
       onSubmit: function (ctrl) {
         var read = function (name) {
           var el = ctrl.form.querySelector('[data-field="' + name + '"]');
