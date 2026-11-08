@@ -18,6 +18,7 @@
 import { prepare } from "./registry";
 import type { D1Database } from "./env";
 import { decryptString, resolveContentKey, sealString, type ContentKey } from "./crypto";
+import { sshProbe, SshProbeError } from "./ssh-probe";
 
 export class MachineError extends Error {
   status: number;
@@ -47,6 +48,7 @@ export interface MachineRow {
   ssh_host: string;
   ssh_port: number;
   ssh_user: string;
+  auth_type: string;
   ssh_secret_enc: string;
   ssh_tail: string;
   vendor: string;
@@ -54,6 +56,12 @@ export interface MachineRow {
   cf_account_id: string;
   api_token_enc: string;
   api_token_tail: string;
+  kernel: string;
+  arch: string;
+  probe_status: string;
+  probe_at: number | null;
+  probe_error: string;
+  host_fingerprint: string;
   ai_summary: string | null;
   ai_tags: string | null;
   created_at: number;
@@ -77,7 +85,14 @@ export interface PublicMachine {
   ip: string;
   ssh_host: string;
   ssh_port: number;
+  auth_type: string;
   ssh_tail: string;
+  kernel: string;
+  arch: string;
+  probe_status: string;
+  probe_at: number | null;
+  probe_error: string;
+  host_fingerprint: string;
   vendor: string;
   access_note: string;
   cf_account_id: string;
@@ -87,7 +102,7 @@ export interface PublicMachine {
 }
 
 const COLUMNS =
-  "id, kind, name, region, spec, description, version, status, binding, last_heartbeat_at, note, hostname, os, ip, ssh_host, ssh_port, ssh_user, ssh_secret_enc, ssh_tail, vendor, access_note, cf_account_id, api_token_enc, api_token_tail, ai_summary, ai_tags, created_at, updated_at";
+  "id, kind, name, region, spec, description, version, status, binding, last_heartbeat_at, note, hostname, os, ip, ssh_host, ssh_port, ssh_user, auth_type, ssh_secret_enc, ssh_tail, kernel, arch, probe_status, probe_at, probe_error, host_fingerprint, vendor, access_note, cf_account_id, api_token_enc, api_token_tail, ai_summary, ai_tags, created_at, updated_at";
 
 const ID_PREFIX: Record<string, string> = { server: "sv_", cloud: "pc_", worker: "wk_" };
 
@@ -115,7 +130,14 @@ export function machinePublic(row: MachineRow): PublicMachine {
     ip: row.ip,
     ssh_host: row.ssh_host,
     ssh_port: row.ssh_port,
+    auth_type: row.auth_type,
     ssh_tail: row.ssh_tail,
+    kernel: row.kernel,
+    arch: row.arch,
+    probe_status: row.probe_status,
+    probe_at: row.probe_at,
+    probe_error: row.probe_error,
+    host_fingerprint: row.host_fingerprint,
     vendor: row.vendor,
     access_note: row.access_note,
     cf_account_id: row.cf_account_id,
@@ -261,7 +283,12 @@ export async function createMachine(
   key: ContentKey,
 ): Promise<MachineRow> {
   const kind = readKind(input.kind);
-  const name = readName(input.name);
+  // Servers use the minimal form (IP / user / password-or-key / note): the
+  // name is derived below as note -> ip when the caller does not send one.
+  // Other kinds keep the required name.
+  let name = "";
+  if (typeof input.name === "string" && input.name.trim()) name = readName(input.name);
+  else if (kind !== "server") name = readName(input.name);
   const region = readOptionalText(input, "region", 30, "地域") ?? "";
   const spec = readOptionalText(input, "spec", 60, "配置") ?? "";
   const description = readOptionalText(input, "description", 120, "说明") ?? "";
@@ -276,6 +303,7 @@ export async function createMachine(
   let sshUser = "";
   let sshSecretEnc = "";
   let sshTail = "";
+  let authType = "password";
   let vendor = "";
   let accessNote = "";
   let cfAccountId = "";
@@ -288,6 +316,9 @@ export async function createMachine(
     sshHost = readOptionalText(input, "ssh_host", 120, "SSH 地址") ?? "";
     sshPort = readOptionalPort(input) ?? 22;
     sshUser = readOptionalText(input, "ssh_user", 60, "SSH 用户名") ?? "";
+    authType = readAuthType(input);
+    if (!ip && !sshHost) throw new MachineError(400, "请填写 IP");
+    if (!name) name = note || ip || sshHost;
     const secret = readSecretInput(input, "ssh_secret", "SSH 密码或私钥");
     if (secret) {
       sshSecretEnc = await sealMachineSecret(key, secret);
@@ -308,8 +339,8 @@ export async function createMachine(
   const status = kind === "worker" ? "active" : "running";
   await prepare(
     db,
-    "INSERT INTO machines (id, kind, name, region, spec, description, version, status, binding, last_heartbeat_at, note, hostname, os, ip, ssh_host, ssh_port, ssh_user, ssh_secret_enc, ssh_tail, vendor, access_note, cf_account_id, api_token_enc, api_token_tail, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, '', ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    [id, kind, name, region, spec, description, status, binding, note, hostname, os, ip, sshHost, sshPort, sshUser, sshSecretEnc, sshTail, vendor, accessNote, cfAccountId, apiTokenEnc, apiTokenTail, now, now],
+    "INSERT INTO machines (id, kind, name, region, spec, description, version, status, binding, last_heartbeat_at, note, hostname, os, ip, ssh_host, ssh_port, ssh_user, auth_type, ssh_secret_enc, ssh_tail, vendor, access_note, cf_account_id, api_token_enc, api_token_tail, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, '', ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    [id, kind, name, region, spec, description, status, binding, note, hostname, os, ip, sshHost, sshPort, sshUser, authType, sshSecretEnc, sshTail, vendor, accessNote, cfAccountId, apiTokenEnc, apiTokenTail, now, now],
   ).run();
   await writeAudit(db, { machineId: id, actor, source, action: "create", detail: { kind, name } }, now);
   const row = await getMachine(db, id);
@@ -387,6 +418,11 @@ export async function updateMachine(
       next.ssh_port = sshPort;
       changed.push("ssh_port");
     }
+    const authType = readOptionalAuthType(input);
+    if (authType !== undefined) {
+      next.auth_type = authType;
+      changed.push("auth_type");
+    }
     // ssh_user is credential-adjacent like the secret: on update an absent
     // or empty value means "keep the stored one" (it can be replaced, not
     // cleared), because the panel never receives it back to prefill.
@@ -429,7 +465,7 @@ export async function updateMachine(
   // are runtime fields owned by machines_report.
   await prepare(
     db,
-    "UPDATE machines SET name = ?, region = ?, spec = ?, description = ?, binding = ?, note = ?, hostname = ?, os = ?, ip = ?, ssh_host = ?, ssh_port = ?, ssh_user = ?, ssh_secret_enc = ?, ssh_tail = ?, vendor = ?, access_note = ?, cf_account_id = ?, api_token_enc = ?, api_token_tail = ?, updated_at = ? WHERE id = ?",
+    "UPDATE machines SET name = ?, region = ?, spec = ?, description = ?, binding = ?, note = ?, hostname = ?, os = ?, ip = ?, ssh_host = ?, ssh_port = ?, ssh_user = ?, auth_type = ?, ssh_secret_enc = ?, ssh_tail = ?, vendor = ?, access_note = ?, cf_account_id = ?, api_token_enc = ?, api_token_tail = ?, updated_at = ? WHERE id = ?",
     [
       next.name,
       next.region,
@@ -443,6 +479,7 @@ export async function updateMachine(
       next.ssh_host,
       next.ssh_port,
       next.ssh_user,
+      next.auth_type,
       next.ssh_secret_enc,
       next.ssh_tail,
       next.vendor,
@@ -618,4 +655,135 @@ export async function reportMachine(
   const fresh = await getMachine(db, row.id);
   if (!fresh) throw new MachineError(500, "上报后读取失败");
   return fresh;
+}
+
+
+// ---------------------------------------------------------------------------
+// Server probing (Roye 2026-11-08). The panel stores the SSH config; probing
+// decrypts it server-side, opens a real SSH connection with the minimal
+// client in ssh-probe.ts, and writes back hostname / os / kernel / arch plus
+// the probe outcome. The secret is never logged and never leaves in a
+// response — only the filled facts and the outcome do.
+
+function readAuthType(input: Record<string, unknown>): string {
+  const value = input["auth_type"];
+  if (value == null) return "password";
+  if (value !== "password" && value !== "key") throw new MachineError(400, "认证方式不正确");
+  return value;
+}
+
+function readOptionalAuthType(input: Record<string, unknown>): string | undefined {
+  if (!Object.prototype.hasOwnProperty.call(input, "auth_type")) return undefined;
+  return readAuthType(input);
+}
+
+export interface ProbeOutcome {
+  ok: boolean;
+  error?: string;
+  code?: string;
+}
+
+const PROBE_ERROR_MESSAGES: Record<string, string> = {
+  unreachable: "无法连接到服务器，请检查 IP、端口与网络",
+  timeout: "连接超时，服务器没有及时响应",
+  auth: "认证失败，请检查用户名与密码或密钥",
+  hostkey_mismatch: "主机密钥与上次记录不一致，可能存在安全风险，已停止连接",
+  negotiation: "SSH 算法协商失败，服务器的 SSH 配置与探活客户端不兼容",
+  key_encrypted: "私钥设置了口令，暂不支持",
+  key_unsupported: "私钥格式不受支持",
+  protocol: "SSH 协议交互失败",
+};
+
+export async function probeMachineById(
+  db: D1Database,
+  id: string,
+  key: ContentKey,
+  actor: string,
+  now: number,
+): Promise<{ machine: MachineRow; probe: ProbeOutcome }> {
+  const row = await getMachine(db, id);
+  if (!row) throw new MachineError(404, "机器不存在");
+  if (row.kind !== "server") throw new MachineError(400, "只有服务器可以测试连接");
+  const host = row.ssh_host || row.ip;
+
+  async function recordFailure(code: string, message: string): Promise<{ machine: MachineRow; probe: ProbeOutcome }> {
+    await prepare(
+      db,
+      "UPDATE machines SET status = 'offline', probe_status = 'error', probe_at = ?, probe_error = ?, updated_at = ? WHERE id = ?",
+      [now, message, now, id],
+    ).run();
+    await writeAudit(db, { machineId: id, actor, source: "panel", action: "probe", detail: { ok: false, code } }, now);
+    const fresh = await getMachine(db, id);
+    if (!fresh) throw new MachineError(500, "探活后读取失败");
+    return { machine: fresh, probe: { ok: false, error: message, code } };
+  }
+
+  if (!host) return recordFailure("no_host", "还没有填写服务器 IP");
+  if (!row.ssh_user || !row.ssh_secret_enc) return recordFailure("no_credential", "还没有保存 SSH 用户名或凭据");
+  const secret = await openMachineSecret(key, row.ssh_secret_enc);
+  const authType = secret.includes("PRIVATE KEY-----") ? "key" : row.auth_type === "key" ? "key" : "password";
+  try {
+    const result = await sshProbe({
+      host,
+      port: row.ssh_port,
+      username: row.ssh_user,
+      authType,
+      secret,
+      knownFingerprint: row.host_fingerprint || undefined,
+      timeoutMs: 15000,
+    });
+    let name = row.name;
+    if ((name === row.ip || name === row.hostname) && (row.note || result.hostname)) {
+      name = row.note || result.hostname;
+    }
+    await prepare(
+      db,
+      "UPDATE machines SET name = ?, hostname = ?, os = ?, kernel = ?, arch = ?, host_fingerprint = ?, status = 'running', probe_status = 'ok', probe_at = ?, probe_error = '', last_heartbeat_at = ?, updated_at = ? WHERE id = ?",
+      [
+        name,
+        result.hostname || row.hostname,
+        result.os || row.os,
+        result.kernel,
+        result.arch,
+        result.fingerprint,
+        now,
+        now,
+        now,
+        id,
+      ],
+    ).run();
+    await writeAudit(db, { machineId: id, actor, source: "panel", action: "probe", detail: { ok: true, host } }, now);
+    const fresh = await getMachine(db, id);
+    if (!fresh) throw new MachineError(500, "探活后读取失败");
+    return { machine: fresh, probe: { ok: true } };
+  } catch (error) {
+    if (error instanceof SshProbeError) {
+      const message = PROBE_ERROR_MESSAGES[error.code] ?? "探活失败，请稍后重试";
+      return recordFailure(error.code, message);
+    }
+    throw error;
+  }
+}
+
+// A server counts as stale when it has credentials but no probe result in
+// the last PROBE_STALE_MS. The panel list endpoint fires this in waitUntil
+// so opening the server list quietly refreshes old entries; at most a few
+// probes run per list call. Cron note: the account's cron quota is full and
+// HiveMos has no registered trigger, so there is deliberately no scheduled
+// probing yet — once a cron slot is approved, calling probeStaleServers
+// from the scheduled handler in src/index.ts turns this into timed probing.
+export const PROBE_STALE_MS = 10 * 60 * 1000;
+
+export async function probeStaleServers(db: D1Database, key: ContentKey, actor: string, now: number): Promise<void> {
+  const rows = await listMachines(db, "server");
+  const stale = rows
+    .filter((row) => row.ssh_user && row.ssh_secret_enc && (row.probe_at == null || now - row.probe_at > PROBE_STALE_MS))
+    .slice(0, 3);
+  for (const row of stale) {
+    try {
+      await probeMachineById(db, row.id, key, actor, Date.now());
+    } catch {
+      // A single bad entry (or a missing vault key) must not break listing.
+    }
+  }
 }
