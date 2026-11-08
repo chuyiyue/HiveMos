@@ -4,9 +4,11 @@
 export const SESSION_COOKIE = "hivemos_session";
 export const SESSION_TTL_SECONDS = 7 * 24 * 60 * 60;
 
-// 10_000 PBKDF2-SHA256 iterations stay inside the Workers Free 10ms CPU budget.
-// Raise this only on a paid plan with a higher cpu_ms limit.
-export const PBKDF2_ITERATIONS = 10_000;
+// 100_000 PBKDF2-SHA256 iterations, matching the admin-init design: the
+// hash format stores its own iteration count, so older hashes keep
+// verifying and are upgraded opportunistically at login. WebCrypto
+// PBKDF2 runs natively; a login verify measures well under a second.
+export const PBKDF2_ITERATIONS = 100_000;
 
 const HASH_PREFIX = "pbkdf2-sha256";
 
@@ -95,6 +97,10 @@ export async function hashPassword(password: string): Promise<string> {
   crypto.getRandomValues(salt);
   const hash = await pbkdf2(password, salt, PBKDF2_ITERATIONS);
   return `${HASH_PREFIX}$${PBKDF2_ITERATIONS}$${bytesToBase64Url(salt)}$${bytesToBase64Url(hash)}`;
+}
+
+export function storedHashIterations(stored: string): number {
+  return parseStoredHash(stored)?.iterations ?? 0;
 }
 
 export async function verifyPassword(password: string, stored: string): Promise<boolean> {

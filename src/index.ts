@@ -1,20 +1,18 @@
 import {
   hashPassword,
+  PBKDF2_ITERATIONS,
   requestIsSecure,
-  secretsEqual,
   SESSION_COOKIE,
   sessionCookieHeader,
   sha256Hex,
+  storedHashIterations,
   verifyPassword,
 } from "./auth";
 import {
   clearLoginFailures,
   deleteSession,
-  ensureAdmin,
   findTotpUser,
   getProfileUsername,
-  insertUser,
-  isUniqueViolation,
   listUserRecords,
   loginIsLimited,
   loginRateKey,
@@ -62,7 +60,7 @@ const PUBLIC_ASSETS = new Set([
   "/shell.js",
 ]);
 
-const UNCONFIGURED = "管理员账号尚未配置。请设置 Worker 机密 ADMIN_USERNAME 与 ADMIN_PASSWORD";
+const UNCONFIGURED = "管理员尚未同步，请先完成部署";
 
 export default {
   async fetch(request: Request, env: Env, ctx?: WaitCtx): Promise<Response> {
@@ -201,149 +199,50 @@ async function login(request: Request, env: Env): Promise<Response> {
   if (isCrossSite(request)) return json({ ok: false, error: "跨站请求被拒绝" }, 403);
   const body = await readJsonLimited(request, LOGIN_BODY_BYTES);
   if (!body.ok) return json({ ok: false, error: body.error }, body.status);
-  // login.html probes with {}. SMSinBox rejects a missing password first, so
-  // that probe never reaches the empty-table 503. HiveMos has to answer 503
-  // before the missing-password 400. The rest of this function is unchanged.
+  // Admin-init design: the administrator row is aligned from the repo
+  // secrets at deploy time by scripts/sync-admin.mjs. Login reads the
+  // database only — no environment bootstrap, no env-password recovery
+  // path, nothing here writes the row.
   const users = await listUserRecords(env.DB);
-  const adminPassword = env.ADMIN_PASSWORD ?? "";
-  const hasEnvPassword = adminPassword.length > 0;
-  if (users.length === 0 && !hasEnvPassword) return json({ ok: false, error: UNCONFIGURED }, 503);
-  // The login page sends username and password. Password is required.
-  // Username is checked only after a designated admin row exists.
+  if (users.length === 0) return json({ ok: false, error: UNCONFIGURED }, 503);
   const password = readLoginPassword(body.value);
   if (password === null) return json({ ok: false, error: "请填写密码" }, 400);
+  if (users.length > 1) {
+    return json({ ok: false, error: "存在多个管理员账号，无法确定管理员" }, 409);
+  }
+  const user = users[0]!;
 
   const now = Date.now();
-  // The account key is stable even before the user row is resolved, so failed
-  // passwords cannot reset the window by omitting or changing a username.
-  const userKey = await loginRateKey("user", "admin");
-  const ip = clientAddress(request);
-  const ipKey = ip ? await loginRateKey("ip", ip) : null;
-  if (await loginIsLimited(env.DB, userKey, ipKey, now)) return loginLimited(now);
-
-  if (users.length === 0) {
-    if (!hasEnvPassword) return json({ ok: false, error: UNCONFIGURED }, 503);
-    const envPasswordOk = await secretsEqual(password, adminPassword);
-    if (!envPasswordOk) {
-      await recordLoginFailure(env.DB, userKey, now);
-      if (ipKey) await recordLoginFailure(env.DB, ipKey, now);
-      return json({ ok: false, error: "密码错误" }, 401);
-    }
-    const created = await bootstrapAdmin(env, password);
-    if (!created) return json({ ok: false, error: "无法创建管理员，请重试" }, 500);
-    await finishLogin(env, created, { userKey, ipKey, now });
-    return issueSessionFor(request, env, created);
-  }
-
-  // Only one row is the administrator. ADMIN_USERNAME selects that row while
-  // more than one users row still exists.
-  const designated = pickDesignatedUser(users, env.ADMIN_USERNAME?.trim() ?? "");
-  if (!designated) {
-    return json(
-      {
-        ok: false,
-        error: "存在多个账号，无法确定管理员。请先只保留一个 users 行，或用 ADMIN_USERNAME 指向现有管理员。",
-      },
-      409,
-    );
-  }
-
   const submittedName = readSubmittedUsername(body.value);
-  if (submittedName !== null && !usernamesEqual(submittedName, designated.username)) {
-    await recordLoginFailure(env.DB, userKey, now);
-    if (ipKey) await recordLoginFailure(env.DB, ipKey, now);
+  const ip = clientAddress(request);
+  // Failures are limited per username+IP pair (8 per 15 minutes).
+  const pairKey = await loginRateKey("user", `${(submittedName ?? "").toLowerCase()}|${ip ?? ""}`);
+  if (await loginIsLimited(env.DB, pairKey, null, now)) return loginLimited(now);
+
+  // Timing-constant: the password verification always runs against the
+  // row hash first; username match and password correctness combine
+  // afterwards, and both failures answer the same 401.
+  const passwordOk = await verifyPassword(password, user.password_hash);
+  const nameOk = submittedName !== null && usernamesEqual(submittedName, user.username);
+  if (!passwordOk || !nameOk) {
+    await recordLoginFailure(env.DB, pairKey, now);
     return json({ ok: false, error: "密码错误" }, 401);
   }
+  if (user.disabled_at != null) return json({ ok: false, error: "账号已停用" }, 401);
+  if (user.role !== "admin") return json({ ok: false, error: "仅管理员可以登录" }, 401);
 
-  const rowPasswordOk = await verifyPassword(password, designated.password_hash);
-  const envPasswordOk = hasEnvPassword && (await secretsEqual(password, adminPassword));
-  if (!rowPasswordOk && !envPasswordOk) {
-    await recordLoginFailure(env.DB, userKey, now);
-    if (ipKey) await recordLoginFailure(env.DB, ipKey, now);
-    // A password that belongs to another row gets a clear refusal
-    // instead of looking like a typo. Other rows never become a login path.
-    const other = await findMatchingUser(users, password, designated.id);
-    if (!other) return json({ ok: false, error: "密码错误" }, 401);
-    return json(
-      { ok: false, error: other.disabled_at != null ? "账号已停用" : "仅管理员可以登录" },
-      401,
-    );
+  // Opportunistic upgrade: rehash at the current iteration count when
+  // the stored hash predates it. A failed write never blocks login.
+  if (storedHashIterations(user.password_hash) < PBKDF2_ITERATIONS) {
+    try {
+      await updatePasswordHash(env.DB, user.id, await hashPassword(password));
+    } catch {
+      // Retried on the next successful login.
+    }
   }
 
-  let user = designated;
-  if (envPasswordOk) {
-    // ADMIN_PASSWORD stays a recovery path: a successful env-password login
-    // writes that password back into the row so later UI changes win, and can
-    // revive the surviving row if it was disabled or demoted.
-    if (!rowPasswordOk) {
-      const hash = await hashPassword(password);
-      await updatePasswordHash(env.DB, user.id, hash);
-      user = { ...user, password_hash: hash };
-    }
-    if (user.role !== "admin" || user.disabled_at != null) {
-      await ensureAdmin(env.DB, user.id);
-      user = { ...user, role: "admin", disabled_at: null };
-    }
-  } else if (user.disabled_at != null) {
-    return json({ ok: false, error: "账号已停用" }, 401);
-  } else if (user.role !== "admin") {
-    return json({ ok: false, error: "仅管理员可以登录" }, 401);
-  }
-
-  await clearLoginFailures(env.DB, userKey, now);
-  if (ipKey) await clearLoginFailures(env.DB, ipKey, now);
-
-  await finishLogin(env, user, { userKey, ipKey, now });
+  await finishLogin(env, user, { userKey: pairKey, ipKey: null, now });
   return issueSessionFor(request, env, user);
-}
-
-async function findMatchingUser(
-  users: UserRecord[],
-  password: string,
-  designatedId: string,
-): Promise<UserRecord | null> {
-  for (const candidate of users) {
-    if (candidate.id === designatedId) continue;
-    if (await verifyPassword(password, candidate.password_hash)) return candidate;
-  }
-  return null;
-}
-
-function pickDesignatedUser(users: UserRecord[], adminUsername: string): UserRecord | null {
-  if (adminUsername) {
-    const named = users.find((candidate) => candidate.username === adminUsername);
-    if (named) return named;
-  }
-  if (users.length === 1) return users[0]!;
-  const admins = users.filter((candidate) => candidate.role === "admin" && candidate.disabled_at == null);
-  return admins.length === 1 ? admins[0]! : null;
-}
-
-async function bootstrapAdmin(env: Env, password: string): Promise<UserRecord | null> {
-  const username = env.ADMIN_USERNAME?.trim() || "admin";
-  const createdAt = Date.now();
-  const user: UserRecord = {
-    id: crypto.randomUUID(),
-    username,
-    password_hash: await hashPassword(password),
-    role: "admin",
-    disabled_at: null,
-    created_at: createdAt,
-  };
-  try {
-    await insertUser(env.DB, {
-      id: user.id,
-      username: user.username,
-      passwordHash: user.password_hash,
-      role: "admin",
-      createdAt,
-    });
-    return user;
-  } catch (error) {
-    if (!isUniqueViolation(error)) throw error;
-    const again = await listUserRecords(env.DB);
-    return pickDesignatedUser(again, username) ?? again[0] ?? null;
-  }
 }
 
 async function finishLogin(

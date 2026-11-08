@@ -240,7 +240,7 @@
     var score = passwordScore(state.newPassword);
     var type = state.revealPassword ? "text" : "password";
     return (
-      '<form id="password-form" class="stack" novalidate><h3>改密码</h3>' +
+      '<form id="password-form" class="stack" novalidate hidden><h3>改密码</h3>' +
       "<label>当前密码" +
       '<input data-field="currentPassword" name="currentPassword" type="password" maxlength="256" autocomplete="current-password" value="' +
       C.escapeHtml(state.currentPassword) +
