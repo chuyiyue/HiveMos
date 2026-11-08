@@ -5,6 +5,21 @@
 import { json } from "./http";
 import type { Env, WaitCtx } from "./env";
 import { authenticateAgent, fetchConfigForAgent, searchServers } from "./registry";
+import {
+  CalError,
+  calendarPublic,
+  createEvent,
+  deleteEvent,
+  eventPublic,
+  findConflicts,
+  getEvent,
+  instancePublic,
+  listCalendars,
+  listInstances,
+  parseIsoInstant,
+  searchEvents,
+  updateEvent,
+} from "./calendar";
 
 const MAX_BODY_BYTES = 64 * 1024;
 
@@ -44,6 +59,106 @@ const TOOLS = [
       additionalProperties: false,
     },
   },
+  {
+    name: "calendar_list_calendars",
+    description: "列出全部日历，含类型、颜色、是否只读与同步状态",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "calendar_list_events",
+    description: "按时间段查日程，重复日程已按规则展开。时间用带时区的 ISO 8601",
+    inputSchema: {
+      type: "object",
+      properties: {
+        from: { type: "string", description: "起始时间（ISO 8601），缺省为现在" },
+        to: { type: "string", description: "结束时间（ISO 8601），缺省为一个月后" },
+        calendar_id: { type: "string", description: "只看指定日历，缺省为全部" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "calendar_get_event",
+    description: "按 event_id 取一条日程的完整信息",
+    inputSchema: {
+      type: "object",
+      properties: { event_id: { type: "string", description: "日程 id" } },
+      required: ["event_id"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "calendar_search",
+    description: "按关键词搜日程（标题、地点、描述），返回时间段内的实例",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "关键词" },
+        from: { type: "string", description: "起始时间（ISO 8601），缺省为一个月前" },
+        to: { type: "string", description: "结束时间（ISO 8601），缺省为十三个月后" },
+      },
+      required: ["query"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "calendar_create_event",
+    description: "新建日程。默认查冲突：与已有日程重叠时返回 conflicts 清单，只提示不拦截。重复日程传 rrule 原文，起止时间用带时区的 ISO 8601 并给 tzid",
+    inputSchema: {
+      type: "object",
+      properties: {
+        calendar_id: { type: "string", description: "目标日历，缺省用默认日历" },
+        title: { type: "string", description: "标题" },
+        start: { type: "string", description: "开始时间（ISO 8601）；全天日程用 YYYY-MM-DD" },
+        end: { type: "string", description: "结束时间（ISO 8601）；全天日程用 YYYY-MM-DD（不含当天）" },
+        tzid: { type: "string", description: "时区，如 Asia/Shanghai" },
+        all_day: { type: "boolean", description: "是否全天日程" },
+        rrule: { type: "string", description: "重复规则原文，如 FREQ=WEEKLY;BYDAY=MO,WE" },
+        location: { type: "string", description: "地点" },
+        description: { type: "string", description: "描述" },
+        check_conflict: { type: "boolean", description: "是否查冲突，缺省查" },
+      },
+      required: ["title", "start", "end"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "calendar_update_event",
+    description: "修改日程，只传要改的字段。改重复日程的某一次：传 instance_start（那一次的开始时间）会生成例外实例，不动整组",
+    inputSchema: {
+      type: "object",
+      properties: {
+        event_id: { type: "string", description: "日程 id" },
+        instance_start: { type: "string", description: "只改这一次时传那一次的开始时间（ISO 8601）" },
+        etag: { type: "number", description: "读到的版本号，传了就做并发校验" },
+        title: { type: "string" },
+        start: { type: "string" },
+        end: { type: "string" },
+        tzid: { type: "string" },
+        all_day: { type: "boolean" },
+        rrule: { type: ["string", "null"], description: "新的重复规则；传 null 表示取消重复" },
+        location: { type: "string" },
+        description: { type: "string" },
+        status: { type: "string", description: "confirmed 或 cancelled" },
+      },
+      required: ["event_id"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "calendar_delete_event",
+    description: "删除日程。scope 为 series 删整组（缺省），instance 加 instance_start 只删某一次",
+    inputSchema: {
+      type: "object",
+      properties: {
+        event_id: { type: "string", description: "日程 id" },
+        scope: { type: "string", description: "series 或 instance" },
+        instance_start: { type: "string", description: "删某一次时传那一次的开始时间（ISO 8601）" },
+      },
+      required: ["event_id"],
+      additionalProperties: false,
+    },
+  },
 ];
 
 // Every panel tool belongs to a permission domain (see PERMISSION_DOMAINS
@@ -53,6 +168,13 @@ const TOOL_DOMAINS: Record<string, string> = {
   mcp_search: "registry",
   mcp_list: "registry",
   mcp_get: "registry",
+  calendar_list_calendars: "calendar",
+  calendar_list_events: "calendar",
+  calendar_get_event: "calendar",
+  calendar_search: "calendar",
+  calendar_create_event: "calendar",
+  calendar_update_event: "calendar",
+  calendar_delete_event: "calendar",
 };
 
 function domainOfTool(name: string): string | null {
@@ -154,6 +276,70 @@ async function callTool(request: Request, env: Env, id: unknown, params: unknown
     const fetched = await fetchConfigForAgent(env.DB, auth.agentId, serverId.trim(), serverName.trim(), Date.now());
     if (!fetched.ok) return toolResult(id, fetched.error, true);
     return toolResult(id, fetched.config);
+  }
+  if (name.startsWith("calendar_")) {
+    try {
+      return await callCalendarTool(env, id, name, record as Record<string, unknown>, auth.agentId);
+    } catch (error) {
+      if (error instanceof CalError) return toolResult(id, error.message, true);
+      throw error;
+    }
+  }
+  return toolResult(id, "未知工具", true);
+}
+
+function argString(args: Record<string, unknown>, key: string): string | undefined {
+  const value = args[key];
+  return typeof value === "string" ? value : undefined;
+}
+
+async function callCalendarTool(env: Env, id: unknown, name: string, args: Record<string, unknown>, agentId: string): Promise<Response> {
+  const now = Date.now();
+  if (name === "calendar_list_calendars") {
+    const calendars = await listCalendars(env.DB);
+    return toolResult(id, { calendars: calendars.map(calendarPublic) });
+  }
+  if (name === "calendar_list_events") {
+    const fromMs = parseIsoInstant(args.from) ?? now;
+    const toMs = parseIsoInstant(args.to) ?? now + 31 * 24 * 60 * 60 * 1000;
+    const calendarId = argString(args, "calendar_id");
+    const instances = await listInstances(env.DB, { fromMs, toMs, calendarIds: calendarId ? [calendarId] : null });
+    return toolResult(id, { instances: instances.map(instancePublic) });
+  }
+  if (name === "calendar_get_event") {
+    const eventId = argString(args, "event_id");
+    if (!eventId) return toolResult(id, "请提供 event_id", true);
+    const row = await getEvent(env.DB, eventId);
+    if (!row || row.deleted_at != null) return toolResult(id, "日程不存在或已删除", true);
+    return toolResult(id, { event: eventPublic(row) });
+  }
+  if (name === "calendar_search") {
+    const query = argString(args, "query");
+    if (!query || !query.trim()) return toolResult(id, "请提供 query", true);
+    const fromMs = parseIsoInstant(args.from) ?? now - 30 * 24 * 60 * 60 * 1000;
+    const toMs = parseIsoInstant(args.to) ?? now + 395 * 24 * 60 * 60 * 1000;
+    const instances = await searchEvents(env.DB, query.trim(), { fromMs, toMs });
+    return toolResult(id, { instances: instances.map(instancePublic) });
+  }
+  if (name === "calendar_create_event") {
+    const created = await createEvent(env.DB, args, agentId, "mcp", now);
+    const conflicts = args.check_conflict === false
+      ? []
+      : await findConflicts(env.DB, { startMs: created.starts_at, endMs: created.ends_at, excludeEventId: created.id });
+    return toolResult(id, { event: eventPublic(created), conflicts });
+  }
+  if (name === "calendar_update_event") {
+    const eventId = argString(args, "event_id");
+    if (!eventId) return toolResult(id, "请提供 event_id", true);
+    const etag = typeof args.etag === "number" ? args.etag : null;
+    const updated = await updateEvent(env.DB, eventId, args, agentId, "mcp", now, etag);
+    return toolResult(id, { event: eventPublic(updated) });
+  }
+  if (name === "calendar_delete_event") {
+    const eventId = argString(args, "event_id");
+    if (!eventId) return toolResult(id, "请提供 event_id", true);
+    const result = await deleteEvent(env.DB, eventId, args, agentId, now);
+    return toolResult(id, result);
   }
   return toolResult(id, "未知工具", true);
 }

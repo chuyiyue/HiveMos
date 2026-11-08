@@ -29,6 +29,8 @@ import type { Env, ScheduledEvent, WaitCtx } from "./env";
 import { clientAddress, isCrossSite, json, readCookie, readJsonLimited } from "./http";
 import { handleMcp } from "./mcp";
 import { handleRegistryRequest } from "./registry-http";
+import { handleCalendarFeed, handleCalendarRequest } from "./calendar-http";
+import { syncDueMirrors } from "./calendar";
 import { refreshActiveSnapshots } from "./registry";
 import { issueSession, publicUser, requireAdminUser } from "./session";
 
@@ -69,6 +71,11 @@ export default {
       // gate so html_handling can still serve mcp.html at /mcp.
       if (path === "/mcp" && request.method.toUpperCase() === "POST") return handleMcp(request, env, wait);
 
+      // ICS subscription feed: the token in the URL is the credential, so
+      // this stays ahead of the session gate like login and the TOTP ticket.
+      const feed = /^\/cal\/([A-Za-z0-9_-]+)\.ics$/.exec(path);
+      if (feed && feed[1]) return handleCalendarFeed(request, env, feed[1]);
+
       const admin = await requireAdminUser(request, env, { crossSite: wantsCrossSiteCheck(path) });
       if (admin instanceof Response) {
         // A cross-site refusal must keep its 403 text. deny() would also drop a cookie that is still valid.
@@ -84,6 +91,8 @@ export default {
       if (account) return account;
       const registry = await handleRegistryRequest(request, env, wait, path);
       if (registry) return registry;
+      const calendar = await handleCalendarRequest(request, env, wait, path);
+      if (calendar) return calendar;
       if (path === "/api" || path.startsWith("/api/")) return json({ ok: false, error: "未找到" }, 404);
       return env.ASSETS.fetch(request);
     } catch {
@@ -96,6 +105,11 @@ export default {
       await refreshActiveSnapshots(env, ctx);
     } catch {
       // The next cron retries. A failed sweep must not throw out of the handler.
+    }
+    try {
+      await syncDueMirrors(env.DB, Date.now());
+    } catch {
+      // Mirror sources retry on the next sweep; failures keep the old data.
     }
   },
 };
