@@ -22,9 +22,9 @@ export async function handleMemoryRequest(request: Request, env: Env, ctx: WaitC
     return json({ ok: false, error: "跨站请求被拒绝" }, 403);
   }
   try {
-    if (path === "/api/memory") return memories(request, env);
+    if (path === "/api/memory") return await memories(request, env);
     const one = /^\/api\/memory\/([A-Za-z0-9_-]+)$/.exec(path);
-    if (one && one[1]) return memoryOne(request, env, one[1]);
+    if (one && one[1]) return await memoryOne(request, env, one[1]);
     return null;
   } catch (error) {
     if (error instanceof MemError) return json({ ok: false, error: error.message }, error.status);
