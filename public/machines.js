@@ -78,10 +78,13 @@
   }
   function powerFor(item) {
     var st = remoteStateOf(item);
-    if (st === "stopped" || st === "error") return { label: "启动", action: "start" };
-    if (st === "suspended") return { label: "恢复", action: "resume" };
+    if (st === "stopped" || st === "error") return { label: "唤醒", action: "start" };
+    if (st === "suspended") return { label: "唤醒", action: "resume" };
     if (st === "running") return { label: "暂停", action: "suspend" };
     return { label: remoteStateLabel(item), action: "" };
+  }
+  function displayName(item) {
+    return item && item.note ? item.note : item ? item.name : "";
   }
   function findMachine(id) {
     var found = null;
@@ -126,7 +129,8 @@
     } else if (item.connection_id) {
       facts =
         row("来源", C.escapeHtml(connName(item) || "服务商连接")) +
-        (item.remote_name ? row("远端名称", C.escapeHtml(item.remote_name)) : "") +
+        (item.remote_name ? row("主机名称", C.escapeHtml(item.remote_name)) : "") +
+        (item.note ? row("备注", C.escapeHtml(item.note)) : "") +
         row("最近同步", C.escapeHtml(item.last_sync_at ? C.formatMinute(item.last_sync_at) || "—" : "尚未同步"));
     } else {
       facts =
@@ -148,7 +152,7 @@
     btns += "<button type=\"button\" class=\"danger\" data-confirm-delete data-mact=\"delete\" data-kind=\"" + kind + "\" data-id=\"" + id + "\">删除</button>";
     var kindLabel = kind === "server" ? "服务器" : kind === "worker" ? "Worker" : "云主机";
     var ctrl = C.openManageDialog({
-      title: item.name,
+      title: kind === "host" ? displayName(item) : item.name,
       bodyHtml:
         C.manageInfoHead({
           icon: kind === "worker" ? "layout" : "monitor",
@@ -194,7 +198,7 @@
     return C.record({
       id: item.id,
       icon: kind === "worker" ? "layout" : "monitor",
-      title: item.name,
+      title: kind === "host" ? displayName(item) : item.name,
       pill: kind === "host" ? connName(item) || undefined : undefined,
       status: item.connection_id ? remoteStateOf(item) : item.status,
       lede: lede || "",
@@ -743,6 +747,64 @@
   }
 
   function openCloudAliasDialog(item) {
+    var body =
+      '<form id="machine-note-form" class="form-grid" novalidate>' +
+      "<label>主机备注<input name=\"note\" maxlength=\"120\" autocomplete=\"off\" placeholder=\"填了之后，卡片标题显示备注\" value=\"" +
+      C.escapeHtml(item.note || "") +
+      '\" /></label>' +
+      '<label>分组<select name="group_id">' +
+      groupOptions(item.group_id || "") +
+      "</select></label>" +
+      '<p class="subtle">主机名称：' +
+      C.escapeHtml(item.remote_name || item.name) +
+      "（由服务商自动同步，不能手动改）</p></form>";
+    var ctrl = C.openFormDialog({
+      title: "编辑备注",
+      bodyHtml: body,
+      submitLabel: "保存",
+      onSubmit: function () {
+        var form = ctrl.form.querySelector("#machine-note-form");
+        var data = new FormData(form);
+        return api("PATCH", "/api/machines/" + encodeURIComponent(item.id), {
+          note: String(data.get("note") || "").trim(),
+          group_id: String(data.get("group_id") || ""),
+        }).then(function (res) {
+          if (res.data && res.data.ok) {
+            C.toast("已保存");
+            load();
+            return true;
+          }
+          throw new Error((res.data && res.data.error) || "保存失败");
+        });
+      },
+    });
+  }
+
+  function connectionAction(conn, act, btn) {
+    btn.disabled = true;
+    var original = btn.textContent;
+    btn.textContent = act === "sync" ? "正在同步…" : "正在测试…";
+    api("POST", "/api/machines/providers/" + encodeURIComponent(conn.id) + "/" + act)
+      .then(function () { load(); })
+      .catch(function () { btn.disabled = false; btn.textContent = original; load(); });
+  }
+
+  function deleteConnection(conn, anchor) {
+    C.askConfirm({
+      anchor: anchor,
+      title: "删除服务商连接",
+      text: "确认删除连接「" + conn.name + "」吗？已接入的设备会保留为普通云主机条目，不会被删除",
+      confirmLabel: "删除连接",
+      danger: true,
+    }).then(function (yes) {
+      if (!yes) return;
+      api("DELETE", "/api/machines/providers/" + encodeURIComponent(conn.id)).then(function (res) {
+        if (res.data && res.data.ok) load();
+      });
+    });
+  }
+
+  function openCloudAliasDialog(item) {
     C.openFormDialog({
       title: "编辑本地别名",
       bodyHtml:
@@ -782,7 +844,7 @@
   function powerMachine(btn) {
     var id = btn.getAttribute("data-id");
     var action = btn.getAttribute("data-mpower");
-    var labels = { start: "启动", resume: "恢复", suspend: "暂停", stop: "停止" };
+    var labels = { start: "唤醒", resume: "唤醒", suspend: "暂停", stop: "停止" };
     btn.disabled = true;
     var original = btn.textContent;
     btn.textContent = "处理中…";

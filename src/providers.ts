@@ -645,8 +645,11 @@ export async function syncConnection(db: D1Database, key: ContentKey, id: string
       missing++;
       continue;
     }
-    // The local alias (machines.name) is never overwritten by a sync.
-    await prepare(db, "UPDATE machines SET os = ?, spec = ?, ip = ?, status = ?, remote_name = ?, remote_state = ?, last_sync_at = ?, updated_at = ? WHERE id = ?", [
+    // The display name is auto-fetched: sync keeps machines.name equal to
+    // the remote name. A user-set note (machines.note) is what personalizes
+    // the card title instead, and sync never touches it.
+    await prepare(db, "UPDATE machines SET name = ?, os = ?, spec = ?, ip = ?, status = ?, remote_name = ?, remote_state = ?, last_sync_at = ?, updated_at = ? WHERE id = ?", [
+      remote.name,
       remote.os,
       remote.spec,
       remote.ip,
