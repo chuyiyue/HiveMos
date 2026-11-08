@@ -445,7 +445,7 @@
     for (var i = 0; i < COUNTRY_CODES.length; i++) {
       var row = COUNTRY_CODES[i];
       if (lower.indexOf(row[0]) !== -1 || region.indexOf(row[1]) !== -1) {
-        return "<span class=\"flag-big\">" + row[2] + "</span> " + C.escapeHtml(row[3]);
+        return "<span class=\"flag-big\">" + row[2] + "</span>" + C.escapeHtml(row[1]);
       }
     }
     return undefined;
@@ -457,7 +457,7 @@
     var lower = region.toLowerCase();
     for (var i = 0; i < COUNTRY_CODES.length; i++) {
       var row = COUNTRY_CODES[i];
-      if (lower.indexOf(row[0]) !== -1 || region.indexOf(row[1]) !== -1) return row[2] + " " + row[3];
+      if (lower.indexOf(row[0]) !== -1 || region.indexOf(row[1]) !== -1) return row[2] + " " + row[1];
     }
     return undefined;
   }
