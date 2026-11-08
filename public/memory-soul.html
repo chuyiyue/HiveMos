@@ -6,6 +6,7 @@
     <meta name="robots" content="noindex, nofollow" />
     <title>记忆与 Soul · HiveMos</title>
     <script src="/theme-boot.js"></script>
+    <script>try{document.documentElement.setAttribute("data-sidebar",localStorage.getItem("hivemos-sidebar")==="collapsed"?"collapsed":"expanded")}catch(error){document.documentElement.setAttribute("data-sidebar","expanded")}</script>
     <link rel="stylesheet" href="/style.css" />
       <link rel="icon" href="/logo.jpg" type="image/jpeg" />
   </head>
@@ -29,6 +30,8 @@
             <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#icon-log-out"/></svg>
           </a>
         </div>
+        <script src="/registry.js"></script>
+        <script src="/sidebar-boot.js"></script>
       </aside>
       <div class="main">
         <header class="topbar">
@@ -47,7 +50,6 @@
       </div>
     </div>
     <div id="sidebar-backdrop" class="sidebar-backdrop" hidden></div>
-    <script src="/registry.js"></script>
     <script src="/common.js"></script>
     <script src="/shell.js"></script>
     <script src="/memory-soul.js"></script>

@@ -1,5 +1,8 @@
-// Paints the registry nav, the Agent rail, sidebar collapse, the mobile drawer,
-// and the theme cycle. Page bodies are rendered by each page's own script.
+// Dynamic shell features: the Agent rail, the mobile drawer, and the theme
+// cycle. The static chrome (registry nav, collapse button, persisted sidebar
+// state) is painted before the first frame by sidebar-boot.js; when its flag
+// is present the chrome init below is skipped so nothing is rendered twice.
+// Page bodies are rendered by each page's own script.
 (function () {
   var THEME_KEY = "hivemos-theme";
   var SIDEBAR_KEY = "hivemos-sidebar";
@@ -345,12 +348,14 @@
   }
 
   window.addEventListener("hivemos:sidebar-refresh", loadSidebarAgents);
-  renderNav();
+  if (!window.__HIVEMOS_SIDEBAR_BOOT__) {
+    renderNav();
+    markAccount();
+    injectCollapseButton();
+    applySidebarState(readCollapsed(), false);
+  }
   renderAgents();
   loadSidebarAgents();
-  markAccount();
-  injectCollapseButton();
-  applySidebarState(readCollapsed(), false);
   bindDrawer();
   bindTheme();
   paintAccount();
