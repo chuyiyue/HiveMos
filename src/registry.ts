@@ -2,6 +2,7 @@
 // Agents never proxy through this Worker. mcp_get is the only audited read.
 
 import { sha256Hex } from "./auth";
+import { decryptString, resolveContentKey, sealString } from "./crypto";
 import { readChatResponse, resolveAiModel } from "./ai-model";
 import type { D1Database, Env, WaitCtx } from "./env";
 
@@ -105,6 +106,7 @@ export interface PublicAgent {
   avatar_icon: string | null;
   avatar_url: string | null;
   has_custom_avatar: boolean;
+  call_count: number;
 }
 
 export interface PublicGroup {
@@ -135,6 +137,7 @@ interface AgentRow {
   avatar_icon?: string | null;
   avatar_url?: string | null;
   has_custom_avatar?: number | string | null;
+  call_count: number | string | null;
 }
 
 export interface AuditItem {
@@ -218,6 +221,63 @@ function newAgentId(): string {
   let hex = "";
   for (const byte of bytes) hex += byte.toString(16).padStart(2, "0");
   return "agt_" + hex;
+}
+
+// ---- Agent audit + recoverable token storage ------------------------------
+// agents_audit is the panel-side trail for agent management (create /
+// update / delete / rotate / permissions / token_reveal). Writes on the
+// management paths are best-effort: a missing table must not break the
+// operation itself. The reveal path is the exception — it writes its row
+// strictly BEFORE decrypting, so a failed audit write fails the reveal.
+
+async function writeAgentAudit(db: D1Database, agentId: string, action: string): Promise<void> {
+  await prepare(db, "INSERT INTO agents_audit (id, agent_id, actor, action, created_at) VALUES (?, ?, 'user', ?, ?)", [
+    newId("aud_"),
+    agentId,
+    action,
+    Date.now(),
+  ]).run();
+}
+
+async function auditAgentQuietly(db: D1Database, agentId: string, action: string): Promise<void> {
+  try {
+    await writeAgentAudit(db, agentId, action);
+  } catch {
+    // best-effort: management operations never fail over their audit row
+  }
+}
+
+// Tokens are sealed with the same VAULT_KEY AES-GCM envelope as the vault,
+// so the panel can copy a key long after creation. When VAULT_KEY is not
+// configured the seal is null and the token stays hash-only (copy reports
+// it as unavailable, exactly like a legacy row).
+async function sealAgentToken(env: Env, token: string): Promise<string | null> {
+  const raw = (env as unknown as Record<string, unknown>)["VAULT_KEY"];
+  const key = resolveContentKey(typeof raw === "string" ? raw : undefined);
+  if (key.state !== "on") return null;
+  return sealString(key, token);
+}
+
+export async function revealAgentToken(env: Env, id: string): Promise<{ ok: true; token: string } | Failure> {
+  const row = await prepare(env.DB, "SELECT id, token_enc FROM agents WHERE id = ?", [id]).first<{
+    id: string;
+    token_enc: string | null;
+  }>();
+  if (!row) return { ok: false, status: 404, error: "未找到" };
+  if (!row.token_enc) {
+    return { ok: false, status: 409, error: "旧令牌只存了摘要、无法取出，轮换后即可复制" };
+  }
+  const raw = (env as unknown as Record<string, unknown>)["VAULT_KEY"];
+  const key = resolveContentKey(typeof raw === "string" ? raw : undefined);
+  if (key.state !== "on") return { ok: false, status: 503, error: "保险库密钥未配置，暂时不能复制密钥" };
+  try {
+    await writeAgentAudit(env.DB, id, "token_reveal");
+  } catch {
+    return { ok: false, status: 503, error: "审计写入失败，暂时不能复制密钥" };
+  }
+  const token = await decryptString(key.raw, row.token_enc);
+  if (token === null) return { ok: false, status: 500, error: "解密失败，保险库密钥可能不正确" };
+  return { ok: true, token };
 }
 
 export function randomAgentToken(): string {
@@ -1246,11 +1306,12 @@ function toPublicAgent(row: AgentRow): PublicAgent {
     avatar_icon: row.avatar_icon ?? null,
     avatar_url: row.avatar_url ?? null,
     has_custom_avatar: asNumber(row.has_custom_avatar) === 1,
+    call_count: asNumber(row.call_count) ?? 0,
   };
 }
 
 async function getAgentRow(db: D1Database, id: string): Promise<AgentRow | null> {
-  return prepare(db, "SELECT id, name, status, group_id, permissions, last_seen_at, pinned_at, created_at, avatar_icon, avatar_url, EXISTS(SELECT 1 FROM agent_avatars WHERE agent_id = agents.id) AS has_custom_avatar FROM agents WHERE id = ?", [id]).first<AgentRow>();
+  return prepare(db, "SELECT id, name, status, group_id, permissions, last_seen_at, pinned_at, created_at, call_count, avatar_icon, avatar_url, EXISTS(SELECT 1 FROM agent_avatars WHERE agent_id = agents.id) AS has_custom_avatar FROM agents WHERE id = ?", [id]).first<AgentRow>();
 }
 
 // Resolves an optional group reference for the agent scope. Absent or blank
@@ -1268,7 +1329,7 @@ async function resolveAgentGroupId(db: D1Database, value: unknown): Promise<{ ok
 export async function listAgents(db: D1Database): Promise<PublicAgent[]> {
   const listed = await prepare(
     db,
-    "SELECT id, name, status, group_id, permissions, last_seen_at, pinned_at, created_at, avatar_icon, avatar_url, EXISTS(SELECT 1 FROM agent_avatars WHERE agent_id = agents.id) AS has_custom_avatar FROM agents ORDER BY created_at DESC",
+    "SELECT id, name, status, group_id, permissions, last_seen_at, pinned_at, created_at, call_count, avatar_icon, avatar_url, EXISTS(SELECT 1 FROM agent_avatars WHERE agent_id = agents.id) AS has_custom_avatar FROM agents ORDER BY created_at DESC",
   ).all<AgentRow>();
   return rowsOf(listed).map(toPublicAgent);
 }
@@ -1314,22 +1375,25 @@ export async function listSidebarAgents(db: D1Database, limit: number): Promise<
   return pinned.concat(rowsOf(fillListed).map((row) => toItem(row, false)));
 }
 
-export async function createAgent(db: D1Database, value: unknown): Promise<{ ok: true; agent: PublicAgent & { token: string } } | Failure> {
+export async function createAgent(env: Env, value: unknown): Promise<{ ok: true; agent: PublicAgent & { token: string } } | Failure> {
   if (!value || typeof value !== "object") return { ok: false, status: 400, error: "请求格式不正确" };
   const name = typeof (value as { name?: unknown }).name === "string" ? (value as { name: string }).name.trim() : "";
   if (!name) return { ok: false, status: 400, error: "请填写 Agent 名字" };
   if (name.length > 64 || hasControl(name)) return { ok: false, status: 400, error: "名字过长" };
+  const db = env.DB;
   const resolved = await resolveAgentGroupId(db, (value as { group_id?: unknown }).group_id);
   if (!resolved.ok) return resolved;
   const token = randomAgentToken();
   const now = Date.now();
   let id = newAgentId();
   for (let attempt = 0; attempt < 5 && (await getAgentRow(db, id)); attempt++) id = newAgentId();
+  const tokenEnc = await sealAgentToken(env, token);
   try {
-    await prepare(db, "INSERT INTO agents (id, name, token_hash, status, group_id, permissions, last_seen_at, created_at) VALUES (?, ?, ?, 'active', ?, ?, NULL, ?)", [
+    await prepare(db, "INSERT INTO agents (id, name, token_hash, token_enc, status, group_id, permissions, last_seen_at, created_at) VALUES (?, ?, ?, ?, 'active', ?, ?, NULL, ?)", [
       id,
       name,
       await sha256Hex(token),
+      tokenEnc,
       resolved.groupId,
       JSON.stringify(["registry"]),
       now,
@@ -1338,7 +1402,8 @@ export async function createAgent(db: D1Database, value: unknown): Promise<{ ok:
     if (isUniqueError(error)) return { ok: false, status: 409, error: "这个名字已存在" };
     return dbFailure();
   }
-  return { ok: true, agent: { id, name, status: "active", group_id: resolved.groupId, permissions: ["registry"], last_seen_at: null, pinned_at: null, created_at: now, avatar_icon: null, avatar_url: null, has_custom_avatar: false, token } };
+  await auditAgentQuietly(db, id, "create");
+  return { ok: true, agent: { id, name, status: "active", group_id: resolved.groupId, permissions: ["registry"], last_seen_at: null, pinned_at: null, created_at: now, call_count: 0, avatar_icon: null, avatar_url: null, has_custom_avatar: false, token } };
 }
 
 export async function updateAgent(db: D1Database, id: string, value: unknown): Promise<{ ok: true; agent: PublicAgent } | Failure> {
@@ -1418,6 +1483,8 @@ export async function updateAgent(db: D1Database, id: string, value: unknown): P
       return dbFailure();
     }
   }
+  if ("permissions" in body) await auditAgentQuietly(db, id, "permissions");
+  if ("name" in body || "group_id" in body || "pinned" in body || "status" in body) await auditAgentQuietly(db, id, "update");
   const fresh = await getAgentRow(db, id);
   if (!fresh) return { ok: false, status: 404, error: "未找到" };
   return { ok: true, agent: toPublicAgent(fresh) };
@@ -1487,16 +1554,20 @@ export async function clearAgentAvatar(db: D1Database, id: string): Promise<{ ok
 }
 
 // Rotation swaps the stored hash, so the old token stops working the moment
-// this returns; the new plaintext is exposed exactly once, in this response.
-export async function rotateAgentToken(db: D1Database, id: string): Promise<{ ok: true; agent: PublicAgent; token: string } | Failure> {
+// this returns. The new token is also sealed into token_enc, so the panel
+// can copy it again later via revealAgentToken.
+export async function rotateAgentToken(env: Env, id: string): Promise<{ ok: true; agent: PublicAgent; token: string } | Failure> {
+  const db = env.DB;
   const existing = await getAgentRow(db, id);
   if (!existing) return { ok: false, status: 404, error: "未找到" };
   const token = randomAgentToken();
+  const tokenEnc = await sealAgentToken(env, token);
   try {
-    await prepare(db, "UPDATE agents SET token_hash = ? WHERE id = ?", [await sha256Hex(token), id]).run();
+    await prepare(db, "UPDATE agents SET token_hash = ?, token_enc = ? WHERE id = ?", [await sha256Hex(token), tokenEnc, id]).run();
   } catch {
     return dbFailure();
   }
+  await auditAgentQuietly(db, id, "rotate");
   return { ok: true, agent: toPublicAgent(existing), token };
 }
 
@@ -1508,6 +1579,7 @@ export async function disableAgent(db: D1Database, id: string): Promise<{ ok: tr
   } catch {
     return dbFailure();
   }
+  await auditAgentQuietly(db, id, "delete");
   return { ok: true };
 }
 
@@ -1530,6 +1602,9 @@ export async function authenticateAgent(
   if (seen === null || now - seen >= 60_000) {
     await prepare(db, "UPDATE agents SET last_seen_at = ? WHERE id = ?", [now, row.id]).run();
   }
+  // call_count backs the card's 调用次数: every authenticated /mcp request
+  // counts, so unlike last_seen_at this write is deliberately unthrottled.
+  await prepare(db, "UPDATE agents SET call_count = call_count + 1 WHERE id = ?", [row.id]).run();
   return { ok: true, agentId: row.id, permissions: parsePermissions(row.permissions) };
 }
 

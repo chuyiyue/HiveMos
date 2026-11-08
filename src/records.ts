@@ -14,12 +14,16 @@
 //   memory_audit     记忆          — memory reads and writes
 //   soul_audit       Soul          — soul reads and writes
 //   machines_audit   云计算资源    — machine ops, credential reveals/fetches
+//   agents_audit     Agents 与应用 — panel-side agent management (create /
+//                                    update / delete / rotate / permissions /
+//                                    token_reveal; actor is always the admin,
+//                                    the agent is the target)
 //   vault_access_log 保险库        — secret reveals (actor is always the admin)
 //   sessions         登录          — live admin sessions (one row per login;
 //                                    rows vanish on revoke/expiry, so this is
 //                                    a live view, not a durable audit trail)
 //
-// Boards with no audit table at all (agent/app management operations,
+// Boards with no audit table at all (app management operations,
 // panel-side MCP/Skills/API edits, vault entry edits, settings changes)
 // simply never appear here; nothing is fabricated for them.
 
@@ -45,6 +49,7 @@ export interface RecordModule {
 }
 
 export const RECORD_MODULES: RecordModule[] = [
+  { key: "agents", label: "Agents 与应用" },
   { key: "mcp", label: "MCP 与 Skills" },
   { key: "calendar", label: "日历" },
   { key: "tasks", label: "任务" },
@@ -445,7 +450,63 @@ const loginRecords: Fetcher = async (db, _agentNames, agentId, need) => {
   };
 };
 
+
+const agentMgmtRecords: Fetcher = async (db, _agentNames, agentId, need) => {
+  // agents_audit rows are ABOUT an agent (the admin is the actor), so the
+  // agentId filter matches the subject agent: a per-agent view shows the
+  // management trail for that agent.
+  const where = agentId ? "WHERE au.agent_id = ?" : "";
+  const binds: Array<string | number> = agentId ? [agentId, need] : [need];
+  const { rows, ok } = await allRows<{
+    id: string; at: number; agent_id: string; action: string; agent_name: string | null;
+  }>(
+    db,
+    `SELECT au.id, au.created_at AS at, au.agent_id, au.action,
+            a.name AS agent_name
+     FROM agents_audit au
+     LEFT JOIN agents a ON a.id = au.agent_id
+     ${where}
+     ORDER BY au.created_at DESC, au.id DESC LIMIT ?`,
+    binds,
+  );
+  const labels: Record<string, string> = {
+    create: "创建 Agent",
+    update: "修改 Agent",
+    delete: "删除 Agent",
+    rotate: "轮换密钥",
+    permissions: "修改权限",
+    token_reveal: "复制密钥",
+  };
+  const verbs: Record<string, string> = {
+    create: "创建了 Agent",
+    update: "修改了 Agent",
+    delete: "删除了 Agent",
+    rotate: "轮换了密钥",
+    permissions: "修改了权限",
+    token_reveal: "复制了密钥（查看令牌明文）",
+  };
+  return {
+    ok,
+    rows: rows.map((row) => {
+      const target = row.agent_name || "已删除的 Agent";
+      return {
+        ...base("agents"),
+        id: `agents:${row.id}`,
+        at: row.at,
+        actor: "管理员",
+        actor_id: null,
+        action: row.action,
+        action_label: labels[row.action] ?? row.action,
+        target,
+        target_id: row.agent_id,
+        text: `${verbs[row.action] ?? row.action}「${target}」`,
+      };
+    }),
+  };
+};
+
 const FETCHERS: Record<string, Fetcher> = {
+  agents: agentMgmtRecords,
   mcp: mcpRecords,
   calendar: calendarRecords,
   tasks: taskRecords,
