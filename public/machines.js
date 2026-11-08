@@ -2393,13 +2393,15 @@
   function reloadNodes() {
     return api("GET", "/api/nodes")
       .then(function (res) {
+        if (!res.data || !res.data.ok) {
+          C.toast((res.data && res.data.error) || "网络节点读取失败", "danger");
+          return;
+        }
         applyNodesPayload(res);
         render();
       })
       .catch(function () {
-        state.nodesLoaded = true;
-        state.nodesError = "网络节点读取失败";
-        render();
+        C.toast("网络节点读取失败", "danger");
       });
   }
 
