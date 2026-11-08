@@ -560,5 +560,4 @@ dialog.side-panel[open] { animation: side-panel-in 0.22s ease; }
 
 @media (max-width: 639px) {
   article.record { padding: 16px; }
-  .record-name { font-size: var(--fs-md); }
 }
