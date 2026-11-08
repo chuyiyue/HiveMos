@@ -108,7 +108,7 @@
     if (kind === "server") {
       facts =
         row("备注", C.escapeHtml(item.note || "无")) +
-        row("主机名", C.escapeHtml(item.hostname || "未填写")) +
+        row("主机名", C.escapeHtml(item.hostname || "未填写") + (item.status ? " " + C.statusPill(item.status) : "")) +
         row("系统", C.escapeHtml(item.os || "未填写")) +
         row(
           "主机 IP",
@@ -240,7 +240,8 @@
           ? "<button type=\"button\" class=\"secondary\" data-mpower=\"" + pw.action + "\" data-id=\"" + pid + "\">" + pw.label + "</button>"
           : "<button type=\"button\" class=\"secondary\" disabled>" + pw.label + "</button>") +
         "<button type=\"button\" class=\"secondary\" data-mports data-id=\"" + pid + "\">端口转发</button>" +
-        "<button type=\"button\" class=\"secondary\" data-mkeep data-id=\"" + pid + "\">保活</button>";
+        "<button type=\"button\" class=\"secondary\" data-mkeep data-id=\"" + pid + "\">保活</button>" +
+        "<button type=\"button\" class=\"secondary\" data-msync data-id=\"" + pid + "\">同步</button>";
       return card(uiKind, item, connFacts, quick);
     }
     var facts = [
@@ -780,58 +781,6 @@
     });
   }
 
-  function connectionAction(conn, act, btn) {
-    btn.disabled = true;
-    var original = btn.textContent;
-    btn.textContent = act === "sync" ? "正在同步…" : "正在测试…";
-    api("POST", "/api/machines/providers/" + encodeURIComponent(conn.id) + "/" + act)
-      .then(function () { load(); })
-      .catch(function () { btn.disabled = false; btn.textContent = original; load(); });
-  }
-
-  function deleteConnection(conn, anchor) {
-    C.askConfirm({
-      anchor: anchor,
-      title: "删除服务商连接",
-      text: "确认删除连接「" + conn.name + "」吗？已接入的设备会保留为普通云主机条目，不会被删除",
-      confirmLabel: "删除连接",
-      danger: true,
-    }).then(function (yes) {
-      if (!yes) return;
-      api("DELETE", "/api/machines/providers/" + encodeURIComponent(conn.id)).then(function (res) {
-        if (res.data && res.data.ok) load();
-      });
-    });
-  }
-
-  function openCloudAliasDialog(item) {
-    C.openFormDialog({
-      title: "编辑本地别名",
-      bodyHtml:
-        "<label>本地名称<input name=\"name\" maxlength=\"60\" autocomplete=\"off\" value=\"" + C.escapeHtml(item.name) + "\" /></label>" +
-        "<label>备注<input name=\"note\" maxlength=\"200\" autocomplete=\"off\" value=\"" + C.escapeHtml(item.note || "") + "\" /></label>" +
-        "<label>绑定<input name=\"binding\" maxlength=\"60\" autocomplete=\"off\" value=\"" + C.escapeHtml(item.binding || "") + "\" /></label>" +
-        "<label>分组" + C.groupSelect("group_id", state.groups, item.group_id || "") + "</label>" +
-        "<p class=\"subtle\">远端名称：" + C.escapeHtml(item.remote_name || "") + "（由服务商同步，不在这里改）</p>",
-      submitLabel: "保存",
-      onSubmit: function (ctrl) {
-        var name = val(ctrl, "name");
-        if (!name) { ctrl.setError("请填写本地名称"); return; }
-        ctrl.setBusy(true);
-        api("PATCH", "/api/machines/" + encodeURIComponent(item.id), { name: name, note: val(ctrl, "note"), binding: val(ctrl, "binding"), group_id: val(ctrl, "group_id") || null })
-          .then(function (res) {
-            ctrl.setBusy(false);
-            if (!res.data || !res.data.ok) { ctrl.setError((res.data && res.data.error) || "保存失败，请重试"); return; }
-            ctrl.close();
-            load();
-          })
-          .catch(function () { ctrl.setBusy(false); ctrl.setError("网络异常，请重试"); });
-      },
-    });
-  }
-
-  // 添加云主机向导：选服务商 → 填配置 → 测试并拉设备 → 勾选 → 保存。
-  // 测试不过或改过配置（测试结果作废）时，onSubmit 会拦下不让保存。
   function wizardConfigFields(provider) {
     return (
       "<label>API 密钥<input data-wiz-field=\"apiKey\" type=\"password\" maxlength=\"500\" autocomplete=\"off\" placeholder=\"InstaBox 的 API Key\" /></label>" +
@@ -840,6 +789,20 @@
   }
 
   // ---- 接入设备快捷功能：电源 / 端口转发 / 保活 ----
+
+  function syncMachine(btn) {
+    var id = btn.getAttribute("data-id");
+    btn.disabled = true;
+    var oldText = btn.textContent;
+    btn.textContent = "同步中…";
+    api("POST", "/api/machines/" + encodeURIComponent(id) + "/sync", {})
+      .then(function (res) {
+        if (res.data && res.data.ok) C.toast(res.data.missing ? "服务商那边已找不到这台主机" : "状态已同步");
+        else C.toast((res.data && res.data.error) || "同步失败");
+      })
+      .catch(function () { C.toast("同步失败"); })
+      .then(function () { load(); });
+  }
 
   function powerMachine(btn) {
     var id = btn.getAttribute("data-id");
@@ -1319,6 +1282,8 @@
     if (portsBtn) return void openPortsDialog(portsBtn.getAttribute("data-id"));
     var keepBtn = target.closest("[data-mkeep]");
     if (keepBtn) return void openKeepaliveDialog(keepBtn.getAttribute("data-id"));
+    var syncBtn = event.target.closest("[data-msync]");
+    if (syncBtn && !syncBtn.disabled) return void syncMachine(syncBtn);
     var connBtn = target.closest("[data-conn]");
     if (connBtn) {
       var connId = connBtn.getAttribute("data-id");
