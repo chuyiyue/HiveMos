@@ -93,7 +93,7 @@
         ["标识", "<span class=\"mono\">" + C.escapeHtml(agent.id) + "</span>"],
         ["权限", C.escapeHtml(permText(agent))],
         ["最近调用", C.escapeHtml(seen || "还没有调用")],
-        ["创建", C.escapeHtml(C.formatMinute(agent.created_at) || "未知")],
+        ["调用次数", C.escapeHtml(String(agent.call_count || 0) + " 次")],
       ],
       actions:
         "<button type=\"button\" class=\"secondary\" data-action=\"copy-token\" data-id=\"" +

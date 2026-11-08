@@ -9,6 +9,10 @@
 
 ALTER TABLE agents ADD COLUMN token_enc TEXT;
 
+-- call_count 是卡片「调用次数」的数据来源：authenticateAgent 每完成一次
+-- 鉴权就自增一次（不节流，与 last_seen_at 的一分钟节流分开）。
+ALTER TABLE agents ADD COLUMN call_count INTEGER NOT NULL DEFAULT 0;
+
 CREATE TABLE agents_audit (
   id TEXT PRIMARY KEY,
   agent_id TEXT NOT NULL,

@@ -79,6 +79,7 @@ export interface PublicAgent {
   last_seen_at: number | null;
   pinned_at: number | null;
   created_at: number;
+  call_count: number;
 }
 
 export interface PublicGroup {
@@ -106,6 +107,7 @@ interface AgentRow {
   last_seen_at: number | string | null;
   pinned_at: number | string | null;
   created_at: number | string;
+  call_count: number | string | null;
 }
 
 export interface AuditItem {
@@ -1271,11 +1273,12 @@ function toPublicAgent(row: AgentRow): PublicAgent {
     last_seen_at: asNumber(row.last_seen_at),
     pinned_at: asNumber(row.pinned_at),
     created_at: asNumber(row.created_at) ?? 0,
+    call_count: asNumber(row.call_count) ?? 0,
   };
 }
 
 async function getAgentRow(db: D1Database, id: string): Promise<AgentRow | null> {
-  return prepare(db, "SELECT id, name, status, group_id, permissions, last_seen_at, pinned_at, created_at FROM agents WHERE id = ?", [id]).first<AgentRow>();
+  return prepare(db, "SELECT id, name, status, group_id, permissions, last_seen_at, pinned_at, created_at, call_count FROM agents WHERE id = ?", [id]).first<AgentRow>();
 }
 
 // Resolves an optional group reference for the agent scope. Absent or blank
@@ -1293,7 +1296,7 @@ async function resolveAgentGroupId(db: D1Database, value: unknown): Promise<{ ok
 export async function listAgents(db: D1Database): Promise<PublicAgent[]> {
   const listed = await prepare(
     db,
-    "SELECT id, name, status, group_id, permissions, last_seen_at, pinned_at, created_at FROM agents ORDER BY created_at DESC",
+    "SELECT id, name, status, group_id, permissions, last_seen_at, pinned_at, created_at, call_count FROM agents ORDER BY created_at DESC",
   ).all<AgentRow>();
   return rowsOf(listed).map(toPublicAgent);
 }
@@ -1361,7 +1364,7 @@ export async function createAgent(env: Env, value: unknown): Promise<{ ok: true;
     return dbFailure();
   }
   await auditAgentQuietly(db, id, "create");
-  return { ok: true, agent: { id, name, status: "active", group_id: resolved.groupId, permissions: ["registry"], last_seen_at: null, pinned_at: null, created_at: now, token } };
+  return { ok: true, agent: { id, name, status: "active", group_id: resolved.groupId, permissions: ["registry"], last_seen_at: null, pinned_at: null, created_at: now, call_count: 0, token } };
 }
 
 export async function updateAgent(db: D1Database, id: string, value: unknown): Promise<{ ok: true; agent: PublicAgent } | Failure> {
@@ -1459,6 +1462,9 @@ export async function authenticateAgent(
   if (seen === null || now - seen >= 60_000) {
     await prepare(db, "UPDATE agents SET last_seen_at = ? WHERE id = ?", [now, row.id]).run();
   }
+  // call_count backs the card's 调用次数: every authenticated /mcp request
+  // counts, so unlike last_seen_at this write is deliberately unthrottled.
+  await prepare(db, "UPDATE agents SET call_count = call_count + 1 WHERE id = ?", [row.id]).run();
   return { ok: true, agentId: row.id, permissions: parsePermissions(row.permissions) };
 }
 
