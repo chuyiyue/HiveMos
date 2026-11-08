@@ -6,6 +6,7 @@
   var activeTab = location.hash === "#gateway" ? "gateway" : location.hash === "#email" ? "email" : "vault";
 
   var ENTRIES = null;
+  var GROUPS = null;
   var GATEWAYS = null;
   var EMAILS = null;
   var ACCESS = null;
@@ -43,6 +44,21 @@
       render();
     }).catch(function () {
       loadErrors.entries = "条目加载失败";
+      render();
+    });
+  }
+
+  function loadGroups() {
+    return api("GET", "/api/vault/groups").then(function (result) {
+      if (result.data && result.data.ok && Array.isArray(result.data.groups)) {
+        GROUPS = result.data.groups;
+        delete loadErrors.groups;
+      } else {
+        loadErrors.groups = (result.data && result.data.error) || "分组加载失败";
+      }
+      render();
+    }).catch(function () {
+      loadErrors.groups = "分组加载失败";
       render();
     });
   }
@@ -113,9 +129,11 @@
       vaultFact("账号", item.username || "未填写") +
       vaultFact("密码", item.tail ? "末四位 " + item.tail : "已保存") +
       vaultFact("备注", item.note || "无") +
+      vaultFact("分组", groupName(item.group_id)) +
       "</dl>" +
       "<div class=\"manage-actions\">" +
       "<button type=\"button\" class=\"secondary\" data-vact=\"edit\" data-kind=\"secret\" data-id=\"" + id + "\">编辑</button>" +
+      "<button type=\"button\" class=\"secondary\" data-vact=\"group\" data-kind=\"secret\" data-id=\"" + id + "\">设置分组</button>" +
       "<button type=\"button\" class=\"danger\" data-confirm-delete data-vact=\"delete\" data-kind=\"secret\" data-id=\"" + id + "\">删除</button>" +
       "</div>"
     );
@@ -176,9 +194,11 @@
           vaultFact("地址", item.base_url || "未填写") +
           vaultFact("模型", item.models || "0 个模型") +
           vaultFact("密钥", item.tail ? "末四位 " + item.tail : "已保存") +
+          vaultFact("分组", groupName(item.group_id)) +
           "</dl></div>" +
           "<div class=\"manage-actions\">" +
           "<button type=\"button\" class=\"secondary\" data-vact=\"edit\" data-kind=\"gateway\" data-id=\"" + id + "\">编辑</button>" +
+          "<button type=\"button\" class=\"secondary\" data-vact=\"group\" data-kind=\"gateway\" data-id=\"" + id + "\">设置分组</button>" +
           "<button type=\"button\" class=\"danger\" data-confirm-delete data-vact=\"delete\" data-kind=\"gateway\" data-id=\"" + id + "\">删除</button>" +
           "</div>",
       })
@@ -204,10 +224,118 @@
     );
   }
 
-  function render() {
-    var entriesBody = sectionBody("entries", ENTRIES, "还没有条目", "点上方「添加条目」把第一个账号密码存进来", function (items) {
-      return items.map(entryRow).join("");
+  function groupName(gid) {
+    var name = "未分组";
+    (GROUPS || []).forEach(function (group) {
+      if (group.id === gid) name = group.name;
     });
+    return name;
+  }
+
+  function groupActions(group) {
+    var id = C.escapeHtml(group.id);
+    return (
+      "<button type=\"button\" class=\"secondary\" data-action=\"rename-vgroup\" data-id=\"" + id + "\">改名</button>" +
+      "<button type=\"button\" class=\"danger\" data-confirm-delete data-action=\"delete-vgroup\" data-id=\"" + id + "\">删除</button>"
+    );
+  }
+
+  // 账号密码与模型网关按共用分组池分区展示，分组在前、未分组置后
+  function entriesGroupedBody() {
+    if (loadErrors.entries) return C.emptyState("加载失败", loadErrors.entries);
+    if (!ENTRIES || !GROUPS) return C.emptyState("正在加载", "马上就好");
+    if (!ENTRIES.length && !GROUPS.length) return C.emptyState("还没有条目", "点上方「添加条目」把第一个账号密码存进来");
+    return C.groupedSections({
+      groups: GROUPS,
+      items: ENTRIES,
+      groupOf: function (item) { return item.group_id || null; },
+      renderItem: entryRow,
+      groupActions: groupActions,
+      ungroupedTitle: "未分组",
+      emptyGroupText: "添加条目时选择这个分组即可归入",
+    });
+  }
+
+  function gatewayCard(item) {
+    return C.record({
+      id: item.id,
+      icon: "gateway",
+      title: item.name,
+      status: item.status,
+      facts: [["协议", C.escapeHtml(item.proto || "未填写")], ["地址", C.escapeHtml(item.base_url || "未填写")], ["模型", C.escapeHtml(item.models || "0 个模型")], ["密钥末四位", C.escapeHtml(item.tail)]],
+      actions: "<button type=\"button\" class=\"secondary\" data-vact=\"reveal\" data-kind=\"gateway\" data-id=\"" + C.escapeHtml(item.id) + "\">查看密钥</button>",
+      manage: "gateway:" + item.id,
+    });
+  }
+
+  function gatewaysGroupedBody() {
+    if (loadErrors.gateways) return C.emptyState("加载失败", loadErrors.gateways);
+    if (!GATEWAYS || !GROUPS) return C.emptyState("正在加载", "马上就好");
+    if (!GATEWAYS.length && !GROUPS.length) return C.emptyState("还没有网关", "点上方「添加网关」接入第一个模型网关");
+    return C.groupedSections({
+      groups: GROUPS,
+      items: GATEWAYS,
+      groupOf: function (item) { return item.group_id || null; },
+      renderItem: gatewayCard,
+      groupActions: groupActions,
+      cardGrid: true,
+      ungroupedTitle: "未分组",
+      emptyGroupText: "添加网关时选择这个分组即可归入",
+    });
+  }
+
+  function openGroupDialog(group) {
+    var editing = !!group;
+    C.openFormDialog({
+      title: editing ? "重命名分组" : "添加分组",
+      bodyHtml: "<label>分组名<input name=\"name\" maxlength=\"60\" autocomplete=\"off\" value=\"" + (editing ? C.escapeHtml(group.name) : "") + "\" /></label>",
+      submitLabel: editing ? "保存" : "添加分组",
+      onSubmit: function (ctrl) {
+        var name = val(ctrl, "name");
+        if (!name) { ctrl.setError("请填写分组名"); return; }
+        submitForm(
+          ctrl,
+          editing ? api("PATCH", "/api/vault/groups/" + encodeURIComponent(group.id), { name: name }) : api("POST", "/api/vault/groups", { name: name }),
+          loadGroups
+        );
+      },
+    });
+  }
+
+  function deleteVaultGroup(group) {
+    api("DELETE", "/api/vault/groups/" + encodeURIComponent(group.id)).then(function (result) {
+      if (result.data && result.data.ok) {
+        loadGroups();
+        loadEntries();
+        loadGateways();
+      }
+    });
+  }
+
+  // 管理弹窗里的「设置分组」：单独一个小表单，保存后关掉管理弹窗并刷新列表
+  function openSetGroupDialog(kind, item) {
+    var isEntry = kind === "secret";
+    C.openFormDialog({
+      title: "设置分组",
+      bodyHtml: "<label>分组" + C.groupSelect("group_id", GROUPS || [], item.group_id || "") + "</label>",
+      submitLabel: "保存",
+      onSubmit: function (ctrl) {
+        var gid = val(ctrl, "group_id");
+        submitForm(
+          ctrl,
+          api("PATCH", (isEntry ? "/api/vault/entries/" : "/api/vault/gateways/") + encodeURIComponent(item.id), { group_id: gid || null }),
+          function () {
+            C.closeCurrentOverlay();
+            if (isEntry) loadEntries();
+            else loadGateways();
+          }
+        );
+      },
+    });
+  }
+
+  function render() {
+    var entriesBody = entriesGroupedBody();
     var accessBody = sectionBody("access", ACCESS, "还没有访问记录", "查看条目密码或网关密钥后会在这里留下一条", function (items) {
       return items.map(function (row) {
         var what = row.target_kind === "entry" ? "查看密码" : "查看密钥";
@@ -222,26 +350,14 @@
     });
     var vaultHtml =
       "<div class=\"stack\">" +
-      C.section("条目", ENTRIES ? String(ENTRIES.length) + " 条" : "", entriesBody) +
+      entriesBody +
       C.section("访问记录", ACCESS ? String(ACCESS.length) + " 条" : "", accessBody) +
       C.section("回收站", "", C.emptyState("回收站是空的", "删除的条目会在这里停留，方便核对末四位")) +
       "</div>";
-    var gatewayBody = sectionBody("gateways", GATEWAYS, "还没有网关", "点上方「添加网关」接入第一个模型网关", function (items) {
-      return items.map(function (item) {
-        return C.record({
-          id: item.id,
-          icon: "gateway",
-          title: item.name,
-          status: item.status,
-          facts: [["协议", C.escapeHtml(item.proto || "未填写")], ["地址", C.escapeHtml(item.base_url || "未填写")], ["模型", C.escapeHtml(item.models || "0 个模型")], ["密钥末四位", C.escapeHtml(item.tail)]],
-          actions: "<button type=\"button\" class=\"secondary\" data-vact=\"reveal\" data-kind=\"gateway\" data-id=\"" + C.escapeHtml(item.id) + "\">查看密钥</button>",
-          manage: "gateway:" + item.id,
-        });
-      }).join("");
-    });
+    var gatewayBody = gatewaysGroupedBody();
     var gatewayHtml =
       "<div class=\"stack\">" +
-      C.section("网关", GATEWAYS ? String(GATEWAYS.length) + " 个" : "", gatewayBody) +
+      gatewayBody +
       C.section("模型路由", "", C.emptyState("还没有路由规则", "逻辑模型名映射到哪个网关的哪个模型，会列在这里")) +
       C.section("用量", "", C.emptyState("还没有用量数据", "各网关的请求数与 token 用量会汇总到这里")) +
       "</div>";
@@ -277,9 +393,9 @@
       "</div>" +
       '<div class="page-head-actions">' +
       (activeTab === "vault"
-        ? '<button type="button" class="add-button" data-add="secret">添加条目</button>'
+        ? C.addBar({ addLabel: "添加条目", addAction: "add-secret", groupAction: "add-vgroup" })
         : activeTab === "gateway"
-          ? '<button type="button" class="add-button" data-add="gateway">添加网关</button>'
+          ? C.addBar({ addLabel: "添加网关", addAction: "add-gateway", groupAction: "add-vgroup" })
           : '<button type="button" class="add-button" data-add="email">添加邮箱</button>') +
       "</div></div>";
     C.mount(
@@ -318,7 +434,8 @@
       "<label>网址<input name=\"url\" maxlength=\"300\" autocomplete=\"off\" placeholder=\"例如 https://example.com\" value=\"" + C.escapeHtml(v.url) + "\" /></label>" +
       "<label>账号<input name=\"username\" maxlength=\"120\" autocomplete=\"off\" value=\"" + C.escapeHtml(v.username) + "\" /></label>" +
       "<label>密码<input name=\"password\" maxlength=\"200\" autocomplete=\"off\" /><p class=\"subtle field-hint\">" + (item ? "留空表示不修改，填写后只保留末四位" : "列表里只会保留末四位") + "</p></label>" +
-      "<label>备注<textarea name=\"note\" rows=\"3\" maxlength=\"300\">" + C.escapeHtml(v.note) + "</textarea></label>"
+      "<label>备注<textarea name=\"note\" rows=\"3\" maxlength=\"300\">" + C.escapeHtml(v.note) + "</textarea></label>" +
+      "<label>分组" + C.groupSelect("group_id", GROUPS || [], v.group_id || "") + "</label>"
     );
   }
   function openSecretDialog(item) {
@@ -332,7 +449,7 @@
         var password = val(ctrl, "password");
         if (!name) { ctrl.setError("请填写名称"); return; }
         if (!editing && !password) { ctrl.setError("请填写密码"); return; }
-        var payload = { name: name, url: val(ctrl, "url"), username: val(ctrl, "username"), note: val(ctrl, "note") };
+        var payload = { name: name, url: val(ctrl, "url"), username: val(ctrl, "username"), note: val(ctrl, "note"), group_id: val(ctrl, "group_id") || null };
         if (password) payload.password = password;
         submitForm(
           ctrl,
@@ -349,7 +466,8 @@
       "<label>名称<input name=\"name\" maxlength=\"60\" autocomplete=\"off\" value=\"" + C.escapeHtml(v.name) + "\" /></label>" +
       "<label>协议<input name=\"proto\" maxlength=\"30\" autocomplete=\"off\" placeholder=\"例如 OpenAI 兼容\" value=\"" + C.escapeHtml(v.proto) + "\" /></label>" +
       "<label>地址<input name=\"base\" maxlength=\"120\" autocomplete=\"off\" value=\"" + C.escapeHtml(v.base_url) + "\" /></label>" +
-      "<label>密钥<input name=\"key\" maxlength=\"200\" autocomplete=\"off\" /><p class=\"subtle field-hint\">" + (item ? "留空表示不修改，填写后只保留末四位" : "列表里只会保留末四位") + "</p></label>"
+      "<label>密钥<input name=\"key\" maxlength=\"200\" autocomplete=\"off\" /><p class=\"subtle field-hint\">" + (item ? "留空表示不修改，填写后只保留末四位" : "列表里只会保留末四位") + "</p></label>" +
+      "<label>分组" + C.groupSelect("group_id", GROUPS || [], v.group_id || "") + "</label>"
     );
   }
   function openGatewayDialog(item) {
@@ -363,7 +481,7 @@
         var key = val(ctrl, "key");
         if (!name) { ctrl.setError("请填写名称"); return; }
         if (!editing && !key) { ctrl.setError("请填写密钥"); return; }
-        var payload = { name: name, proto: val(ctrl, "proto"), base_url: val(ctrl, "base") };
+        var payload = { name: name, proto: val(ctrl, "proto"), base_url: val(ctrl, "base"), group_id: val(ctrl, "group_id") || null };
         if (key) payload.key = key;
         submitForm(
           ctrl,
@@ -460,6 +578,18 @@
       render();
       return;
     }
+    var act2 = target.closest("[data-action]");
+    if (act2) {
+      var a2 = act2.getAttribute("data-action");
+      var gid2 = act2.getAttribute("data-id") || "";
+      var gfound = null;
+      (GROUPS || []).forEach(function (g) { if (g.id === gid2) gfound = g; });
+      if (a2 === "add-secret") { openSecretDialog(null); return; }
+      if (a2 === "add-gateway") { openGatewayDialog(null); return; }
+      if (a2 === "add-vgroup") { openGroupDialog(null); return; }
+      if (a2 === "rename-vgroup" && gfound) { openGroupDialog(gfound); return; }
+      if (a2 === "delete-vgroup" && gfound) { deleteVaultGroup(gfound); return; }
+    }
     var add = target.closest("[data-add]");
     if (add) {
       var kind = add.getAttribute("data-add");
@@ -486,12 +616,14 @@
           if (vkind === "secret") openSecretDialog(vfound);
           else if (vkind === "gateway") openGatewayDialog(vfound);
           else openEmailDialog(vfound);
-        } else if (act === "reveal") openReveal(vkind, vfound);
+        } else if (act === "group") openSetGroupDialog(vkind, vfound);
+        else if (act === "reveal") openReveal(vkind, vfound);
         else if (act === "delete") confirmDelete(vkind, vfound, vact);
       }
     }
   }
   render();
+  loadGroups();
   loadEntries();
   loadGateways();
   loadEmails();
