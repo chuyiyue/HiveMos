@@ -696,6 +696,7 @@
       "<div class=\"page-tabs manage-tabs\" role=\"tablist\" aria-label=\"Agent 管理\">" +
       "<button type=\"button\" class=\"page-tab\" role=\"tab\" data-mtab=\"overview\" aria-selected=\"" + (initialTab === "overview" ? "true" : "false") + "\">概览</button>" +
       "<button type=\"button\" class=\"page-tab\" role=\"tab\" data-mtab=\"perms\" aria-selected=\"" + (initialTab === "perms" ? "true" : "false") + "\">权限</button>" +
+      "<button type=\"button\" class=\"page-tab\" role=\"tab\" data-mtab=\"records\" aria-selected=\"" + (initialTab === "records" ? "true" : "false") + "\">访问记录</button>" +
       "<button type=\"button\" class=\"page-tab\" role=\"tab\" data-mtab=\"advanced\" aria-selected=\"" + (initialTab === "advanced" ? "true" : "false") + "\">高级设置</button>" +
       "</div>" +
       "<div data-mpanel=\"overview\"" + (initialTab === "overview" ? "" : " hidden") + ">" +
@@ -719,11 +720,10 @@
       (partial ? "读取中" : escapeHtml(formatMinute(agent.created_at) || "未知")) +
       "</dd></div>" +
       "</dl>" +
-      "<div class=\"agent-records\">" +
-      "<h3>访问记录</h3>" +
+      "</div>" +
+      "<div data-mpanel=\"records\"" + (initialTab === "records" ? "" : " hidden") + ">" +
       "<div data-agent-records-body>" +
       (opts && opts.recordsHtml ? opts.recordsHtml : '<p class="subtle">正在读取</p>') +
-      "</div>" +
       "</div>" +
       "</div>" +
       "<div data-mpanel=\"perms\"" + (initialTab === "perms" ? "" : " hidden") + ">" +
