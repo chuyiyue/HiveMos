@@ -1,4 +1,4 @@
-/* 总览：第一页是真数据，GET /api/overview（各模块计数、最近动态、告警）；第二页「调用记录」也是真数据，GET /api/mcp-audit（agent 取用 MCP 配置的审计） */
+/* 总览：第一页是真数据，GET /api/overview（各模块计数、最近动态、告警）；第二页「调用记录」是全站记录聚合，GET /api/records（各板块审计表统一合并） */
 (function () {
   var C = window.HiveCommon;
 
@@ -130,31 +130,145 @@
       renderOverview(C.section("总览", "", C.emptyState("读取失败", "总览数据暂时读不到，刷新页面再试")));
     });
 
-  // ---- 调用记录页签：真数据（原有逻辑，不动） ----
+  // ---- 调用记录页签：全站记录聚合（GET /api/records） ----
 
-  function renderCalls(html) {
-    var panel = document.querySelector("[data-panel=\"calls\"]");
-    if (panel) panel.innerHTML = html;
+  var REC_MODULES = [
+    ["all", "全部"],
+    ["mcp", "MCP 与 Skills"],
+    ["calendar", "日历"],
+    ["tasks", "任务"],
+    ["memory", "记忆"],
+    ["soul", "Soul"],
+    ["machines", "云计算资源"],
+    ["vault", "保险库"],
+    ["login", "登录"],
+  ];
+  var recState = { module: "all", offset: 0, items: [], hasMore: false, loading: false, failed: false, started: false };
+
+  function recPanel() {
+    return document.querySelector("[data-panel=\"calls\"]");
   }
-  fetch("/api/mcp-audit", { headers: { accept: "application/json" }, cache: "no-store" })
-    .then(function (response) { return response.json(); })
-    .then(function (data) {
-      var audit = data && data.ok === true && Array.isArray(data.audit) ? data.audit : [];
-      if (!audit.length) {
-        renderCalls(C.section("调用记录", "", C.emptyState("还没有调用记录", "Agent 通过 mcp_get 取用 MCP 配置后，每一次都会留在这里")));
+
+  function recChips() {
+    return (
+      "<div class=\"tag-row\" role=\"group\" aria-label=\"按板块筛选\">" +
+      REC_MODULES.map(function (item) {
+        var selected = recState.module === item[0];
+        return (
+          "<button type=\"button\" class=\"tag" +
+          (selected ? " is-accent" : "") +
+          "\" data-rec-module=\"" +
+          item[0] +
+          "\" aria-pressed=\"" +
+          (selected ? "true" : "false") +
+          "\">" +
+          C.escapeHtml(item[1]) +
+          "</button>"
+        );
+      }).join("") +
+      "</div>"
+    );
+  }
+
+  function recFeed(items) {
+    return (
+      "<ol class=\"feed\">" +
+      items
+        .map(function (item) {
+          return (
+            "<li><time datetime=\"" +
+            C.escapeHtml(new Date(item.at).toISOString()) +
+            "\">" +
+            C.escapeHtml(feedTime(item.at)) +
+            "</time><span><span class=\"tag\">" +
+            C.escapeHtml(item.module_label) +
+            "</span> " +
+            C.escapeHtml(item.actor + " " + item.text) +
+            "</span></li>"
+          );
+        })
+        .join("") +
+      "</ol>"
+    );
+  }
+
+  function renderCalls() {
+    var panel = recPanel();
+    if (!panel) return;
+    var body;
+    if (recState.failed && !recState.items.length) {
+      body = C.emptyState("读取失败", "记录暂时读不到，点任意板块或刷新页面再试");
+    } else if (!recState.started || (recState.loading && !recState.items.length)) {
+      body = C.emptyState("正在读取", "稍等片刻");
+    } else if (!recState.items.length) {
+      body = C.emptyState("还没有记录", "各板块的取用与操作会汇总到这里");
+    } else {
+      body = recFeed(recState.items);
+      if (recState.hasMore) {
+        body +=
+          "<div class=\"row-actions\"><button type=\"button\" class=\"secondary\" data-rec-more" +
+          (recState.loading ? " disabled" : "") +
+          ">" +
+          (recState.loading ? "正在读取" : "加载更多") +
+          "</button></div>";
+      }
+    }
+    var sub = recState.items.length ? "已加载 " + recState.items.length + " 条" + (recState.hasMore ? "，还有更多" : "") : "";
+    panel.innerHTML = C.section("调用记录", sub, recChips() + body);
+  }
+
+  function loadRecords(append) {
+    if (recState.loading) return;
+    recState.loading = true;
+    recState.failed = false;
+    if (!append) {
+      recState.offset = 0;
+      recState.items = [];
+      recState.hasMore = false;
+    }
+    renderCalls();
+    var query =
+      "/api/records?limit=30&offset=" +
+      recState.offset +
+      (recState.module !== "all" ? "&module=" + encodeURIComponent(recState.module) : "");
+    fetch(query, { headers: { accept: "application/json" }, cache: "no-store" })
+      .then(function (response) {
+        return response.json();
+      })
+      .then(function (data) {
+        recState.loading = false;
+        recState.started = true;
+        if (!data || data.ok !== true || !Array.isArray(data.records)) throw new Error("bad records");
+        recState.items = recState.items.concat(data.records);
+        recState.offset = recState.items.length;
+        recState.hasMore = data.has_more === true;
+        renderCalls();
+      })
+      .catch(function () {
+        recState.loading = false;
+        recState.started = true;
+        recState.failed = true;
+        renderCalls();
+      });
+  }
+
+  var callsPanel = recPanel();
+  if (callsPanel) {
+    callsPanel.addEventListener("click", function (event) {
+      var target = event.target;
+      if (!(target instanceof Element)) return;
+      var chip = target.closest("[data-rec-module]");
+      if (chip) {
+        var key = chip.getAttribute("data-rec-module") || "all";
+        if (key !== recState.module || recState.failed) {
+          recState.module = key;
+          loadRecords(false);
+        }
         return;
       }
-      var cards = audit.map(function (item) {
-        return C.record({
-          id: item.id,
-          title: item.agent_name || "未知 Agent",
-          lede: "取用「" + (item.server_name || item.server_id || "未知") + "」的配置",
-          facts: [["时间", C.escapeHtml(C.formatMinute(item.created_at) || "未知时间")]],
-        });
-      }).join("");
-      renderCalls(C.section("调用记录", String(audit.length) + " 条", C.list(cards)));
-    })
-    .catch(function () {
-      renderCalls(C.section("调用记录", "", C.emptyState("读取失败", "调用记录暂时读不到，刷新页面再试")));
+      if (target.closest("[data-rec-more]")) loadRecords(true);
     });
+  }
+  renderCalls();
+  loadRecords(false);
 })();
