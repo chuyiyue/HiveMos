@@ -198,7 +198,7 @@ button.copy-btn:hover { background: var(--surface-hover); }
 
 .form-grid { display: grid; gap: 12px; }
 .auth-type { display: grid; gap: 6px; font-size: var(--fs-sm); color: var(--text-2); }
-.auth-tabs { width: 100%; margin-bottom: 0; }
+.page-tabs.auth-tabs { width: 100%; margin-bottom: 0; }
 .auth-tabs .page-tab { flex: 1 1 0; font-size: var(--fs-md); }
 .choice-row { display: flex; flex-wrap: wrap; gap: 8px; }
 .choice-row button[aria-pressed="true"] {
