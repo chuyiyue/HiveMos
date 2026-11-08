@@ -4,6 +4,7 @@ import { isCrossSite, json } from "./http";
 import { getSidebarPinLimit } from "./accounts";
 import type { Env, WaitCtx } from "./env";
 import {
+  clearAgentAvatar,
   createAgent,
   createGroup,
   createServer,
@@ -16,8 +17,10 @@ import {
   listServers,
   listSidebarAgents,
   readPublicServer,
+  getAgentAvatar,
   refreshServerSnapshot,
   renameGroup,
+  setAgentAvatar,
   rotateAgentToken,
   saveManualSnapshot,
   updateAgent,
@@ -40,6 +43,8 @@ export async function handleRegistryRequest(request: Request, env: Env, ctx: Wai
   if (path === "/api/agents") return agentCollection(request, env);
   const rotate = /^\/api\/agents\/([A-Za-z0-9_-]+)\/rotate$/.exec(path);
   if (rotate && rotate[1]) return agentRotate(request, env, rotate[1]);
+  const avatar = /^\/api\/agents\/([A-Za-z0-9_-]+)\/avatar$/.exec(path);
+  if (avatar && avatar[1]) return agentAvatar(request, env, avatar[1]);
   const agent = /^\/api\/agents\/([A-Za-z0-9_-]+)$/.exec(path);
   if (agent && agent[1]) return agentOne(request, env, agent[1]);
   return null;
@@ -164,6 +169,71 @@ async function agentOne(request: Request, env: Env, id: string): Promise<Respons
     return json({ ok: true });
   }
   return methodNotAllowed("PATCH, DELETE");
+}
+
+// Uploaded avatars are capped well above what the 128x128 picker export
+// produces, so a full-size photo can never land in D1 by accident.
+const MAX_AVATAR_BYTES = 200 * 1024;
+
+function sniffImageType(bytes: Uint8Array): string | null {
+  if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return "image/png";
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
+  if (
+    bytes.length >= 12 &&
+    bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 &&
+    bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50
+  ) return "image/webp";
+  if (bytes.length >= 6 && bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x38) return "image/gif";
+  return null;
+}
+
+async function agentAvatar(request: Request, env: Env, id: string): Promise<Response> {
+  const method = request.method.toUpperCase();
+  if (method === "GET") {
+    try {
+      const image = await getAgentAvatar(env.DB, id);
+      if (!image) return json({ ok: false, error: "未找到" }, 404);
+      return new Response(image.data, {
+        status: 200,
+        headers: {
+          "content-type": image.content_type,
+          "content-length": String(image.data.byteLength),
+          "cache-control": "private, no-cache",
+        },
+      });
+    } catch {
+      return dbError();
+    }
+  }
+  if (method === "POST") {
+    const gate = await mutationGate(request);
+    if (gate) return gate;
+    const declared = Number(request.headers.get("content-length") || "0");
+    if (Number.isFinite(declared) && declared > MAX_AVATAR_BYTES) {
+      return json({ ok: false, error: "图片超过 200 KB 上限" }, 413);
+    }
+    let bytes: Uint8Array;
+    try {
+      bytes = new Uint8Array(await request.arrayBuffer());
+    } catch {
+      return json({ ok: false, error: "请求格式不正确" }, 400);
+    }
+    if (bytes.length === 0) return json({ ok: false, error: "图片为空" }, 400);
+    if (bytes.length > MAX_AVATAR_BYTES) return json({ ok: false, error: "图片超过 200 KB 上限" }, 413);
+    const type = sniffImageType(bytes);
+    if (!type) return json({ ok: false, error: "只支持 PNG、JPEG、WebP 或 GIF 图片" }, 400);
+    const saved = await setAgentAvatar(env.DB, id, type, bytes);
+    if (!saved.ok) return json({ ok: false, error: saved.error }, saved.status);
+    return json({ ok: true, agent: saved.agent });
+  }
+  if (method === "DELETE") {
+    const gate = await mutationGate(request);
+    if (gate) return gate;
+    const cleared = await clearAgentAvatar(env.DB, id);
+    if (!cleared.ok) return json({ ok: false, error: cleared.error }, cleared.status);
+    return json({ ok: true, agent: cleared.agent });
+  }
+  return methodNotAllowed("GET, POST, DELETE");
 }
 
 async function agentRotate(request: Request, env: Env, id: string): Promise<Response> {
