@@ -674,8 +674,8 @@ button.account-logout:hover { background: var(--sidebar-bg-hover); color: var(--
   position: relative;
   display: grid;
   place-items: center;
-  min-height: 36px;
-  padding: 4px 0 0;
+  height: 36px;
+  padding: 0;
 }
 :root[data-sidebar="collapsed"] .sidebar-brand-row .brand {
   flex: none;
