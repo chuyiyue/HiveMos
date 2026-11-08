@@ -415,6 +415,8 @@ img, svg, video, canvas { max-width: 100%; }
   /* Mobile: add buttons show just 添加 — the current tab already says what. */
   button.add-button { font-size: 0; }
   button.add-button::after { content: "添加"; font-size: var(--fs-md); }
+  .page-head-actions button.add-button { font-size: 0; }
+  .page-head-actions button.add-button::after { font-size: var(--fs-md); }
 }
 
 /* 设置页版式（照 SMSinBox /users 移植，数值与参考一致） */
