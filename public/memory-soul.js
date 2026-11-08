@@ -289,10 +289,6 @@
       "<div class=\"stack\">" +
       "<div class=\"tag-row\">" + groupChips + "</div>" +
       tagChips +
-      "<div class=\"row-actions\">" +
-      "<button type=\"button\" class=\"secondary\" data-mem-act=\"groups\">管理分组</button>" +
-      "<button type=\"button\" class=\"secondary\" data-mem-act=\"tag-all\">AI 给未打标的打标签</button>" +
-      "</div>" +
       (memNotice
         ? "<p class=\"callout " + memNoticeKind + "\" role=\"status\">" + C.escapeHtml(memNotice) + "</p>"
         : "") +
@@ -374,7 +370,9 @@
       "</div>" +
       '<div class="page-head-actions">' +
       (activeTab === "memory"
-        ? '<button type="button" class="add-button" data-add="memory">添加记忆</button>'
+        ? '<button type="button" class="secondary" data-mem-act="tag-all">AI 补全标签</button>' +
+          '<button type="button" class="secondary" data-mem-act="groups">添加分组</button>' +
+          '<button type="button" class="add-button" data-add="memory">添加记忆</button>'
         : '<button type="button" class="add-button" data-add="soul">添加 Soul</button>') +
       "</div></div>";
     C.mount(
@@ -387,6 +385,97 @@
     );
   }
 
+  function tagFieldHtml(initialTags) {
+    return (
+      "<div class=\"tag-field\" data-tag-field>" +
+      "<span>标签</span>" +
+      "<div class=\"perm-tags\" data-tag-selected></div>" +
+      "<input type=\"text\" data-tag-search autocomplete=\"off\" placeholder=\"#新标签，空格或回车创建；或从下方标签云点选\" />" +
+      "<div class=\"perm-menu\" data-tag-cloud></div>" +
+      "<input type=\"hidden\" name=\"tags\" value=\"" + C.escapeHtml((initialTags || []).join(",")) + "\" />" +
+      "</div>"
+    );
+  }
+
+  function wireTagField(form, initialTags) {
+    var field = form.querySelector("[data-tag-field]");
+    if (!field) return;
+    var selected = (initialTags || []).slice();
+    var selectedEl = field.querySelector("[data-tag-selected]");
+    var cloudEl = field.querySelector("[data-tag-cloud]");
+    var searchEl = field.querySelector("[data-tag-search]");
+    var hiddenEl = field.querySelector("[name=\"tags\"]");
+    function cleanTag(raw) {
+      return String(raw || "").replace(/^#+/, "").replace(/[,，、]/g, "").trim();
+    }
+    function render() {
+      hiddenEl.value = selected.join(",");
+      selectedEl.innerHTML = selected.length
+        ? selected
+            .map(function (t) {
+              return (
+                "<span class=\"perm-tag\">" +
+                C.escapeHtml(t) +
+                "<button type=\"button\" class=\"perm-tag-x\" data-tag-remove=\"" +
+                C.escapeHtml(t) +
+                "\" aria-label=\"移除标签\">×</button></span>"
+              );
+            })
+            .join("")
+        : "<span class=\"subtle\">还没有标签</span>";
+      var q = cleanTag(searchEl.value).toLowerCase();
+      var candidates = allMemTags().filter(function (t) {
+        return selected.indexOf(t) === -1 && (!q || t.toLowerCase().indexOf(q) !== -1);
+      });
+      cloudEl.innerHTML = candidates.length
+        ? candidates
+            .map(function (t) {
+              return "<button type=\"button\" class=\"perm-item\" data-tag-add=\"" + C.escapeHtml(t) + "\">" + C.escapeHtml(t) + "</button>";
+            })
+            .join("")
+        : "<p class=\"perm-menu-empty\">" +
+          (allMemTags().length ? "没有更多可点选的标签" : "暂无已有标签，在上方输入 #新标签 创建") +
+          "</p>";
+    }
+    function commit(raw) {
+      String(raw || "")
+        .split(/\s+/)
+        .forEach(function (piece) {
+          var t = cleanTag(piece);
+          if (t && selected.indexOf(t) === -1) selected.push(t);
+        });
+      searchEl.value = "";
+      render();
+    }
+    field.addEventListener("click", function (event) {
+      var add = event.target.closest ? event.target.closest("[data-tag-add]") : null;
+      if (add) {
+        var t = add.getAttribute("data-tag-add");
+        if (selected.indexOf(t) === -1) selected.push(t);
+        render();
+        return;
+      }
+      var rm = event.target.closest ? event.target.closest("[data-tag-remove]") : null;
+      if (rm) {
+        var v = rm.getAttribute("data-tag-remove");
+        selected = selected.filter(function (x) { return x !== v; });
+        render();
+      }
+    });
+    searchEl.addEventListener("input", render);
+    searchEl.addEventListener("keydown", function (event) {
+      if (event.isComposing) return;
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        commit(searchEl.value);
+      }
+    });
+    searchEl.addEventListener("blur", function () {
+      if (searchEl.value.trim()) commit(searchEl.value);
+    });
+    render();
+  }
+
   // 添加与编辑共用同一套字段构建；item 为空是添加，传入条目是编辑并预填
   function memoryFields(item) {
     var v = item || { title: "", scope: "", content: "", tags: [], weight: 0, group_id: null };
@@ -396,7 +485,7 @@
       "<label>内容<textarea name=\"content\" rows=\"4\" maxlength=\"2000\">" + C.escapeHtml(v.content) + "</textarea></label>" +
       "<label>分组<select name=\"group_id\">" + groupOptionsHtml(v.group_id) + "</select></label>" +
       "<label>权重（0–100）<input name=\"weight\" type=\"number\" min=\"0\" max=\"100\" step=\"1\" value=\"" + (v.weight || 0) + "\" /></label>" +
-      "<label>标签（逗号分隔）<input name=\"tags\" autocomplete=\"off\" value=\"" + C.escapeHtml((v.tags || []).join(", ")) + "\" /></label>"
+      tagFieldHtml(v.tags || [])
     );
   }
 
@@ -404,12 +493,12 @@
   // AI 不可用时服务端整段存一条，这里如实把结果告诉用户。
   function openIngestDialog() {
     var done = false;
-    C.openFormDialog({
+    var ctrl = C.openFormDialog({
       title: "添加记忆",
       bodyHtml:
         "<label>内容<textarea name=\"text\" rows=\"6\" maxlength=\"20000\" placeholder=\"用自然语言写下要记住的事，一段里可以包含多个事实，保存时 AI 会拆成一条条记忆点并打上标签\"></textarea></label>" +
         "<label>作用域<input name=\"scope\" maxlength=\"40\" autocomplete=\"off\" placeholder=\"例如 全局、工作区或某个 Agent，可留空\"></label>" +
-        "<label>分组<select name=\"group_id\">" + groupOptionsHtml(null) + "</select></label>",
+        "<label>分组<select name=\"group_id\">" + groupOptionsHtml(null) + "</select></label>" + tagFieldHtml([]),
       submitLabel: "保存",
       onSubmit: function (ctrl) {
         if (done) {
@@ -423,6 +512,8 @@
         }
         var groupEl = ctrl.form.querySelector("[name=\"group_id\"]");
         var payload = { text: text, group_id: groupEl && groupEl.value ? groupEl.value : null };
+        var tagsEl = ctrl.form.querySelector("[name=\"tags\"]");
+        if (tagsEl && tagsEl.value) payload.tags = tagsEl.value.split(",").filter(function (t) { return !!t; });
         var scope = val(ctrl, "scope");
         if (scope) payload.scope = scope;
         if (ctrl.setBusy) ctrl.setBusy(true);
@@ -451,10 +542,11 @@
           });
       },
     });
+    wireTagField(ctrl.form, []);
   }
   function openMemoryDialog(item) {
     var editing = !!item;
-    C.openFormDialog({
+    var ctrl = C.openFormDialog({
       title: editing ? "编辑记忆" : "添加记忆",
       bodyHtml: memoryFields(item),
       submitLabel: editing ? "保存" : "添加",
@@ -500,6 +592,7 @@
           });
       },
     });
+    wireTagField(ctrl.form, editing ? item.tags || [] : []);
   }
 
   function soulFields(item) {

@@ -217,6 +217,9 @@ export async function ingestMemories(
   const text = input.text.trim();
   if (text.length > INGEST_TEXT_MAX) throw new MemError("内容过长，请分段保存");
   const base: Record<string, unknown> = { scope: input.scope, group_id: input.group_id };
+  const userTags: string[] = Array.isArray(input.tags)
+    ? Array.from(new Set(input.tags.filter((x): x is string => typeof x === "string").map((x) => x.trim()).filter(Boolean)))
+    : [];
   const points = await splitAndTag(env, text);
   if (points && points.length > 0) {
     const rows: MemoryRow[] = [];
@@ -224,7 +227,7 @@ export async function ingestMemories(
       rows.push(
         await insertPoint(
           env.DB,
-          { ...base, title: deriveTitle(point.content), content: point.content, tags: point.tags, ai_state: "split" },
+          { ...base, title: deriveTitle(point.content), content: point.content, tags: [...point.tags, ...userTags], ai_state: "split" },
           channel,
           now,
         ),
@@ -234,7 +237,7 @@ export async function ingestMemories(
   }
   const row = await insertPoint(
     env.DB,
-    { ...base, title: deriveTitle(text), content: text, tags: [], ai_state: "failed" },
+    { ...base, title: deriveTitle(text), content: text, tags: userTags, ai_state: "failed" },
     channel,
     now,
   );
