@@ -1,6 +1,8 @@
 /* 保险库板块：账号密码 / 模型网关 / 邮箱三页签都走 /api/vault 真后端。
-   列表只显示条目名称与末四位口径的信息，密码/密钥明文只能经 reveal
-   接口在弹窗里看，每次查看都会在访问记录里留一条。 */
+   账号列表只显示名称。密码仍要点「显示」或「查看密码」才经 reveal 取明文，
+   服务端先写 vault_access_log 再返回；明文用 copy-text，点击即复制完整值。
+   模型网关密钥在网关页签和管理弹窗里完整展示，同样走 reveal；太长只在视觉上
+   单行省略。某一条拉取失败时该格回退末四位，不让整张卡片报错。 */
 (function () {
   var C = window.HiveCommon;
   var activeTab = location.hash === "#gateway" ? "gateway" : location.hash === "#email" ? "email" : "vault";
@@ -11,6 +13,9 @@
   var EMAILS = null;
   var ACCESS = null;
   var loadErrors = {};
+  // 网关密钥明文缓存：ok 后不再重复 reveal，避免每次重绘都多写一条访问记录。
+  var gatewayKeys = {};
+  var accessRefreshTimer = null;
 
   function api(method, url, body) {
     var headers = { accept: "application/json" };
@@ -121,13 +126,137 @@
     return "<div><dt>" + C.escapeHtml(label) + "</dt><dd>" + C.escapeHtml(value) + "</dd></div>";
   }
 
+  function vaultFactHtml(label, valueHtml) {
+    return "<div><dt>" + C.escapeHtml(label) + "</dt><dd>" + valueHtml + "</dd></div>";
+  }
+
+  // 与服务器卡片 IP 相同：data-copy / data-label 都是完整值，视觉省略由 .copy-text 负责。
+  function copyValueHtml(value) {
+    var shown = C.escapeHtml(value);
+    return "<span class=\"copy-text\" data-copy=\"" + shown + "\" data-label=\"" + shown + "\" title=\"点击复制\">" + shown + "</span>";
+  }
+
+  function findGateway(id) {
+    var found = null;
+    (GATEWAYS || []).forEach(function (entry) { if (entry.id === id) found = entry; });
+    return found;
+  }
+
+  function gatewayTailHtml(item) {
+    return item.tail ? "末四位 " + C.escapeHtml(item.tail) : "已保存";
+  }
+
+  function gatewayKeyInner(item) {
+    var entry = gatewayKeys[item.id];
+    if (entry && entry.status === "ok") return entry.value ? copyValueHtml(entry.value) : "已保存";
+    if (entry && entry.status === "error") {
+      return "<span class=\"copy-text\" data-gateway-key-retry=\"" + C.escapeHtml(item.id) + "\" title=\"读取失败，点击重试\">" + gatewayTailHtml(item) + "</span>";
+    }
+    if (entry && entry.status === "loading") return "读取中";
+    return gatewayTailHtml(item);
+  }
+
+  // kick: "once" 只在还没拉过时拉；"force" 在失败后再拉一次（打开管理弹窗）。
+  // 已成功或正在拉取时不重复请求。
+  function ensureGatewayKey(id, force) {
+    var entry = gatewayKeys[id];
+    if (entry && (entry.status === "loading" || entry.status === "ok")) return;
+    if (entry && entry.status === "error" && !force) return;
+    var ticket = {};
+    gatewayKeys[id] = { status: "loading", value: "", ticket: ticket };
+    api("POST", "/api/vault/reveal", { kind: "gateway", id: id }).then(function (result) {
+      if (!gatewayKeys[id] || gatewayKeys[id].ticket !== ticket) return;
+      var value = result.data && result.data.ok && result.data.reveal ? result.data.reveal.value : null;
+      if (typeof value === "string") {
+        gatewayKeys[id] = { status: "ok", value: value };
+        paintGatewayKey(id);
+        refreshAccessSoon();
+      } else {
+        gatewayKeys[id] = { status: "error", value: "" };
+        paintGatewayKey(id);
+      }
+    }).catch(function () {
+      if (!gatewayKeys[id] || gatewayKeys[id].ticket !== ticket) return;
+      gatewayKeys[id] = { status: "error", value: "" };
+      paintGatewayKey(id);
+    });
+  }
+
+  function gatewayKeyHtml(item, kick) {
+    var cached = gatewayKeys[item.id];
+    if (!item.tail && !(cached && cached.status === "ok" && cached.value)) return "已保存";
+    if (kick === "force") ensureGatewayKey(item.id, true);
+    else if (kick === "once") ensureGatewayKey(item.id, false);
+    return "<span data-gateway-key=\"" + C.escapeHtml(item.id) + "\">" + gatewayKeyInner(item) + "</span>";
+  }
+
+  function paintGatewayKey(id) {
+    var item = findGateway(id);
+    if (!item) return;
+    var html = gatewayKeyInner(item);
+    document.querySelectorAll("[data-gateway-key]").forEach(function (node) {
+      if (node.getAttribute("data-gateway-key") === id) node.innerHTML = html;
+    });
+  }
+
+  function retryGatewayKey(id) {
+    if (!id) return;
+    delete gatewayKeys[id];
+    ensureGatewayKey(id, true);
+    paintGatewayKey(id);
+  }
+
+  function refreshAccessSoon() {
+    if (accessRefreshTimer) clearTimeout(accessRefreshTimer);
+    accessRefreshTimer = setTimeout(function () {
+      accessRefreshTimer = null;
+      loadAccess();
+    }, 80);
+  }
+
+  // 密码不预取。点「显示」才 reveal，成功后换成 copy-text；失败只提示，对话框其余部分不动。
+  function entryPasswordFact(item) {
+    var id = C.escapeHtml(item.id);
+    var tail = item.tail ? "末四位 " + C.escapeHtml(item.tail) : "已保存";
+    return "<div><dt>密码</dt><dd data-entry-secret=\"" + id + "\">" + tail +
+      " <button type=\"button\" class=\"ghost\" data-entry-show=\"" + id + "\">显示</button></dd></div>";
+  }
+
+  function showEntrySecret(id) {
+    var node = null;
+    document.querySelectorAll("[data-entry-secret]").forEach(function (el) {
+      if (el.getAttribute("data-entry-secret") === id) node = el;
+    });
+    if (!node || node.getAttribute("data-revealing") === "1") return;
+    node.setAttribute("data-revealing", "1");
+    var button = node.querySelector("[data-entry-show]");
+    if (button) button.disabled = true;
+    api("POST", "/api/vault/reveal", { kind: "entry", id: id }).then(function (result) {
+      if (!node.isConnected) return;
+      node.removeAttribute("data-revealing");
+      var value = result.data && result.data.ok && result.data.reveal ? result.data.reveal.value : null;
+      if (typeof value !== "string") {
+        if (button) button.disabled = false;
+        C.toast((result.data && result.data.error) || "读取失败", "danger");
+        return;
+      }
+      node.innerHTML = value ? copyValueHtml(value) : "已保存";
+      loadAccess();
+    }).catch(function () {
+      if (!node.isConnected) return;
+      node.removeAttribute("data-revealing");
+      if (button) button.disabled = false;
+      C.toast("网络异常，请重试", "danger");
+    });
+  }
+
   function entryManageBody(item) {
     var id = C.escapeHtml(item.id);
     return (
       "<dl class=\"kv\">" +
       vaultFact("网址", item.url || "未填写") +
       vaultFact("账号", item.username || "未填写") +
-      vaultFact("密码", item.tail ? "末四位 " + item.tail : "已保存") +
+      entryPasswordFact(item) +
       vaultFact("备注", item.note || "无") +
       vaultFact("分组", groupName(item.group_id)) +
       "</dl>" +
@@ -195,7 +324,7 @@
           vaultFact("协议", item.proto || "未填写") +
           vaultFact("地址", item.base_url || "未填写") +
           vaultFact("模型", item.models || "0 个模型") +
-          vaultFact("密钥", item.tail ? "末四位 " + item.tail : "已保存") +
+          vaultFactHtml("密钥", gatewayKeyHtml(item, "force")) +
           vaultFact("分组", groupName(item.group_id)) +
           "</dl></div>" +
           "<div class=\"manage-actions\">" +
@@ -265,8 +394,12 @@
       icon: "gateway",
       title: item.name,
       status: item.status,
-      facts: [["协议", C.escapeHtml(item.proto || "未填写")], ["地址", C.escapeHtml(item.base_url || "未填写")], ["模型", C.escapeHtml(item.models || "0 个模型")], ["密钥末四位", C.escapeHtml(item.tail)]],
-      actions: "<button type=\"button\" class=\"secondary\" data-vact=\"reveal\" data-kind=\"gateway\" data-id=\"" + C.escapeHtml(item.id) + "\">查看密钥</button>",
+      facts: [
+        ["协议", C.escapeHtml(item.proto || "未填写")],
+        ["地址", C.escapeHtml(item.base_url || "未填写")],
+        ["模型", C.escapeHtml(item.models || "0 个模型")],
+        ["密钥", gatewayKeyHtml(item, activeTab === "gateway" ? "once" : "off")],
+      ],
       manage: "gateway:" + item.id,
     });
   }
@@ -515,7 +648,7 @@
       "<label>名称<input name=\"name\" maxlength=\"60\" autocomplete=\"off\" value=\"" + C.escapeHtml(v.name) + "\" /></label>" +
       protoField(v.proto) +
       "<label>地址<input name=\"base\" maxlength=\"120\" autocomplete=\"off\" value=\"" + C.escapeHtml(v.base_url) + "\" /></label>" +
-      "<label>密钥<input name=\"key\" maxlength=\"200\" autocomplete=\"off\" /><p class=\"subtle field-hint\">" + (item ? "留空表示不修改，填写后只保留末四位" : "列表里只会保留末四位") + "</p></label>" +
+      "<label>密钥<input name=\"key\" maxlength=\"200\" autocomplete=\"off\" /><p class=\"subtle field-hint\">" + (item ? "留空表示不修改" : "保存后显示在卡片上，点击即可复制") + "</p></label>" +
       "<label>分组" + C.groupSelect("group_id", GROUPS || [], v.group_id || "") + "</label>"
     );
   }
@@ -535,7 +668,10 @@
         submitForm(
           ctrl,
           editing ? api("PATCH", "/api/vault/gateways/" + encodeURIComponent(item.id), payload) : api("POST", "/api/vault/gateways", payload),
-          loadGateways
+          function () {
+            if (editing && key) delete gatewayKeys[item.id];
+            loadGateways();
+          }
         );
       },
     });
@@ -570,32 +706,32 @@
     });
   }
 
-  // 查看密码/密钥：先开弹窗占位，再走 reveal 接口拿明文；
-  // 成功后把全字段摆进弹窗（密码/密钥一行带复制按钮），并刷新访问记录
-  function openReveal(kind, item) {
-    var isEntry = kind === "secret";
+  // 列表上的「查看密码」：仍要点一次才取明文（服务端记访问记录）。
+  // 取到的密码用 copy-text，点击文本即复制完整值。
+  function openReveal(item) {
     var ctrl = C.openFormDialog({
-      title: isEntry ? "查看密码" : "查看密钥",
+      title: "查看密码",
       bodyHtml: C.emptyState("正在读取", "马上就好"),
       submitLabel: "关闭",
       onSubmit: function (c) { c.close(); },
     });
-    api("POST", "/api/vault/reveal", { kind: isEntry ? "entry" : "gateway", id: item.id }).then(function (result) {
-      if (!result.data || !result.data.ok) {
+    api("POST", "/api/vault/reveal", { kind: "entry", id: item.id }).then(function (result) {
+      if (!result.data || !result.data.ok || !result.data.reveal || typeof result.data.reveal.value !== "string") {
         ctrl.setBody(C.emptyState("读取失败", (result.data && result.data.error) || "请稍后重试"));
         return;
       }
       var value = result.data.reveal.value;
-      var secretHtml = value
-        ? C.copyLine(value, isEntry ? "复制密码" : "复制密钥")
-        : "<p class=\"subtle\">" + (isEntry ? "还没有保存真实密码" : "还没有保存真实密钥") + "</p>";
-      var facts;
-      if (isEntry) {
-        facts = [["网址", C.escapeHtml(item.url || "未填写")], ["账号", C.escapeHtml(item.username || "未填写")], ["密码末四位", C.escapeHtml(item.tail)], ["备注", C.escapeHtml(item.note || "无")], ["更新时间", C.escapeHtml(C.formatMinute(item.updated_at))]];
-      } else {
-        facts = [["协议", C.escapeHtml(item.proto || "未填写")], ["地址", C.escapeHtml(item.base_url || "未填写")], ["密钥末四位", C.escapeHtml(item.tail)], ["更新时间", C.escapeHtml(C.formatMinute(item.updated_at))]];
-      }
-      ctrl.setBody(secretHtml + C.record({ id: item.id, title: item.name, facts: facts }));
+      ctrl.setBody(C.record({
+        id: item.id,
+        title: item.name,
+        facts: [
+          ["网址", C.escapeHtml(item.url || "未填写")],
+          ["账号", C.escapeHtml(item.username || "未填写")],
+          ["密码", value ? copyValueHtml(value) : "已保存"],
+          ["备注", C.escapeHtml(item.note || "无")],
+          ["更新时间", C.escapeHtml(C.formatMinute(item.updated_at))],
+        ],
+      }));
       loadAccess();
     }).catch(function () {
       ctrl.setBody(C.emptyState("读取失败", "网络异常，请重试"));
@@ -621,6 +757,17 @@
   function handleClick(event) {
     var target = event.target;
     if (!(target instanceof Element)) return;
+    if (target.closest("[data-copy]")) return;
+    var keyRetry = target.closest("[data-gateway-key-retry]");
+    if (keyRetry) {
+      retryGatewayKey(keyRetry.getAttribute("data-gateway-key-retry"));
+      return;
+    }
+    var showSecret = target.closest("[data-entry-show]");
+    if (showSecret) {
+      showEntrySecret(showSecret.getAttribute("data-entry-show"));
+      return;
+    }
     var tab = target.closest(".page-tab");
     if (tab) {
       activeTab = tab.getAttribute("data-tab");
@@ -667,7 +814,7 @@
           else if (vkind === "gateway") openGatewayDialog(vfound);
           else openEmailDialog(vfound);
         } else if (act === "group") openSetGroupDialog(vkind, vfound);
-        else if (act === "reveal") openReveal(vkind, vfound);
+        else if (act === "reveal" && vkind === "secret") openReveal(vfound);
         else if (act === "delete") confirmDelete(vkind, vfound, vact);
       }
     }

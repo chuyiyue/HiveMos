@@ -505,12 +505,14 @@ export async function revealSecret(
     name = row.name;
     stored = row.key_enc;
   }
-  const value = await openSecret(env, stored);
+  // Audit before plaintext is produced. A failed insert fails the reveal,
+  // so the secret never leaves this function without a vault_access_log row.
   await prepare(
     db,
     "INSERT INTO vault_access_log (id, target_kind, target_id, action, created_at) VALUES (?, ?, ?, ?, ?)",
     [newId("va"), kind, id, "reveal", now],
   ).run();
+  const value = await openSecret(env, stored);
   return { kind, id, name, value };
 }
 
