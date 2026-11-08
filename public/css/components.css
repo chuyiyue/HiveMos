@@ -664,7 +664,12 @@ button.is-armed, .is-armed {
 .pop-menu-item:hover,
 .pop-menu-item:focus-visible { background: var(--surface-hover); }
 
-.pop-menu-item.danger { color: var(--danger-text); }
+/* base.css paints every .danger solid red; a menu row is text-only until
+   it arms, so the background is explicitly cleared here. */
+.pop-menu-item.danger { color: var(--danger-text); background: transparent; }
+
+.pop-menu-item.danger:hover,
+.pop-menu-item.danger:focus-visible { background: var(--surface-hover); }
 
 .pop-menu-item.is-armed { background: var(--danger); color: var(--on-danger); }
 
