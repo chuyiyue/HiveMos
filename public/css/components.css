@@ -877,3 +877,7 @@ a.alert-row:hover { background: var(--surface-hover); }
   font-size: 13px;
 }
 .os-icon-auto.is-active { background: var(--bg-sunken); font-weight: 600; }
+
+/* Memory cards: uniform height across each grid (Roye: 等宽等高). */
+.card-list:has(> .mem-card) { grid-auto-rows: 1fr; }
+.mem-card { height: 100%; }
