@@ -361,7 +361,7 @@ img, svg, video, canvas { max-width: 100%; }
 /* System management: settings-center layout (left anchors, right config). */
 .settings {
   display: grid;
-  grid-template-columns: 196px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 24px;
   align-items: start;
 }
@@ -417,7 +417,7 @@ img, svg, video, canvas { max-width: 100%; }
 
 @media (min-width: 640px) and (max-width: 1023px) {
 
-  .settings { grid-template-columns: 176px minmax(0, 1fr); gap: 16px; }
+  .settings { grid-template-columns: minmax(0, 1fr); gap: 16px; }
 }
 
 /* 移动端统计卡一行两个 */

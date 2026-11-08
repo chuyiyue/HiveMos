@@ -36,7 +36,6 @@
   var loadToken = 0;
   var totpToken = 0;
   var bound = false;
-  var navObserver = null;
 
   function passwordScore(password) {
     var value = String(password || "");
@@ -224,7 +223,7 @@
         ["角色", C.escapeHtml(roleText(profile.role))],
         ["创建时间", C.escapeHtml(created)],
       ]);
-    return panel("account-panel", "管理员账号", accountCallouts() + profileForm + passwordForm());
+    return panel("account-panel", "管理员账号", accountCallouts() + profileForm + totpPanel() + passwordForm());
   }
 
   function passwordForm() {
@@ -395,7 +394,7 @@
       error +
       (actions ? '<div class="row-actions">' + actions + "</div>" : "") +
       totpPanelBody();
-    return panel("totp-panel", "两步验证", body);
+    return '<div class="stack" id="totp-panel"><h3>两步验证</h3>' + body + "</div>";
   }
 
   function deviceText(value) {
@@ -539,85 +538,6 @@
     return panel("sidebar-panel", "侧边栏", form);
   }
 
-  var NAV_ITEMS = [
-    ["account-panel", "管理员账号"],
-    ["sessions-panel", "登录记录"],
-    ["totp-panel", "两步验证"],
-    ["system-panel", "系统信息"],
-    ["sidebar-panel", "侧边栏"],
-  ];
-
-  function settingsNav() {
-    var links = NAV_ITEMS.map(function (item) {
-      return (
-        '<a href="#' +
-        item[0] +
-        '"><span class="setting-item-meta"><span class="setting-item-title">' +
-        C.escapeHtml(item[1]) +
-        '</span></span><span class="setting-item-arrow" aria-hidden="true">›</span></a>'
-      );
-    }).join("");
-    return '<nav class="settings-nav" aria-label="设置">' + links + "</nav>";
-  }
-
-  function settingsLayout() {
-    return (
-      '<div class="settings">' +
-      settingsNav() +
-      '<div class="settings-body">' +
-      accountPanel() +
-      sessionsPanel() +
-      totpPanel() +
-      systemPanel() +
-      sidebarPanel() +
-      "</div></div>"
-    );
-  }
-
-  function initSettingsNav() {
-    if (navObserver) {
-      navObserver.disconnect();
-      navObserver = null;
-    }
-    if (!window.matchMedia || window.matchMedia("(max-width: 639px)").matches) return;
-    var nav = document.querySelector(".settings-nav");
-    if (!nav || typeof IntersectionObserver !== "function") return;
-    var links = Array.prototype.slice.call(nav.querySelectorAll('a[href^="#"]'));
-    var sections = links
-      .map(function (link) {
-        return document.querySelector(link.getAttribute("href") || "");
-      })
-      .filter(function (section) {
-        return section instanceof HTMLElement;
-      });
-    if (!links.length || !sections.length) return;
-    function activate(id) {
-      links.forEach(function (link) {
-        var active = link.getAttribute("href") === "#" + id;
-        link.classList.toggle("is-active", active);
-        if (active) link.setAttribute("aria-current", "true");
-        else link.removeAttribute("aria-current");
-      });
-    }
-    activate(sections[0].id || "");
-    navObserver = new IntersectionObserver(
-      function (entries) {
-        var visible = entries
-          .filter(function (entry) {
-            return entry.isIntersecting;
-          })
-          .sort(function (a, b) {
-            return a.boundingClientRect.top - b.boundingClientRect.top;
-          });
-        if (visible[0]) activate(visible[0].target.id);
-      },
-      { rootMargin: "-24% 0px -68% 0px", threshold: 0 },
-    );
-    sections.forEach(function (section) {
-      navObserver.observe(section);
-    });
-  }
-
   function submitPinLimit() {
     var parsed = Number(fieldValue("pinLimitInput"));
     state.busy = true;
@@ -652,7 +572,6 @@
     }
     C.mount(C.layout("", html));
     bind();
-    initSettingsNav();
     var focusSelector = state.focus;
     state.focus = "";
     if (focusSelector) {
