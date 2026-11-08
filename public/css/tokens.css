@@ -1,3 +1,12 @@
+@font-face {
+  font-family: "Twemoji Country Flags";
+  src: url("/fonts/TwemojiCountryFlags.woff2") format("woff2");
+  unicode-range: U+1F1E6-1F1FF;
+  font-display: swap;
+}
+/* Flag glyphs come from the bundled Twemoji Country Flags font (Twemoji, CC-BY 4.0):
+   Windows ships no flag emoji, so the OS alone would render letter pairs. */
+
 /* Claude-inspired warm palette on the SMSinBox token names.
    Light surfaces are warm ivory. Dark surfaces are warm gray, not cool black.
    Terracotta is reserved for primary buttons, the selected nav state, and emphasis.
@@ -94,9 +103,9 @@
   --shadow-3: 0 16px 48px rgba(0, 0, 0, 0.18);
 
   /* Type. Body stays on the SMSinBox sans stack. Brand and page titles use serif. */
-  --font-sans: "Inter", "Inter var", system-ui, -apple-system, "Segoe UI", Roboto,
+  --font-sans: "Twemoji Country Flags", "Inter", "Inter var", system-ui, -apple-system, "Segoe UI", Roboto,
     "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif;
-  --font-serif: Georgia, "Times New Roman", "Songti SC", "SimSun", serif;
+  --font-serif: "Twemoji Country Flags", Georgia, "Times New Roman", "Songti SC", "SimSun", serif;
   --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --fs-xs: 0.75rem;
   --fs-sm: 0.8125rem;
