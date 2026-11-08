@@ -463,11 +463,51 @@
     });
   }
 
+  var PROTO_OPTIONS = ["OpenAI 兼容", "Anthropic", "Gemini", "Azure OpenAI", "Ollama"];
+
+  // 协议标签云单选：预置选项 + 存量自定义值（历史自由文本）追加为额外 chip；
+  // 隐藏的 proto 输入与选中 chip 同步，提交逻辑仍按 name 取值。
+  function protoField(proto) {
+    var selected = String(proto || "");
+    var options = PROTO_OPTIONS.slice();
+    if (selected && options.indexOf(selected) === -1) options.push(selected);
+    return (
+      "<div class=\"tag-field\" data-proto-field>" +
+      "<span>协议</span>" +
+      "<div class=\"choice-row\" role=\"group\" aria-label=\"协议\">" +
+      options.map(function (option) {
+        return (
+          "<button type=\"button\" class=\"perm-item\" data-proto-option=\"" + C.escapeHtml(option) + "\" aria-pressed=\"" +
+          (option === selected ? "true" : "false") + "\">" + C.escapeHtml(option) + "</button>"
+        );
+      }).join("") +
+      "</div>" +
+      "<input type=\"hidden\" name=\"proto\" value=\"" + C.escapeHtml(selected) + "\" />" +
+      "</div>"
+    );
+  }
+  function wireProtoField(form) {
+    var field = form.querySelector("[data-proto-field]");
+    if (!field) return;
+    var hidden = field.querySelector("input[name=\"proto\"]");
+    field.addEventListener("click", function (event) {
+      var target = event.target;
+      if (!(target instanceof Element)) return;
+      var chip = target.closest("[data-proto-option]");
+      if (!chip) return;
+      var wasOn = chip.getAttribute("aria-pressed") === "true";
+      Array.prototype.forEach.call(field.querySelectorAll("[data-proto-option]"), function (peer) {
+        peer.setAttribute("aria-pressed", peer === chip && !wasOn ? "true" : "false");
+      });
+      hidden.value = wasOn ? "" : chip.getAttribute("data-proto-option");
+    });
+  }
+
   function gatewayFields(item) {
     var v = item || { name: "", proto: "", base_url: "" };
     return (
       "<label>名称<input name=\"name\" maxlength=\"60\" autocomplete=\"off\" value=\"" + C.escapeHtml(v.name) + "\" /></label>" +
-      "<label>协议<input name=\"proto\" maxlength=\"30\" autocomplete=\"off\" placeholder=\"例如 OpenAI 兼容\" value=\"" + C.escapeHtml(v.proto) + "\" /></label>" +
+      protoField(v.proto) +
       "<label>地址<input name=\"base\" maxlength=\"120\" autocomplete=\"off\" value=\"" + C.escapeHtml(v.base_url) + "\" /></label>" +
       "<label>密钥<input name=\"key\" maxlength=\"200\" autocomplete=\"off\" /><p class=\"subtle field-hint\">" + (item ? "留空表示不修改，填写后只保留末四位" : "列表里只会保留末四位") + "</p></label>" +
       "<label>分组" + C.groupSelect("group_id", GROUPS || [], v.group_id || "") + "</label>"
@@ -475,7 +515,7 @@
   }
   function openGatewayDialog(item) {
     var editing = !!item;
-    C.openFormDialog({
+    var ctrl = C.openFormDialog({
       title: editing ? "编辑网关" : "添加网关",
       bodyHtml: gatewayFields(item),
       submitLabel: editing ? "保存" : "添加",
@@ -493,6 +533,7 @@
         );
       },
     });
+    wireProtoField(ctrl.form);
   }
 
   function emailFields(item) {
