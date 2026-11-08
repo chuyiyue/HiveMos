@@ -130,7 +130,7 @@
 /* pin 列表为空时 shell 会给本区加 hidden：不能 display:none（自动边距失效、账号区会浮上去），
    改成零高占位继续吸收上方空间，账号区照常贴底 */
 .sidebar-devices[hidden] {
-  display: block;
+  display: block !important;
   height: 0;
   min-height: 0;
   padding-top: 0;
