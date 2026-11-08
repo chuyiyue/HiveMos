@@ -1027,3 +1027,155 @@ export async function readGroupId(db: D1Database, value: unknown): Promise<strin
   if (!group || group.scope !== "machines") throw new MachineError(400, "分组不存在");
   return value;
 }
+
+
+// ---- Worker account stats & asset lists (card fill + tabbed panel) ----
+// Every metric is best-effort: a token without one scope yields null for
+// that metric instead of failing the whole view. List views are audited.
+
+interface CfBody {
+  success?: boolean;
+  errors?: Array<{ message?: string }>;
+  result?: unknown;
+  result_info?: { total_count?: number };
+}
+
+async function cfGetJson(token: string, url: string): Promise<CfBody> {
+  let response: Response;
+  try {
+    response = await fetch(url, { headers: { authorization: "Bearer " + token, accept: "application/json" } });
+  } catch {
+    throw new MachineError(502, "连接 Cloudflare 失败，请稍后重试");
+  }
+  const body = (await response.json().catch(() => null)) as CfBody | null;
+  if (!response.ok || !body || body.success !== true) {
+    const first = body?.errors?.[0];
+    throw new MachineError(502, first?.message ? "Cloudflare：" + first.message : "Cloudflare 返回了无法识别的响应");
+  }
+  return body;
+}
+
+async function cloudflareWorkerRow(
+  db: D1Database,
+  key: ContentKey,
+  id: string,
+): Promise<{ accountId: string; token: string }> {
+  const row = await getMachine(db, id);
+  if (!row) throw new MachineError(404, "机器不存在");
+  if (row.kind !== "worker") throw new MachineError(400, "只有 Workers 条目有此数据");
+  if ((row.platform || "cloudflare") !== "cloudflare") throw new MachineError(400, "仅 Cloudflare 账号支持此功能");
+  if (!row.cf_account_id) throw new MachineError(400, "先填写 Cloudflare 账号 ID");
+  if (!row.api_token_enc) throw new MachineError(400, "先补上 API 令牌");
+  const token = await openMachineSecret(key, row.api_token_enc);
+  return { accountId: row.cf_account_id, token };
+}
+
+export interface WorkerAccountStats {
+  workers_total: number | null;
+  requests_24h: number | null;
+  d1_count: number | null;
+  d1_bytes: number | null;
+  zones_total: number | null;
+  fetched_at: number;
+}
+
+export async function getWorkerAccountStats(
+  db: D1Database,
+  key: ContentKey,
+  id: string,
+  now: number,
+): Promise<WorkerAccountStats> {
+  const { accountId, token } = await cloudflareWorkerRow(db, key, id);
+  const acct = encodeURIComponent(accountId);
+  let workers_total: number | null = null;
+  let requests_24h: number | null = null;
+  let d1_count: number | null = null;
+  let d1_bytes: number | null = null;
+  let zones_total: number | null = null;
+  try {
+    const body = await cfGetJson(token, "https://api.cloudflare.com/client/v4/accounts/" + acct + "/workers/scripts?per_page=100");
+    if (Array.isArray(body.result)) workers_total = body.result.length;
+  } catch { /* metric stays null */ }
+  try {
+    const body = await cfGetJson(token, "https://api.cloudflare.com/client/v4/zones?account.id=" + acct + "&per_page=1");
+    if (typeof body.result_info?.total_count === "number") zones_total = body.result_info.total_count;
+  } catch { /* metric stays null */ }
+  try {
+    const body = await cfGetJson(token, "https://api.cloudflare.com/client/v4/accounts/" + acct + "/d1/database?per_page=100");
+    if (Array.isArray(body.result)) {
+      d1_count = body.result.length;
+      d1_bytes = body.result.reduce((sum: number, entry) => {
+        const size = Number((entry as { file_size?: unknown }).file_size);
+        return sum + (Number.isFinite(size) ? size : 0);
+      }, 0);
+    }
+  } catch { /* metric stays null */ }
+  try {
+    const end = new Date(now);
+    const start = new Date(now - 24 * 3600 * 1000);
+    const response = await fetch("https://api.cloudflare.com/client/v4/graphql", {
+      method: "POST",
+      headers: { authorization: "Bearer " + token, "content-type": "application/json" },
+      body: JSON.stringify({
+        query:
+          "query($a:String!,$s:Time!,$e:Time!){viewer{accounts(filter:{accountTag:$a}){workersInvocationsAdaptive(limit:1,filter:{datetime_geq:$s,datetime_lt:$e}){sum{requests}}}}}",
+        variables: { a: accountId, s: start.toISOString(), e: end.toISOString() },
+      }),
+    });
+    const body = (await response.json().catch(() => null)) as {
+      data?: { viewer?: { accounts?: Array<{ workersInvocationsAdaptive?: Array<{ sum?: { requests?: number } }> }> } };
+    } | null;
+    const requests = body?.data?.viewer?.accounts?.[0]?.workersInvocationsAdaptive?.[0]?.sum?.requests;
+    if (typeof requests === "number") requests_24h = requests;
+  } catch { /* metric stays null */ }
+  return { workers_total, requests_24h, d1_count, d1_bytes, zones_total, fetched_at: now };
+}
+
+export type WorkerAssetKind = "zones" | "d1" | "r2" | "kv";
+
+export async function listWorkerAssets(
+  db: D1Database,
+  key: ContentKey,
+  id: string,
+  kind: WorkerAssetKind,
+  actor: string,
+  now: number,
+): Promise<{ kind: WorkerAssetKind; items: Array<Record<string, unknown>>; fetched_at: number }> {
+  const { accountId, token } = await cloudflareWorkerRow(db, key, id);
+  const acct = encodeURIComponent(accountId);
+  let items: Array<Record<string, unknown>> = [];
+  if (kind === "zones") {
+    const body = await cfGetJson(token, "https://api.cloudflare.com/client/v4/zones?account.id=" + acct + "&per_page=100");
+    const rows = Array.isArray(body.result) ? (body.result as Array<Record<string, unknown>>) : [];
+    items = rows.map((zone) => ({
+      name: String(zone.name ?? ""),
+      status: String(zone.status ?? ""),
+      plan: String((zone.plan as { name?: unknown } | undefined)?.name ?? ""),
+    }));
+  } else if (kind === "d1") {
+    const body = await cfGetJson(token, "https://api.cloudflare.com/client/v4/accounts/" + acct + "/d1/database?per_page=100");
+    const rows = Array.isArray(body.result) ? (body.result as Array<Record<string, unknown>>) : [];
+    items = rows.map((entry) => ({
+      name: String(entry.name ?? ""),
+      uuid: String(entry.uuid ?? entry.id ?? ""),
+      created_at: typeof entry.created_at === "string" ? entry.created_at : null,
+      file_size: Number(entry.file_size) || 0,
+      num_tables: typeof entry.num_tables === "number" ? entry.num_tables : null,
+    }));
+  } else if (kind === "r2") {
+    const body = await cfGetJson(token, "https://api.cloudflare.com/client/v4/accounts/" + acct + "/r2/buckets");
+    const result = body.result as { buckets?: Array<Record<string, unknown>> } | Array<Record<string, unknown>> | undefined;
+    const rows = Array.isArray(result) ? result : Array.isArray(result?.buckets) ? result.buckets : [];
+    items = rows.map((bucket) => ({
+      name: String(bucket.name ?? ""),
+      created_at: typeof bucket.creation_date === "string" ? bucket.creation_date : null,
+      location: String(bucket.location ?? ""),
+    }));
+  } else {
+    const body = await cfGetJson(token, "https://api.cloudflare.com/client/v4/accounts/" + acct + "/storage/kv/namespaces?per_page=100");
+    const rows = Array.isArray(body.result) ? (body.result as Array<Record<string, unknown>>) : [];
+    items = rows.map((ns) => ({ id: String(ns.id ?? ""), title: String(ns.title ?? "") }));
+  }
+  await writeAudit(db, { machineId: id, actor, source: "panel", action: "worker_assets", detail: { kind, count: items.length } }, now);
+  return { kind, items, fetched_at: now };
+}

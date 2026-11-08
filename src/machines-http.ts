@@ -39,6 +39,8 @@ import {
   revealMachineSecret,
   updateMachine,
   vaultKeyOf,
+  getWorkerAccountStats,
+  listWorkerAssets,
 } from "./machines";
 import { logOp, panelActor } from "./oplog";
 
@@ -55,6 +57,10 @@ export async function handleMachinesRequest(request: Request, env: Env, ctx: Wai
   const providerOne = /^\/api\/machines\/providers\/([A-Za-z0-9_-]+)$/.exec(path);
   if (providerOne && providerOne[1]) return providerOneRun(request, env, providerOne[1]);
   if (path === "/api/machines") return collection(request, env, ctx);
+  const workerStats = /^\/api\/machines\/([A-Za-z0-9_-]+)\/worker-stats$/.exec(path);
+  if (workerStats && workerStats[1]) return workerStatsRun(request, env, workerStats[1]);
+  const workerAssets = /^\/api\/machines\/([A-Za-z0-9_-]+)\/worker-assets$/.exec(path);
+  if (workerAssets && workerAssets[1]) return workerAssetsRun(request, env, workerAssets[1]);
   const action = /^\/api\/machines\/([A-Za-z0-9_-]+)\/(reveal|workers|probe)$/.exec(path);
   if (action && action[1] && action[2]) return machineAction(request, env, action[1], action[2]);
   const power = /^\/api\/machines\/([A-Za-z0-9_-]+)\/power$/.exec(path);
@@ -239,6 +245,29 @@ async function machineAction(request: Request, env: Env, id: string, action: str
   });
 }
 
+
+// GET /api/machines/:id/worker-stats - account usage for the card and the
+// account tab; every metric is nullable when the token lacks its scope.
+async function workerStatsRun(request: Request, env: Env, id: string): Promise<Response> {
+  if (request.method !== "GET") return methodNotAllowed("GET");
+  return wrap(async () => {
+    const stats = await getWorkerAccountStats(env.DB, vaultKeyOf(env), id, Date.now());
+    return json({ ok: true, stats });
+  });
+}
+
+// GET /api/machines/:id/worker-assets?kind=zones|d1|r2|kv
+async function workerAssetsRun(request: Request, env: Env, id: string): Promise<Response> {
+  if (request.method !== "GET") return methodNotAllowed("GET");
+  const kind = new URL(request.url).searchParams.get("kind") || "";
+  if (kind !== "zones" && kind !== "d1" && kind !== "r2" && kind !== "kv") {
+    return json({ ok: false, error: "未知的资产类型" });
+  }
+  return wrap(async () => {
+    const result = await listWorkerAssets(env.DB, vaultKeyOf(env), id, kind as "zones" | "d1" | "r2" | "kv", ACTOR, Date.now());
+    return json({ ok: true, kind: result.kind, items: result.items, fetched_at: result.fetched_at });
+  });
+}
 
 // DELETE /api/machines/:id/workers/:name — delete one Cloudflare Worker
 // script under the entry's account, with the entry's stored token.
