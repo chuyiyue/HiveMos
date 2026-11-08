@@ -674,20 +674,27 @@ button.account-logout:hover { background: var(--sidebar-bg-hover); color: var(--
   position: relative;
   display: grid;
   place-items: center;
-  min-height: 40px;
+  min-height: 36px;
   padding: 4px 0 0;
 }
 :root[data-sidebar="collapsed"] .sidebar-brand-row .brand {
   flex: none;
+  width: 32px;
+  height: 32px;
+  align-items: center;
   justify-content: center;
   transition: opacity var(--dur-base) var(--ease);
+}
+:root[data-sidebar="collapsed"] .brand .mark {
+  width: 32px;
+  height: 32px;
 }
 :root[data-sidebar="collapsed"] .sidebar-collapse {
   position: absolute;
   inset: 0;
   margin: auto;
-  width: 36px;
-  height: 36px;
+  width: 32px;
+  height: 32px;
   opacity: 0;
   pointer-events: none;
   transition: opacity var(--dur-base) var(--ease);
