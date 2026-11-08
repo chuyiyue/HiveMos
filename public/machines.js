@@ -269,6 +269,7 @@
       '">Workers</button>' +
       "</div>" +
       '<div class="page-head-actions">' +
+      (activeTab === "hosts" ? '<button type="button" class="secondary" data-providers>服务商管理</button>' : "") +
       '<button type="button" class="secondary add-group-button" data-add-group>添加分组</button>' +
       (activeTab === "servers"
         ? '<button type="button" class="add-button" data-add="server">添加服务器</button>'
@@ -306,6 +307,7 @@
         if (connRes.data && connRes.data.ok) state.connections = connRes.data.connections || [];
         if (groupsRes.data && groupsRes.data.ok) state.groups = groupsRes.data.groups || [];
         render();
+        refreshConnPanel();
         scheduleProbeRefresh();
       })
       .catch(function () {
@@ -741,6 +743,53 @@
     );
   }
 
+  // 服务商管理悬浮面板：连接以与云主机相同的卡片呈现
+  var connPanelCtrl = null;
+  function connCardsHtml() {
+    if (!state.connections.length) return C.emptyState("还没有服务商连接", "用「添加云主机」接入第一个来源");
+    return (
+      '<div class="card-grid">' +
+      state.connections
+        .map(function (conn) {
+          var count = state.items.filter(function (it) { return it.connection_id === conn.id; }).length;
+          var cid = C.escapeHtml(conn.id);
+          return C.record({
+            id: conn.id,
+            icon: "layout",
+            title: conn.name,
+            pill: providerLabel(conn.provider),
+            status: conn.last_test_at ? (conn.last_test_ok ? "running" : "error") : "unknown",
+            statusText: conn.last_test_at ? (conn.last_test_ok ? "测试成功" : "测试失败") : "未测试",
+            facts: [
+              ["凭据", conn.secret_tail ? "末四位 " + C.escapeHtml(conn.secret_tail) : "已保存"],
+              ["已接入设备", count + " 台"],
+              ["最近测试", conn.last_test_at ? C.formatMinute(conn.last_test_at) || "—" : "尚未测试"],
+            ],
+            actions: [
+              { label: "测试连接", attrs: 'data-conn="test" data-id="' + cid + '"' },
+              { label: "同步", attrs: 'data-conn="sync" data-id="' + cid + '"' },
+              { label: "删除连接", danger: true, attrs: 'data-conn="delete" data-id="' + cid + '"' },
+            ],
+          });
+        })
+        .join("") +
+      "</div>"
+    );
+  }
+  function openProvidersPanel() {
+    connPanelCtrl = C.openManageDialog({
+      title: "服务商管理",
+      size: "md",
+      bodyHtml: '<div data-conn-panel>' + connCardsHtml() + "</div>",
+    });
+    connPanelCtrl.dialog.addEventListener("click", handleClick);
+  }
+  function refreshConnPanel() {
+    if (!connPanelCtrl || !connPanelCtrl.dialog.open) return;
+    var slot = connPanelCtrl.bodyEl.querySelector("[data-conn-panel]");
+    if (slot) slot.innerHTML = connCardsHtml();
+  }
+
   function openCloudWizard() {
     var wiz = { provider: "instabox", tested: false, devices: [] };
     var ctrl = C.openFormDialog({
@@ -926,6 +975,8 @@
       render();
       return;
     }
+    var provBtn = target.closest("[data-providers]");
+    if (provBtn) return void openProvidersPanel();
     var addGroupBtn = target.closest("[data-add-group]");
     if (addGroupBtn) { openGroupDialog(null); return; }
     var mgroup = target.closest("[data-mgroup]");
