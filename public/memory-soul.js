@@ -745,69 +745,416 @@
     
   }
 
-  function openSoulHistory(item) {
-    var currentHtml = C.list(
-      C.record({
-        title: "v" + item.version,
-        lede: excerptOf(item.content),
-        facts: [["更新时间", C.escapeHtml(C.formatMinute(item.updated_at) || "—")]],
-        extra: '<span class="subtle">当前版本</span>',
-      })
+  // 打开过的版本列表先留着，再次打开用它立刻渲染，请求回来再换
+  var soulHistoryCache = {};
+
+  function versionPath(id, version) {
+    return "/api/soul/" + encodeURIComponent(id) + "/versions/" + encodeURIComponent(String(version));
+  }
+
+  function versionTitle(v) {
+    var label = v && typeof v.label === "string" ? v.label.trim() : "";
+    return label || "v" + v.version;
+  }
+
+  function versionSourceLabel(source) {
+    if (source === "mcp") return "Agent 写入";
+    if (source === "rollback") return "回滚生成";
+    if (source === "panel") return "面板编辑";
+    return "";
+  }
+
+  function versionExcerpt(content) {
+    var text = String(content || "");
+    return text.length > 120 ? text.slice(0, 120) + "…" : text;
+  }
+
+  function rememberHistory(state) {
+    soulHistoryCache[state.item.id] = {
+      versions: (state.versions || []).map(function (v) { return Object.assign({}, v); }),
+      currentVersion: state.currentVersion,
+    };
+  }
+
+  function historyStatusHtml(state) {
+    return (
+      '<p class="manage-status' +
+      (state.status.error ? " is-error" : "") +
+      '" data-ver-status role="status">' +
+      C.escapeHtml(state.status.text || "") +
+      "</p>"
     );
-    var ctrl = C.openFormDialog({
-      title: item.agent_name + " 的历史版本",
-      size: "md",
-      bodyHtml: currentHtml + '<p class="subtle">其余历史版本读取中</p>',
-      submitLabel: "关闭",
-      onSubmit: function (c) {
-        c.close();
-      },
+  }
+
+  function setHistoryStatus(ctrl, state, text, isError) {
+    state.status = { text: text || "", error: !!isError };
+    if (!ctrl.dialog.open) return;
+    var el = ctrl.bodyEl.querySelector("[data-ver-status]");
+    if (!el) {
+      paintHistory(ctrl, state);
+      return;
+    }
+    el.textContent = state.status.text;
+    el.classList.toggle("is-error", state.status.error);
+  }
+
+  function versionActions(v, ctx) {
+    if (ctx.seed) return "";
+    var version = String(v.version);
+    var current = v.version === ctx.currentVersion;
+    var only = ctx.total <= 1;
+    var html = "";
+    if (ctx.renaming === v.version) {
+      html +=
+        '<div class="ver-rename">' +
+        '<label>显示名称<input data-ver-label="' +
+        version +
+        '" maxlength="80" autocomplete="off" value="' +
+        C.escapeHtml(v.label || "") +
+        '" placeholder="留空则恢复默认名称" /></label>' +
+        '<div class="manage-actions">' +
+        '<button type="button" data-ver-act="rename-save" data-version="' +
+        version +
+        '">保存</button>' +
+        '<button type="button" class="secondary" data-ver-act="rename-cancel" data-version="' +
+        version +
+        '">取消</button>' +
+        "</div></div>";
+    }
+    var buttons = "";
+    if (ctx.renaming !== v.version) {
+      buttons += '<button type="button" class="secondary" data-ver-act="rename" data-version="' + version + '">改名</button>';
+    }
+    buttons += '<button type="button" class="secondary" data-ver-act="edit" data-version="' + version + '">编辑</button>';
+    buttons +=
+      '<button type="button" class="secondary" data-ver-act="up" data-version="' +
+      version +
+      '"' +
+      (ctx.index === 0 ? " disabled" : "") +
+      ">上移</button>";
+    buttons +=
+      '<button type="button" class="secondary" data-ver-act="down" data-version="' +
+      version +
+      '"' +
+      (ctx.index === ctx.total - 1 ? " disabled" : "") +
+      ">下移</button>";
+    if (!current) {
+      buttons += '<button type="button" class="secondary" data-ver-act="rollback" data-version="' + version + '">回滚到此版</button>';
+    }
+    if (current || only) {
+      buttons += '<button type="button" class="danger" data-ver-act="delete" data-version="' + version + '">删除</button>';
+    } else {
+      buttons +=
+        '<button type="button" class="danger" data-confirm-delete data-ver-act="delete" data-version="' +
+        version +
+        '">删除</button>';
+    }
+    return html + buttons;
+  }
+
+  function historyVersionRow(v, ctx) {
+    var source = versionSourceLabel(v.source);
+    var named = !!(v.label && String(v.label).trim());
+    var facts = [];
+    if (named) facts.push(["版本", "v" + v.version]);
+    if (source) facts.push(["来源", source]);
+    facts.push(["时间", C.escapeHtml(C.formatMinute(v.created_at) || "—")]);
+    var current = v.version === ctx.currentVersion;
+    return C.record({
+      className: "soul-version",
+      title: versionTitle(v),
+      pill: current ? "当前版本" : "",
+      lede: versionExcerpt(v.content),
+      facts: facts,
+      actions: versionActions(v, ctx),
     });
-    soulApi("GET", "/api/soul/" + encodeURIComponent(item.id) + "/versions")
-      .then(function (res) {
-        var versions = (res.data && res.data.versions) || [];
-        var cards = versions
-          .map(function (v) {
-            var sourceLabel = v.source === "mcp" ? "Agent 写入" : v.source === "rollback" ? "回滚生成" : "面板编辑";
-            var excerpt = String(v.content || "").slice(0, 120);
-            var action =
-              v.version === item.version
-                ? "<span class=\"subtle\">当前版本</span>"
-                : "<div class=\"row-actions\"><button type=\"button\" class=\"secondary\" data-rollback=\"" + v.version + "\">回滚到此版</button></div>";
-            return C.record({
-              title: "v" + v.version,
-              lede: excerpt,
-              facts: [
-                ["来源", sourceLabel],
-                ["时间", C.escapeHtml(C.formatMinute(v.created_at) || "—")],
-              ],
-              extra: action,
-            });
-          })
-          .join("");
-        ctrl.showResult(cards ? C.list(cards) : C.emptyState("没有历史版本", ""), "关闭");
-        Array.prototype.forEach.call(ctrl.form.querySelectorAll("[data-rollback]"), function (btn) {
-          btn.addEventListener("click", function () {
-            var target = Number(btn.getAttribute("data-rollback"));
-            btn.disabled = true;
-            soulApi("POST", "/api/soul/" + encodeURIComponent(item.id) + "/rollback", { version: target })
-              .then(function (r) {
-                if (r.status === 200 && r.data.soul) {
-                  ctrl.close();
-                  loadSouls();
-                } else {
-                  btn.disabled = false;
-                }
-              })
-              .catch(function () {
-                btn.disabled = false;
-              });
-          });
+  }
+
+  function seedVersion(state) {
+    return {
+      version: state.item.version,
+      content: state.item.content || "",
+      source: "",
+      created_at: state.item.updated_at || state.item.created_at || 0,
+      label: null,
+    };
+  }
+
+  function historyBody(state) {
+    var status = historyStatusHtml(state);
+    if (!state.versions) {
+      var seed = historyVersionRow(seedVersion(state), {
+        currentVersion: state.currentVersion,
+        index: 0,
+        total: 1,
+        seed: true,
+        renaming: null,
+      });
+      var pending = state.pending ? '<p class="subtle">其余历史版本读取中</p>' : "";
+      return status + C.list(seed) + pending;
+    }
+    if (!state.versions.length) return status + C.emptyState("没有历史版本", "");
+    var rows = state.versions
+      .map(function (v, index) {
+        return historyVersionRow(v, {
+          currentVersion: state.currentVersion,
+          index: index,
+          total: state.versions.length,
+          seed: false,
+          renaming: state.renaming,
         });
       })
+      .join("");
+    return status + C.list(rows);
+  }
+
+  function paintHistory(ctrl, state) {
+    if (!ctrl.dialog.open) return;
+    ctrl.setBody(historyBody(state));
+    if (state.renaming == null) return;
+    var input = ctrl.bodyEl.querySelector("[data-ver-label]");
+    if (!input) return;
+    input.focus();
+    var len = input.value.length;
+    if (input.setSelectionRange) input.setSelectionRange(len, len);
+  }
+
+  function fetchHistory(ctrl, state) {
+    var seq = ++state.seq;
+    return soulApi("GET", "/api/soul/" + encodeURIComponent(state.item.id) + "/versions")
+      .then(function (res) {
+        if (!ctrl.dialog.open || seq !== state.seq) return false;
+        if (res.status === 200 && res.data && Array.isArray(res.data.versions)) {
+          state.versions = res.data.versions;
+          state.pending = false;
+          if (typeof res.data.current_version === "number") state.currentVersion = res.data.current_version;
+          rememberHistory(state);
+          if (state.renaming == null) paintHistory(ctrl, state);
+          return true;
+        }
+        state.pending = false;
+        state.status = { text: C.explain(res.data && res.data.error, "历史版本读取失败"), error: true };
+        if (state.renaming == null) paintHistory(ctrl, state);
+        else setHistoryStatus(ctrl, state, state.status.text, true);
+        return false;
+      })
       .catch(function () {
-        ctrl.showResult(currentHtml + C.emptyState("历史版本读取失败", "网络异常，请稍后重试"), "关闭");
+        if (!ctrl.dialog.open || seq !== state.seq) return false;
+        state.pending = false;
+        state.status = { text: "历史版本读取失败", error: true };
+        if (state.renaming == null) paintHistory(ctrl, state);
+        else setHistoryStatus(ctrl, state, state.status.text, true);
+        return false;
       });
+  }
+
+  function applyVersionList(ctrl, state, data) {
+    if (!data || !Array.isArray(data.versions)) return false;
+    state.versions = data.versions;
+    state.pending = false;
+    if (typeof data.current_version === "number") state.currentVersion = data.current_version;
+    rememberHistory(state);
+    if (state.renaming == null) paintHistory(ctrl, state);
+    return true;
+  }
+
+  function saveVersionLabel(ctrl, state, version) {
+    if (state.busy) return;
+    var input = ctrl.bodyEl.querySelector('[data-ver-label="' + version + '"]');
+    var label = input ? input.value : "";
+    state.busy = true;
+    if (input) input.disabled = true;
+    soulApi("PATCH", versionPath(state.item.id, version), { label: label })
+      .then(function (res) {
+        state.busy = false;
+        if (!ctrl.dialog.open) return;
+        if (res.status === 200 && res.data && res.data.ok) {
+          state.renaming = null;
+          state.status = { text: "已改名", error: false };
+          fetchHistory(ctrl, state);
+        } else {
+          if (input && input.isConnected) input.disabled = false;
+          setHistoryStatus(ctrl, state, C.explain(res.data && res.data.error, "改名失败，请重试"), true);
+        }
+      })
+      .catch(function () {
+        state.busy = false;
+        if (input && input.isConnected) input.disabled = false;
+        setHistoryStatus(ctrl, state, "网络异常，请重试", true);
+      });
+  }
+
+  function openVersionEditor(ctrl, state, version) {
+    var found = null;
+    (state.versions || []).forEach(function (v) {
+      if (v.version === version) found = v;
+    });
+    if (!found) return;
+    var wasCurrent = version === state.currentVersion;
+    C.openFormDialog({
+      title: "编辑 " + versionTitle(found),
+      size: "md",
+      bodyHtml:
+        '<label>内容<textarea name="content" rows="12">' + C.escapeHtml(found.content || "") + "</textarea></label>",
+      submitLabel: "保存",
+      onSubmit: function (formCtrl) {
+        var el = formCtrl.form.querySelector('[name="content"]');
+        var content = el ? el.value : "";
+        formCtrl.setBusy(true);
+        soulApi("PATCH", versionPath(state.item.id, version), { content: content })
+          .then(function (res) {
+            formCtrl.setBusy(false);
+            if (res.status === 200 && res.data && res.data.ok) {
+              formCtrl.close();
+              state.status = { text: "已保存", error: false };
+              if (wasCurrent) loadSouls();
+              fetchHistory(ctrl, state);
+            } else {
+              formCtrl.setError(C.explain(res.data && res.data.error, "保存失败，请重试"));
+            }
+          })
+          .catch(function () {
+            formCtrl.setBusy(false);
+            formCtrl.setError("网络异常，请重试");
+          });
+      },
+    });
+  }
+
+  function moveVersion(ctrl, state, version, direction) {
+    if (state.busy) return;
+    state.busy = true;
+    soulApi("POST", versionPath(state.item.id, version) + "/move", { direction: direction })
+      .then(function (res) {
+        state.busy = false;
+        if (!ctrl.dialog.open) return;
+        if (res.status === 200 && res.data && res.data.ok) {
+          state.status = { text: "", error: false };
+          if (applyVersionList(ctrl, state, res.data)) return;
+        }
+        setHistoryStatus(ctrl, state, C.explain(res.data && res.data.error, "排序失败，请重试"), true);
+      })
+      .catch(function () {
+        state.busy = false;
+        setHistoryStatus(ctrl, state, "网络异常，请重试", true);
+      });
+  }
+
+  function rollbackVersion(ctrl, state, version) {
+    if (state.busy) return;
+    state.busy = true;
+    soulApi("POST", "/api/soul/" + encodeURIComponent(state.item.id) + "/rollback", { version: version })
+      .then(function (res) {
+        state.busy = false;
+        if (res.status === 200 && res.data && res.data.soul) {
+          state.currentVersion = res.data.soul.version;
+          state.item = Object.assign({}, state.item, {
+            version: res.data.soul.version,
+            content: res.data.soul.content,
+            updated_at: res.data.soul.updated_at,
+          });
+          state.renaming = null;
+          state.status = { text: "已回滚，新版本已生成", error: false };
+          loadSouls();
+          if (ctrl.dialog.open) fetchHistory(ctrl, state);
+          return;
+        }
+        setHistoryStatus(ctrl, state, C.explain(res.data && res.data.error, "回滚失败，请重试"), true);
+      })
+      .catch(function () {
+        state.busy = false;
+        setHistoryStatus(ctrl, state, "网络异常，请重试", true);
+      });
+  }
+
+  function deleteVersion(ctrl, state, version) {
+    if (state.busy) return;
+    if (state.versions && state.versions.length <= 1) {
+      setHistoryStatus(ctrl, state, "至少保留一个版本", true);
+      return;
+    }
+    if (version === state.currentVersion) {
+      setHistoryStatus(ctrl, state, "当前生效版本不能删除，请先回滚到其他版本再删", true);
+      return;
+    }
+    state.busy = true;
+    soulApi("DELETE", versionPath(state.item.id, version))
+      .then(function (res) {
+        state.busy = false;
+        if (!ctrl.dialog.open) return;
+        if (res.status === 200 && res.data && res.data.ok) {
+          if (state.renaming === version) state.renaming = null;
+          state.status = { text: "已删除", error: false };
+          fetchHistory(ctrl, state);
+          return;
+        }
+        setHistoryStatus(ctrl, state, C.explain(res.data && res.data.error, "删除失败，请重试"), true);
+      })
+      .catch(function () {
+        state.busy = false;
+        setHistoryStatus(ctrl, state, "网络异常，请重试", true);
+      });
+  }
+
+  function onHistoryClick(event, ctrl, state) {
+    var target = event.target;
+    if (!(target instanceof Element)) return;
+    var btn = target.closest("[data-ver-act]");
+    if (!btn || btn.disabled) return;
+    var act = btn.getAttribute("data-ver-act");
+    var version = Number(btn.getAttribute("data-version"));
+    if (!version) return;
+    if (act === "rename") {
+      state.renaming = version;
+      state.status = { text: "", error: false };
+      paintHistory(ctrl, state);
+      return;
+    }
+    if (act === "rename-cancel") {
+      state.renaming = null;
+      paintHistory(ctrl, state);
+      return;
+    }
+    if (act === "rename-save") {
+      saveVersionLabel(ctrl, state, version);
+      return;
+    }
+    if (state.busy) return;
+    if (act === "edit") openVersionEditor(ctrl, state, version);
+    else if (act === "up") moveVersion(ctrl, state, version, "up");
+    else if (act === "down") moveVersion(ctrl, state, version, "down");
+    else if (act === "rollback") rollbackVersion(ctrl, state, version);
+    else if (act === "delete") deleteVersion(ctrl, state, version);
+  }
+
+  function openSoulHistory(item) {
+    var cached = soulHistoryCache[item.id];
+    var state = {
+      item: item,
+      versions: cached && Array.isArray(cached.versions) ? cached.versions.map(function (v) { return Object.assign({}, v); }) : null,
+      currentVersion: cached && typeof cached.currentVersion === "number" ? cached.currentVersion : item.version,
+      renaming: null,
+      busy: false,
+      pending: !(cached && Array.isArray(cached.versions)),
+      seq: 0,
+      status: { text: "", error: false },
+    };
+    var ctrl = C.openManageDialog({
+      title: item.agent_name + " 的历史版本",
+      size: "md",
+      bodyHtml: historyBody(state),
+    });
+    ctrl.dialog.addEventListener("click", function (event) {
+      onHistoryClick(event, ctrl, state);
+    });
+    ctrl.dialog.addEventListener("keydown", function (event) {
+      if (event.key !== "Enter") return;
+      var node = event.target;
+      if (!(node instanceof Element) || !node.matches("[data-ver-label]")) return;
+      event.preventDefault();
+      saveVersionLabel(ctrl, state, Number(node.getAttribute("data-ver-label")));
+    });
+    fetchHistory(ctrl, state);
   }
 
   function deleteSoul(item) {
