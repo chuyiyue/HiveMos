@@ -226,6 +226,13 @@ button.copy-btn:hover { background: var(--surface-hover); }
 [data-panel="oplog"] .tag-row { gap: 8px; margin: 4px 0 10px; }
 [data-panel="oplog"] .tag { padding: 6px 13px; }
 [data-panel="oplog"] .feed { gap: 14px; margin-top: 12px; }
+
+/* 设置页管理员账号：两列各半 */
+.account-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; align-items: start; }
+.account-col { min-width: 0; }
+@media (max-width: 860px) {
+  .account-cols { grid-template-columns: 1fr; }
+}
 .wiz-devices .wiz-device { margin-top: 0; padding: 8px 10px; }
 @media (max-width: 639px) {
   .wiz-devices { grid-template-columns: 1fr; }

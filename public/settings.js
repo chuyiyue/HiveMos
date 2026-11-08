@@ -223,7 +223,17 @@
         ["角色", C.escapeHtml(roleText(profile.role))],
         ["创建时间", C.escapeHtml(created)],
       ]);
-    return panel("account-panel", "管理员账号", accountCallouts() + profileForm + totpPanel() + passwordForm());
+    return panel(
+      "account-panel",
+      "管理员账号",
+      accountCallouts() +
+        '<div class="account-cols"><div class="stack account-col">' +
+        profileForm +
+        '</div><div class="stack account-col">' +
+        totpPanel() +
+        passwordForm() +
+        "</div></div>",
+    );
   }
 
   function passwordForm() {
@@ -398,18 +408,43 @@
   }
 
   function deviceText(value) {
-    if (typeof value !== "string") return "未知设备";
-    var text = value.trim();
-    return text || "未知设备";
+    if (typeof value !== "string" || !value.trim()) return "未知设备";
+    var ua = value;
+    var os = /Windows NT/.test(ua)
+      ? "Windows"
+      : /Android/.test(ua)
+        ? "Android"
+        : /iPhone|iPad|iPod/.test(ua)
+          ? "iOS"
+          : /Mac OS X/.test(ua)
+            ? "macOS"
+            : /Linux/.test(ua)
+              ? "Linux"
+              : "";
+    var m = ua.match(/Edg\/(\d+)/);
+    var browser = m ? "Edge " + m[1] : "";
+    if (!browser) {
+      m = ua.match(/Chrome\/(\d+)/);
+      if (m) browser = "Chrome " + m[1];
+    }
+    if (!browser) {
+      m = ua.match(/Firefox\/(\d+)/);
+      if (m) browser = "Firefox " + m[1];
+    }
+    if (!browser && /Safari\//.test(ua)) {
+      m = ua.match(/Version\/(\d+)/);
+      browser = "Safari" + (m ? " " + m[1] : "");
+    }
+    if (!browser) {
+      m = ua.match(/^([A-Za-z][\w-]*)\//);
+      browser = m ? m[1] : "未知浏览器";
+    }
+    return (os ? os + " · " : "") + browser;
   }
 
   function sessionWhen(session) {
     var created = C.formatMinute(session.created_at);
-    var expires = C.formatMinute(session.expires_at);
-    var parts = [];
-    if (created) parts.push("登录于 " + created);
-    if (expires) parts.push("有效期至 " + expires);
-    return parts.length ? parts.join(" · ") : "会话时间未知";
+    return created ? "登录于 " + created : "会话时间未知";
   }
 
   function sessionRow(session) {
@@ -419,12 +454,10 @@
       '<article class="session-row' +
       (current ? " is-current" : "") +
       '"><div class="session-main"><div class="session-title"><h3>' +
-      C.escapeHtml(current ? "当前会话" : "登录会话") +
+      C.escapeHtml(deviceText(session.user_agent)) +
       "</h3>" +
       (current ? C.badge("当前", "accent") : "") +
       '</div><p class="subtle">' +
-      C.escapeHtml(deviceText(session.user_agent)) +
-      '</p><p class="subtle">' +
       C.escapeHtml(sessionWhen(session)) +
       "</p></div>" +
       '<button type="button" class="' +
