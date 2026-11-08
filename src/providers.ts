@@ -35,6 +35,7 @@ export interface ProviderDevice {
 export type ProviderConfig = Record<string, string>;
 
 export const PROVIDER_LABELS: Record<string, string> = {
+  instabox: "InstaBox",
   huawei: "华为云",
   mcp: "MCP 通用",
 };
@@ -134,6 +135,12 @@ export function readProviderConfig(provider: string, input: Record<string, unkno
       endpoint: readField(input, "endpoint", "接口地址", false, 300),
     };
   }
+  if (provider === "instabox") {
+    return {
+      apiKey: readField(input, "apiKey", "API 密钥", true, 500),
+      endpoint: readField(input, "endpoint", "接口地址", false, 300),
+    };
+  }
   if (provider === "mcp") {
     const endpoint = readField(input, "endpoint", "MCP 端点", true, 500);
     if (!/^https?:\/\//i.test(endpoint)) throw new MachineError(400, "MCP 端点需要以 http:// 或 https:// 开头");
@@ -147,12 +154,14 @@ export function readProviderConfig(provider: string, input: Record<string, unkno
 }
 
 function mainSecretOf(provider: string, config: ProviderConfig): string {
+  if (provider === "instabox") return config["apiKey"] ?? "";
   if (provider === "huawei") return config["secretKey"] ?? "";
   if (provider === "mcp") return config["token"] ?? "";
   return "";
 }
 
 function defaultConnectionName(provider: string, config: ProviderConfig): string {
+  if (provider === "instabox") return "InstaBox 账号";
   if (provider === "huawei") return "华为云 · " + (config["region"] || "");
   if (provider === "mcp") {
     try {
@@ -176,9 +185,67 @@ function normalizeStatus(raw: string): string {
 // Adapters
 
 export async function fetchProviderDevices(provider: string, config: ProviderConfig): Promise<ProviderDevice[]> {
+  if (provider === "instabox") return instaboxListDevices(config);
   if (provider === "huawei") return huaweiListDevices(config);
   if (provider === "mcp") return mcpListDevices(config);
   throw new MachineError(400, "暂不支持这个服务商");
+}
+
+// ---- InstaBox (X-API-Key, REST /v1) ----
+// The vendor this board is built around: an account API key lists the
+// account's boxes (GET /v1/machines, cursor-paginated). Boxes have no
+// public IP or OS in the API view — name, state and spec are what syncs.
+
+async function instaboxFetch(config: ProviderConfig, path: string): Promise<unknown> {
+  const base = (config["endpoint"] || "https://api.instabox.sh").replace(/\/+$/, "");
+  let response: Response;
+  try {
+    response = await fetch(base + path, {
+      headers: { "X-API-Key": config["apiKey"] ?? "", accept: "application/json" },
+      signal: AbortSignal.timeout(15000),
+    });
+  } catch {
+    throw new MachineError(502, "连接 InstaBox 失败，请稍后重试");
+  }
+  if (response.status === 401 || response.status === 403) {
+    throw new MachineError(502, "InstaBox：API 密钥不正确或无权限");
+  }
+  if (response.status === 429) throw new MachineError(502, "InstaBox：请求过于频繁，请稍后重试");
+  if (!response.ok) throw new MachineError(502, "InstaBox 返回异常（HTTP " + response.status + "）");
+  return response.json().catch(() => null);
+}
+
+async function instaboxListDevices(config: ProviderConfig): Promise<ProviderDevice[]> {
+  const devices: ProviderDevice[] = [];
+  let cursor: string | null = null;
+  for (let page = 0; page < 10; page++) {
+    const query = new URLSearchParams({ limit: "100" });
+    if (cursor) query.set("cursor", cursor);
+    const data = (await instaboxFetch(config, "/v1/machines?" + query.toString())) as {
+      machines?: Array<Record<string, unknown>>;
+      nextCursor?: string | null;
+    } | null;
+    if (!data || !Array.isArray(data.machines)) {
+      throw new MachineError(502, "InstaBox 返回了无法识别的响应");
+    }
+    for (const raw of data.machines) {
+      const spec = (raw.spec ?? {}) as Record<string, unknown>;
+      const vcpus = Number(spec.vcpus) || 0;
+      const memGiB = (Number(spec.memMiB) || 0) / 1024;
+      const state = String(raw.state ?? "");
+      devices.push({
+        remoteId: String(raw.id ?? ""),
+        name: String(raw.name ?? raw.id ?? ""),
+        status: ["running", "starting", "resuming", "creating"].includes(state) ? "running" : "offline",
+        os: "",
+        spec: vcpus || memGiB ? vcpus + " 核 / " + (Number.isInteger(memGiB) ? String(memGiB) : memGiB.toFixed(1)) + " GB" : "",
+        ip: "",
+      });
+    }
+    if (!data.nextCursor) break;
+    cursor = String(data.nextCursor);
+  }
+  return devices.filter((device) => device.remoteId !== "");
 }
 
 // ---- Huawei Cloud ECS (AK/SK, SDK-HMAC-SHA256) ----
