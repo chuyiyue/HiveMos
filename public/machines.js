@@ -1,4 +1,4 @@
-/* 云主机板块三页签（服务器 / 云主机 / Workers），数据走 /api/machines。
+/* 云计算资源四页签（服务器 / 云主机 / Workers / 网络节点）。前三页数据走 /api/machines。
    状态、最近心跳是运行态字段（由 Agent 经 MCP 上报），表单里不出现；
    绑定是普通文本字段，随添加/编辑一起保存。
    二期接入：服务器改为极简录入（IP、用户名、密码或密钥二选一、备注），
@@ -10,14 +10,19 @@
    设备可改本地别名、可从连接手动同步；Workers 存 Cloudflare 账号 ID 与
    API 令牌（加密保存），可实时查看该账号名下的 Workers。
    分组：三页签共用一个分组池（groups 表 scope=machines），按分组分区
-   展示、未分组置后；分组可改名/删除，删组后条目回未分组、不删条目。 */
+   展示、未分组置后；分组可改名/删除，删组后条目回未分组、不删条目。
+   网络节点走 /api/nodes：订阅地址和节点链接密封保存，按订阅分组，
+   测活只测 TCP 是否连通，不表示协议握手成功。 */
 (function () {
   var C = window.HiveCommon;
-  var activeTab = location.hash === "#hosts" ? "hosts" : location.hash === "#workers" ? "workers" : "servers";
+  var activeTab = location.hash === "#hosts" ? "hosts" : location.hash === "#workers" ? "workers" : location.hash === "#nodes" ? "nodes" : "servers";
   var API_KIND = { server: "server", host: "cloud", worker: "worker" };
   var TITLE_FOR = { server: "服务器", host: "云主机", worker: "Worker" };
 
-  var state = { items: [], connections: [], groups: [], loaded: false, loadError: "" };
+  var state = {
+    items: [], connections: [], groups: [], loaded: false, loadError: "",
+    subscriptions: [], nodes: [], nodesLoaded: false, nodesError: "", nodesBusy: false,
+  };
   // Full credential values stay off the list payloads. Each surface fetches
   // its own row and caches it for the rest of the page session.
   var connCreds = {};
@@ -557,6 +562,7 @@
       "<div class=\"stack\">" +
       listSection("worker", "Workers", "个") +
       "</div>";
+    var nodesHtml = "<div class=\"stack\">" + nodesPanel() + "</div>";
     var head =
       '<div class="page-head"><div class="page-tabs" role="tablist">' +
       '<button class="page-tab" type="button" role="tab" data-tab="servers" aria-selected="' +
@@ -568,15 +574,22 @@
       '<button class="page-tab" type="button" role="tab" data-tab="workers" aria-selected="' +
       (activeTab === "workers" ? "true" : "false") +
       '">Workers</button>' +
+      '<button class="page-tab" type="button" role="tab" data-tab="nodes" aria-selected="' +
+      (activeTab === "nodes" ? "true" : "false") +
+      '">网络节点</button>' +
       "</div>" +
       '<div class="page-head-actions">' +
-      (activeTab === "hosts" ? '<button type="button" class="secondary add-group-button" data-providers>服务商管理</button>' : "") +
-      '<button type="button" class="secondary add-group-button" data-add-group>添加分组</button>' +
-      (activeTab === "servers"
-        ? '<button type="button" class="add-button" data-add="server">添加服务器</button>'
-        : activeTab === "hosts"
-          ? '<button type="button" class="add-button" data-add="host">添加云主机</button>'
-          : '<button type="button" class="add-button" data-add="worker">添加 Worker</button>') +
+      (activeTab === "nodes"
+        ? '<button type="button" class="secondary" data-nhead="test-all"' + (state.nodesBusy ? " disabled" : "") + '>全部测活</button>' +
+          '<button type="button" class="secondary" data-nhead="import">导入节点</button>' +
+          '<button type="button" class="add-button" data-nhead="add">添加订阅</button>'
+        : (activeTab === "hosts" ? '<button type="button" class="secondary add-group-button" data-providers>服务商管理</button>' : "") +
+          '<button type="button" class="secondary add-group-button" data-add-group>添加分组</button>' +
+          (activeTab === "servers"
+            ? '<button type="button" class="add-button" data-add="server">添加服务器</button>'
+            : activeTab === "hosts"
+              ? '<button type="button" class="add-button" data-add="host">添加云主机</button>'
+              : '<button type="button" class="add-button" data-add="worker">添加 Worker</button>')) +
       "</div></div>";
     C.mount(
       C.layout(
@@ -584,20 +597,34 @@
         head +
           "<div data-panel=\"servers\"" + (activeTab === "servers" ? "" : " hidden") + ">" + serverHtml + "</div>" +
           "<div data-panel=\"hosts\"" + (activeTab === "hosts" ? "" : " hidden") + ">" + hostHtml + "</div>" +
-          "<div data-panel=\"workers\"" + (activeTab === "workers" ? "" : " hidden") + ">" + workerHtml + "</div>"
+          "<div data-panel=\"workers\"" + (activeTab === "workers" ? "" : " hidden") + ">" + workerHtml + "</div>" +
+          "<div data-panel=\"nodes\"" + (activeTab === "nodes" ? "" : " hidden") + ">" + nodesHtml + "</div>"
       )
     );
+  }
+
+  function applyNodesPayload(res) {
+    state.nodesLoaded = true;
+    if (res && res.data && res.data.ok) {
+      state.subscriptions = res.data.subscriptions || [];
+      state.nodes = res.data.nodes || [];
+      state.nodesError = "";
+    } else {
+      state.nodesError = (res && res.data && res.data.error) || "网络节点读取失败";
+    }
   }
 
   function load() {
     var machinesReq = api("GET", "/api/machines");
     var connsReq = api("GET", "/api/machines/providers").catch(function () { return { data: {} }; });
     var groupsReq = api("GET", "/api/groups?scope=machines").catch(function () { return { data: {} }; });
-    return Promise.all([machinesReq, connsReq, groupsReq])
+    var nodesReq = api("GET", "/api/nodes").catch(function () { return { data: {} }; });
+    return Promise.all([machinesReq, connsReq, groupsReq, nodesReq])
       .then(function (results) {
         var res = results[0];
         var connRes = results[1];
         var groupsRes = results[2];
+        applyNodesPayload(results[3]);
         state.loaded = true;
         if (res.data && res.data.ok) {
           state.items = res.data.machines || [];
@@ -615,6 +642,8 @@
       .catch(function () {
         state.loaded = true;
         state.loadError = "云主机数据读取失败";
+        if (!state.nodesLoaded) state.nodesError = "网络节点读取失败";
+        state.nodesLoaded = true;
         render();
       });
   }
@@ -2319,6 +2348,341 @@
     loadWorkers();
   }
 
+  // ---- 网络节点：订阅分组、手动导入、TCP 测活 ----
+
+  function clockHM(ms) {
+    var time = Number(ms);
+    if (!Number.isFinite(time) || time <= 0) return "";
+    var date = new Date(time);
+    if (isNaN(date.getTime())) return "";
+    function pad(number) { return (number < 10 ? "0" : "") + number; }
+    return pad(date.getHours()) + ":" + pad(date.getMinutes());
+  }
+
+  function findSub(id) {
+    var found = null;
+    state.subscriptions.forEach(function (sub) { if (sub.id === id) found = sub; });
+    return found;
+  }
+
+  function findNode(id) {
+    var found = null;
+    state.nodes.forEach(function (node) { if (node.id === id) found = node; });
+    return found;
+  }
+
+  function nodeServerFact(node) {
+    var host = String(node.server || "");
+    var shown = host.indexOf(":") >= 0 ? "[" + host + "]" : host;
+    return '<span class="copy-text" data-copy="' + C.escapeHtml(host) + '" data-label="' + C.escapeHtml(shown) + '" title="点击复制">' + C.escapeHtml(shown) + "</span>:" + Number(node.port);
+  }
+
+  function nodeTestFact(node) {
+    if (node.last_status === "ok") {
+      var bits = ["可达"];
+      if (node.last_latency_ms != null) bits.push(node.last_latency_ms + " ms");
+      var hm = clockHM(node.last_test_at);
+      if (hm) bits.push(hm);
+      return '<span class="status-indicator" data-status="ok">' + C.escapeHtml(bits.join(" · ")) + "</span>";
+    }
+    if (node.last_status === "fail") {
+      var failBits = ["不可达"];
+      var failHm = clockHM(node.last_test_at);
+      if (failHm) failBits.push(failHm);
+      return '<span class="status-indicator" data-status="bad">' + C.escapeHtml(failBits.join(" · ")) + "</span>";
+    }
+    return "未测试";
+  }
+
+  function nodeCard(node) {
+    var id = C.escapeHtml(node.id);
+    var actions =
+      '<button type="button" class="secondary" data-nact="test" data-id="' + id + '">测活</button>' +
+      '<button type="button" class="secondary" data-nact="copy" data-id="' + id + '">复制链接</button>' +
+      '<button type="button" class="danger" data-confirm-delete data-nact="delete" data-id="' + id + '">删除</button>';
+    return C.record({
+      title: node.name || "未命名",
+      pill: node.protocol || "",
+      facts: [
+        ["服务器", nodeServerFact(node)],
+        ["测活", nodeTestFact(node)],
+      ],
+      actions: actions,
+    });
+  }
+
+  function subscriptionSection(sub) {
+    var id = C.escapeHtml(sub.id);
+    var members = state.nodes.filter(function (node) { return node.subscription_id === sub.id; });
+    var body = "";
+    if (sub.last_error) body += '<p class="callout danger" role="alert">' + C.escapeHtml(sub.last_error) + "</p>";
+    if (sub.last_sync_at) body += '<p class="subtle">最近同步 ' + C.escapeHtml(C.formatMinute(sub.last_sync_at) || "") + "</p>";
+    body += members.length ? C.cardList(members.map(nodeCard).join("")) : C.emptyState("还没有节点", "点同步拉取订阅");
+    var actions =
+      '<button type="button" class="secondary" data-nsub="sync" data-id="' + id + '">同步</button>' +
+      '<button type="button" class="secondary" data-nsub="edit" data-id="' + id + '">编辑</button>' +
+      '<button type="button" class="danger" data-confirm-delete data-nsub="delete" data-id="' + id + '">删除</button>';
+    return C.section(sub.name, members.length ? members.length + " 个" : "", body, actions);
+  }
+
+  function nodesPanel() {
+    if (!state.nodesLoaded) return C.section("网络节点", "", C.emptyState("正在加载", "正在读取网络节点"));
+    if (state.nodesError) return C.section("网络节点", "", '<p class="callout danger" role="alert">' + C.escapeHtml(state.nodesError) + "</p>");
+    var known = {};
+    state.subscriptions.forEach(function (sub) { known[sub.id] = true; });
+    var manual = state.nodes.filter(function (node) { return !node.subscription_id || !known[node.subscription_id]; });
+    if (!state.subscriptions.length && !manual.length) {
+      return C.section("网络节点", "", C.emptyState("暂无内容", "点上方按钮添加"));
+    }
+    var html = state.subscriptions.map(subscriptionSection).join("");
+    if (manual.length) html += C.section("手动导入", manual.length + " 个", C.cardList(manual.map(nodeCard).join("")));
+    return html;
+  }
+
+  function reloadNodes() {
+    return api("GET", "/api/nodes")
+      .then(function (res) {
+        if (!res.data || !res.data.ok) {
+          C.toast((res.data && res.data.error) || "网络节点读取失败", "danger");
+          return;
+        }
+        applyNodesPayload(res);
+        render();
+      })
+      .catch(function () {
+        C.toast("网络节点读取失败", "danger");
+      });
+  }
+
+  function toastSync(prefix, sync) {
+    if (!sync || sync.ok === false) {
+      C.toast((prefix ? prefix + "，" : "") + "同步失败：" + ((sync && sync.error) || "请稍后重试"), "danger");
+      return;
+    }
+    var text = prefix + "，新增 " + (sync.added || 0) + " 条，更新 " + (sync.updated || 0) + " 条，移除 " + (sync.removed || 0) + " 条";
+    if (sync.skipped) text += "，跳过 " + sync.skipped + " 条";
+    C.toast(text);
+  }
+
+  function openSubscriptionDialog(sub) {
+    var editing = !!sub;
+    var dlg = C.openFormDialog({
+      title: editing ? "编辑订阅" : "添加订阅",
+      submitLabel: editing ? "保存" : "添加",
+      bodyHtml:
+        '<label>名称<input name="name" maxlength="60" autocomplete="off" value="' + C.escapeHtml(editing ? sub.name : "") + '" /></label>' +
+        '<label>订阅地址<input name="url" maxlength="2048" autocomplete="off" placeholder="' + (editing ? "留空表示不修改" : "https://") + '" /></label>' +
+        (editing
+          ? '<p class="subtle">地址已密封保存，留空则不更换，换了地址后要点同步</p><button type="button" class="secondary" data-nsub-reveal="' + C.escapeHtml(sub.id) + '">复制地址</button>'
+          : '<p class="subtle">保存后会立刻拉取一次</p>'),
+      onSubmit: function (ctrl) {
+        var name = val(ctrl, "name");
+        var url = val(ctrl, "url");
+        if (!name) { ctrl.setError("请填写名称"); return; }
+        if (!editing && !url) { ctrl.setError("请填写订阅地址"); return; }
+        ctrl.setBusy(true);
+        var payload = { name: name };
+        if (url) payload.url = url;
+        var request = editing
+          ? api("PATCH", "/api/nodes/subscriptions/" + encodeURIComponent(sub.id), payload)
+          : api("POST", "/api/nodes/subscriptions", payload);
+        request
+          .then(function (res) {
+            ctrl.setBusy(false);
+            if (!res.data || !res.data.ok) {
+              ctrl.setError((res.data && res.data.error) || "保存失败，请重试");
+              return;
+            }
+            ctrl.close();
+            if (!editing) toastSync("订阅已添加", res.data.sync);
+            else C.toast("已保存");
+            reloadNodes();
+          })
+          .catch(function () {
+            ctrl.setBusy(false);
+            ctrl.setError("保存失败，请重试");
+          });
+      },
+    });
+    if (!editing || !dlg) return;
+    dlg.dialog.addEventListener("click", function (event) {
+      var revealTarget = event.target;
+      if (!(revealTarget instanceof Element)) return;
+      var btn = revealTarget.closest("[data-nsub-reveal]");
+      if (!btn || btn.disabled) return;
+      btn.disabled = true;
+      api("POST", "/api/nodes/subscriptions/" + encodeURIComponent(sub.id) + "/reveal")
+        .then(function (res) {
+          btn.disabled = false;
+          if (!res.data || !res.data.ok || typeof res.data.url !== "string") {
+            C.toast((res.data && res.data.error) || "复制失败，请稍后重试", "danger");
+            return;
+          }
+          return C.copyText(res.data.url).then(function () { C.toast("订阅地址已复制"); });
+        })
+        .catch(function () {
+          btn.disabled = false;
+          C.toast("复制失败，请稍后重试", "danger");
+        });
+    });
+  }
+
+  function openImportDialog() {
+    C.openFormDialog({
+      title: "导入节点",
+      size: "md",
+      submitLabel: "导入",
+      bodyHtml:
+        '<label>节点配置<textarea name="text" rows="12" placeholder="每行一个链接，或一整段 base64，或 Clash YAML"></textarea></label>' +
+        '<p class="subtle">支持 vless、vmess、trojan、ss、hysteria2、tuic。Clash 只读取 proxies 里的名称、类型、服务器和端口</p>',
+      onSubmit: function (ctrl) {
+        var text = val(ctrl, "text");
+        if (!text) { ctrl.setError("请粘贴节点或订阅内容"); return; }
+        ctrl.setBusy(true);
+        api("POST", "/api/nodes/import", { text: text })
+          .then(function (res) {
+            ctrl.setBusy(false);
+            if (!res.data || !res.data.ok) {
+              ctrl.setError((res.data && res.data.error) || "导入失败，请重试");
+              return;
+            }
+            ctrl.close();
+            var added = res.data.added || 0;
+            var updated = res.data.updated || 0;
+            var skipped = res.data.skipped || 0;
+            var msg = "导入完成，新增 " + added + " 条，跳过 " + skipped + " 条";
+            if (updated) msg = "导入完成，新增 " + added + " 条，更新 " + updated + " 条，跳过 " + skipped + " 条";
+            if (!added && !updated) msg = skipped ? "没有导入节点，跳过 " + skipped + " 条" : "没有解析出节点";
+            C.toast(msg);
+            reloadNodes();
+          })
+          .catch(function () {
+            ctrl.setBusy(false);
+            ctrl.setError("导入失败，请重试");
+          });
+      },
+    });
+  }
+
+  function syncOneSubscription(id, btn) {
+    if (btn) btn.disabled = true;
+    api("POST", "/api/nodes/subscriptions/" + encodeURIComponent(id) + "/sync")
+      .then(function (res) {
+        if (!res.data || !res.data.ok) {
+          C.toast((res.data && res.data.error) || "同步失败", "danger");
+          if (btn) btn.disabled = false;
+          return;
+        }
+        toastSync("同步完成", res.data.sync);
+        reloadNodes();
+      })
+      .catch(function () {
+        C.toast("同步失败", "danger");
+        if (btn) btn.disabled = false;
+      });
+  }
+
+  function deleteOneSubscription(sub, btn) {
+    if (btn) btn.disabled = true;
+    api("DELETE", "/api/nodes/subscriptions/" + encodeURIComponent(sub.id))
+      .then(function (res) {
+        if (!res.data || !res.data.ok) {
+          C.toast((res.data && res.data.error) || "删除失败", "danger");
+          if (btn) btn.disabled = false;
+          return;
+        }
+        C.toast("已删除订阅「" + sub.name + "」");
+        reloadNodes();
+      })
+      .catch(function () {
+        C.toast("删除失败", "danger");
+        if (btn) btn.disabled = false;
+      });
+  }
+
+  function testOneNode(node, btn) {
+    btn.disabled = true;
+    btn.textContent = "测活中";
+    api("POST", "/api/nodes/" + encodeURIComponent(node.id) + "/test")
+      .then(function (res) {
+        if (!res.data || !res.data.ok || !res.data.node) {
+          btn.disabled = false;
+          btn.textContent = "测活";
+          C.toast((res.data && res.data.error) || "测活失败", "danger");
+          return;
+        }
+        var fresh = res.data.node;
+        state.nodes = state.nodes.map(function (item) { return item.id === fresh.id ? fresh : item; });
+        if (res.data.reachable) C.toast("可达" + (res.data.latency_ms != null ? " · " + res.data.latency_ms + " ms" : ""));
+        else C.toast("不可达");
+        render();
+      })
+      .catch(function () {
+        btn.disabled = false;
+        btn.textContent = "测活";
+        C.toast("测活失败", "danger");
+      });
+  }
+
+  function testEveryNode(btn) {
+    if (state.nodesBusy) return;
+    state.nodesBusy = true;
+    if (btn) btn.disabled = true;
+    api("POST", "/api/nodes/test-all")
+      .then(function (res) {
+        state.nodesBusy = false;
+        if (!res.data || !res.data.ok) {
+          C.toast((res.data && res.data.error) || "测活失败", "danger");
+          render();
+          return;
+        }
+        var reachable = res.data.reachable || 0;
+        var unreachable = res.data.unreachable || 0;
+        C.toast(!reachable && !unreachable ? "没有可测的节点" : "可达 " + reachable + "，不可达 " + unreachable);
+        reloadNodes();
+      })
+      .catch(function () {
+        state.nodesBusy = false;
+        C.toast("测活失败", "danger");
+        render();
+      });
+  }
+
+  function copyNodeLink(node, btn) {
+    if (btn) btn.disabled = true;
+    api("POST", "/api/nodes/" + encodeURIComponent(node.id) + "/copy")
+      .then(function (res) {
+        if (btn) btn.disabled = false;
+        if (!res.data || !res.data.ok || typeof res.data.raw !== "string" || !res.data.raw) {
+          C.toast((res.data && res.data.error) || "复制失败，请稍后重试", "danger");
+          return;
+        }
+        return C.copyText(res.data.raw).then(function () { C.toast("链接已复制"); });
+      })
+      .catch(function () {
+        if (btn) btn.disabled = false;
+        C.toast("复制失败，请稍后重试", "danger");
+      });
+  }
+
+  function deleteOneNode(node, btn) {
+    if (btn) btn.disabled = true;
+    api("DELETE", "/api/nodes/" + encodeURIComponent(node.id))
+      .then(function (res) {
+        if (!res.data || !res.data.ok) {
+          C.toast((res.data && res.data.error) || "删除失败", "danger");
+          if (btn) btn.disabled = false;
+          return;
+        }
+        C.toast("已删除「" + node.name + "」");
+        reloadNodes();
+      })
+      .catch(function () {
+        C.toast("删除失败", "danger");
+        if (btn) btn.disabled = false;
+      });
+  }
+
   var page = document.getElementById("page");
   page.addEventListener("click", handleClick);
 
@@ -2356,6 +2720,33 @@
       return;
     }
     if (target.closest("[data-copy]")) return;
+    var nhead = target.closest("[data-nhead]");
+    if (nhead && !nhead.disabled) {
+      var nwhat = nhead.getAttribute("data-nhead");
+      if (nwhat === "add") openSubscriptionDialog(null);
+      else if (nwhat === "import") openImportDialog();
+      else if (nwhat === "test-all") testEveryNode(nhead);
+      return;
+    }
+    var nsub = target.closest("[data-nsub]");
+    if (nsub && !nsub.disabled) {
+      var nsubId = nsub.getAttribute("data-id");
+      var nsubFound = findSub(nsubId);
+      var nsubAct = nsub.getAttribute("data-nsub");
+      if (nsubFound && nsubAct === "sync") syncOneSubscription(nsubId, nsub);
+      else if (nsubFound && nsubAct === "edit") openSubscriptionDialog(nsubFound);
+      else if (nsubFound && nsubAct === "delete") deleteOneSubscription(nsubFound, nsub);
+      return;
+    }
+    var nact = target.closest("[data-nact]");
+    if (nact && !nact.disabled) {
+      var nactFound = findNode(nact.getAttribute("data-id"));
+      var nactName = nact.getAttribute("data-nact");
+      if (nactFound && nactName === "test") testOneNode(nactFound, nact);
+      else if (nactFound && nactName === "copy") copyNodeLink(nactFound, nact);
+      else if (nactFound && nactName === "delete") deleteOneNode(nactFound, nact);
+      return;
+    }
     var credRetry = target.closest("[data-conn-cred-retry]");
     if (credRetry) {
       retryConnCred(credRetry.getAttribute("data-conn-cred-retry"));
