@@ -453,6 +453,9 @@
       var facts = [["平台", item.platform === "vercel" ? "Vercel" : "Cloudflare"]];
       if (item.platform === "vercel") {
         if (item.team_id) facts.push(["Team ID", C.escapeHtml(item.team_id)]);
+        facts.push(["项目总量", workerStatSpan(item, "projects")]);
+        facts.push(["域名数量", workerStatSpan(item, "vdomains")]);
+        facts.push(["最近部署", workerStatSpan(item, "deploy")]);
       } else {
         facts.push(["Workers 总量", workerStatSpan(item, "workers")]);
         facts.push(["Workers 用量", workerStatSpan(item, "requests")]);
@@ -2066,6 +2069,9 @@
     if (metric === "requests") return stats.requests_24h == null ? "—" : "近 24 小时 " + stats.requests_24h + " 次";
     if (metric === "d1") return stats.d1_count == null ? "—" : stats.d1_count + " 个 · " + fmtSize(stats.d1_bytes);
     if (metric === "zones") return stats.zones_total == null ? "—" : stats.zones_total + " 个";
+    if (metric === "projects") return stats.projects_total == null ? "—" : stats.projects_total + " 个";
+    if (metric === "vdomains") return stats.domains_total == null ? "—" : stats.domains_total + " 个";
+    if (metric === "deploy") return stats.latest_deploy_at == null ? "—" : C.formatMinute(stats.latest_deploy_at) || "—";
     return "—";
   }
   function paintWorkerStats(id) {
@@ -2089,19 +2095,21 @@
   function fillWorkerStats() {
     if (activeTab !== "workers") return;
     state.items.forEach(function (item) {
-      if (item.kind === "worker" && (item.platform || "cloudflare") === "cloudflare") ensureWorkerStats(item);
+      if (item.kind === "worker") ensureWorkerStats(item);
     });
   }
   function assetRecord(kind, entry) {
     if (kind === "zones") return C.record({ id: entry.name, title: entry.name, facts: [["状态", C.escapeHtml(entry.status || "—")], ["套餐", C.escapeHtml(entry.plan || "—")]] });
     if (kind === "d1") return C.record({ id: entry.uuid || entry.name, title: entry.name, facts: [["大小", fmtSize(entry.file_size)], ["创建时间", C.escapeHtml(entry.created_at ? String(entry.created_at).slice(0, 10) : "—")]] });
     if (kind === "r2") return C.record({ id: entry.name, title: entry.name, facts: [["创建时间", C.escapeHtml(entry.created_at ? String(entry.created_at).slice(0, 10) : "—")], ["区域", C.escapeHtml(entry.location || "—")]] });
+    if (kind === "vdomains") return C.record({ id: entry.name, title: entry.name, facts: [["创建时间", C.escapeHtml(entry.created_at ? String(entry.created_at).slice(0, 10) : "—")]] });
+    if (kind === "deployments") return C.record({ id: String(entry.name) + String(entry.created_at), title: entry.name || entry.url, facts: [["状态", C.escapeHtml(entry.state || "—")], ["时间", C.escapeHtml(entry.created_at ? String(entry.created_at).slice(0, 16).replace("T", " ") : "—")], ["地址", C.escapeHtml(entry.url || "—")]] });
     return C.record({ id: entry.id, title: entry.title || entry.id, facts: [["ID", "<span class=\"copy-text\" data-copy=\"" + C.escapeHtml(entry.id) + "\" data-label=\"" + C.escapeHtml(entry.id) + "\" title=\"点击复制\">" + C.escapeHtml(entry.id) + "</span>"]] });
   }
   function openWorkerPanel(item, startTab) {
     var isVercel = (item.platform || "cloudflare") === "vercel";
     var tabs = isVercel
-      ? [["account", "账号信息"], ["workers", "项目"]]
+      ? [["account", "账号信息"], ["vdomains", "域名"], ["workers", "项目"], ["deployments", "部署"]]
       : [["account", "账号信息"], ["zones", "域名"], ["workers", "Workers"], ["d1", "D1"], ["r2", "R2"], ["kv", "KV"]];
     var bar = tabs.map(function (t) {
       return "<button type=\"button\" class=\"wp-tab\" data-wtab=\"" + t[0] + "\" aria-selected=\"" + (t[0] === startTab ? "true" : "false") + "\">" + t[1] + "</button>";
@@ -2124,16 +2132,15 @@
           : "<div><dt>Cloudflare 账号</dt><dd>" + C.escapeHtml(item.cf_account_id || "未填写") + "</dd></div>") +
         "<div><dt>API 令牌</dt><dd>" + (item.api_token_tail ? workerTokenHtml(item, true) : "未填写") + "</dd></div>" +
         "<div><dt>更新时间</dt><dd>" + C.escapeHtml(C.formatMinute(item.updated_at) || "—") + "</dd></div>";
-      var stats = "";
-      if (!isVercel) {
-        stats =
-          "<div class=\"manage-info-card\"><dl class=\"kv\">" +
-          "<div><dt>Workers 总量</dt><dd>" + workerStatSpan(item, "workers") + "</dd></div>" +
+      var statRows = isVercel
+        ? "<div><dt>项目总量</dt><dd>" + workerStatSpan(item, "projects") + "</dd></div>" +
+          "<div><dt>域名数量</dt><dd>" + workerStatSpan(item, "vdomains") + "</dd></div>" +
+          "<div><dt>最近部署</dt><dd>" + workerStatSpan(item, "deploy") + "</dd></div>"
+        : "<div><dt>Workers 总量</dt><dd>" + workerStatSpan(item, "workers") + "</dd></div>" +
           "<div><dt>Workers 用量</dt><dd>" + workerStatSpan(item, "requests") + "</dd></div>" +
           "<div><dt>D1 数据库</dt><dd>" + workerStatSpan(item, "d1") + "</dd></div>" +
-          "<div><dt>域名数量</dt><dd>" + workerStatSpan(item, "zones") + "</dd></div>" +
-          "</dl></div>";
-      }
+          "<div><dt>域名数量</dt><dd>" + workerStatSpan(item, "zones") + "</dd></div>";
+      var stats = "<div class=\"manage-info-card\"><dl class=\"kv\">" + statRows + "</dl></div>";
       pane.innerHTML =
         "<div class=\"manage-info-card\"><dl class=\"kv\">" + facts + "</dl></div>" + stats +
         "<div class=\"manage-actions\">" +
@@ -2141,7 +2148,7 @@
         "<button type=\"button\" class=\"secondary\" data-mact=\"edit\" data-kind=\"worker\" data-id=\"" + id + "\">编辑</button>" +
         "<button type=\"button\" class=\"danger\" data-confirm-delete data-mact=\"delete\" data-kind=\"worker\" data-id=\"" + id + "\">删除</button>" +
         "</div>";
-      if (!isVercel) ensureWorkerStats(item);
+      ensureWorkerStats(item);
     }
     function assetsPane(kind) {
       pane.innerHTML = C.emptyState("正在读取", "马上就好");
