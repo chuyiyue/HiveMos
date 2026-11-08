@@ -278,12 +278,12 @@ export async function buildBackupPackage(db: D1Database, now: number): Promise<B
 
   const versions = await rows(
     db,
-    "SELECT id, soul_id, version, source, actor, created_at, content FROM soul_versions ORDER BY soul_id ASC, version ASC",
+    "SELECT id, soul_id, version, source, actor, created_at, label, sort_order, content FROM soul_versions ORDER BY soul_id ASC, version ASC",
   );
   for (const row of versions) {
     const dir = `soul/${segment(row["soul_id"], "soul")}/versions`;
     const n = segment(row["version"], "0");
-    entity("soul_versions", `${dir}/${n}.json`, row, ["id", "soul_id", "version", "source", "actor", "created_at"]);
+    entity("soul_versions", `${dir}/${n}.json`, row, ["id", "soul_id", "version", "source", "actor", "created_at", "label", "sort_order"]);
     add(`${dir}/${n}.md`, String(row["content"] ?? ""));
   }
 
