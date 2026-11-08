@@ -81,9 +81,78 @@
   var SOULS = [];
   var soulsLoaded = false;
 
+  // ---- 管理弹窗（点卡片信息区打开） ----
+
+  function openManage(key) {
+    if (!key) return;
+    var sep = key.indexOf(":");
+    var kind = key.slice(0, sep);
+    var id = key.slice(sep + 1);
+    var pool = kind === "memory" ? MEMORIES : SOULS;
+    var found = null;
+    pool.forEach(function (entry) {
+      if (entry.id === id) found = entry;
+    });
+    if (!found) return;
+    if (kind === "memory") openMemoryManage(found);
+    else openSoulManage(found);
+  }
+
+  function openMemoryManage(item) {
+    var id = C.escapeHtml(item.id);
+    var ctrl = C.openManageDialog({
+      title: item.title,
+      bodyHtml:
+        "<dl class=\"kv\">" +
+        "<div><dt>作用域</dt><dd>" + C.escapeHtml(item.scope || "未注明") + "</dd></div>" +
+        "<div><dt>来源</dt><dd>" + C.escapeHtml(item.source || "未注明") + "</dd></div>" +
+        "<div><dt>更新时间</dt><dd>" + C.escapeHtml(C.formatMinute(item.updated_at) || "未知") + "</dd></div>" +
+        "</dl>" +
+        "<h3 class=\"manage-subhead\">内容</h3>" +
+        "<p>" + C.escapeHtml(excerptOf(item.content)) + "</p>" +
+        "<div class=\"manage-actions\">" +
+        "<button type=\"button\" class=\"secondary\" data-card-act=\"edit\" data-kind=\"memory\" data-id=\"" + id + "\">编辑</button>" +
+        "<button type=\"button\" class=\"danger\" data-card-act=\"delete\" data-kind=\"memory\" data-id=\"" + id + "\">删除</button>" +
+        "</div>",
+    });
+    ctrl.dialog.addEventListener("click", handleClick);
+  }
+
+  function openSoulManage(item) {
+    var id = C.escapeHtml(item.id);
+    var ctrl = C.openManageDialog({
+      title: item.agent_name,
+      bodyHtml:
+        "<dl class=\"kv\">" +
+        "<div><dt>版本</dt><dd>v" + C.escapeHtml(String(item.version)) + "</dd></div>" +
+        "<div><dt>更新时间</dt><dd>" + C.escapeHtml(C.formatMinute(item.updated_at) || "未知") + "</dd></div>" +
+        "</dl>" +
+        "<div class=\"manage-actions\">" +
+        "<button type=\"button\" class=\"secondary\" data-card-act=\"edit\" data-kind=\"soul\" data-id=\"" + id + "\">编辑</button>" +
+        "<button type=\"button\" class=\"secondary\" data-card-act=\"history\" data-kind=\"soul\" data-id=\"" + id + "\">历史版本</button>" +
+        "<button type=\"button\" class=\"danger\" data-card-act=\"delete\" data-kind=\"soul\" data-id=\"" + id + "\">删除</button>" +
+        "</div>" +
+        "<div class=\"confirm-slot\" data-confirm-soul=\"" + id + "\"></div>",
+    });
+    ctrl.dialog.addEventListener("click", handleClick);
+  }
+
   function render() {
     var memCards = MEMORIES.map(function (item) {
-      return C.record({ id: item.id, title: item.title, lede: excerptOf(item.content), facts: [["作用域", C.escapeHtml(item.scope)], ["来源", C.escapeHtml(item.source)], ["更新时间", C.escapeHtml(fmtTime(item.updated_at))]], expandKey: "memory:" + item.id, expandBody: C.expandActions('<button type="button" class="secondary" data-card-act="edit" data-kind="memory" data-id="' + C.escapeHtml(item.id) + '">编辑</button><button type="button" class="danger" data-card-act="delete" data-kind="memory" data-id="' + C.escapeHtml(item.id) + '">删除</button>') });
+      return C.record({
+        id: item.id,
+        icon: "memory",
+        title: item.title,
+        pill: item.scope,
+        lede: excerptOf(item.content),
+        facts: [
+          ["来源", C.escapeHtml(item.source || "未注明")],
+          ["更新时间", C.escapeHtml(fmtTime(item.updated_at))],
+        ],
+        actions:
+          "<button type=\"button\" class=\"secondary\" data-copy=\"" + C.escapeHtml(item.content || "") + "\" data-label=\"复制内容\">复制内容</button>",
+        manage: "memory:" + item.id,
+      });
     }).join("");
     var memoryBody;
     if (memoryError) memoryBody = C.emptyState("记忆加载失败", memoryError);
@@ -97,7 +166,18 @@
       "<div id=\"memory-confirm\"></div>" +
       "</div>";
     var soulCards = SOULS.map(function (item) {
-      return C.record({ id: item.id, title: item.agent_name, lede: "当前版本 v" + item.version, facts: [["版本", "v" + item.version], ["更新时间", C.escapeHtml(C.formatMinute(item.updated_at) || "—")]], expandKey: "soul:" + item.id, expandBody: C.expandActions('<button type="button" class="secondary" data-card-act="edit" data-kind="soul" data-id="' + C.escapeHtml(item.id) + '">编辑</button><button type="button" class="secondary" data-card-act="history" data-kind="soul" data-id="' + C.escapeHtml(item.id) + '">历史版本</button><button type="button" class="danger" data-card-act="delete" data-kind="soul" data-id="' + C.escapeHtml(item.id) + '">删除</button>') + '<div class="confirm-slot" data-confirm-soul="' + C.escapeHtml(item.id) + '"></div>' });
+      return C.record({
+        id: item.id,
+        icon: "soul",
+        title: item.agent_name,
+        facts: [
+          ["版本", "v" + item.version],
+          ["更新时间", C.escapeHtml(C.formatMinute(item.updated_at) || "—")],
+        ],
+        actions:
+          "<button type=\"button\" class=\"secondary\" data-card-act=\"history\" data-kind=\"soul\" data-id=\"" + C.escapeHtml(item.id) + "\">历史版本</button>",
+        manage: "soul:" + item.id,
+      });
     }).join("");
     var soulBody = !soulsLoaded
       ? C.emptyState("正在加载 Soul", "马上就好")
@@ -237,8 +317,9 @@
     });
   }
 
-  function removeMemory(item) {
-    var anchor = document.getElementById("memory-confirm");
+  function removeMemory(item, srcEl) {
+    var dlg = srcEl && srcEl.closest ? srcEl.closest("[data-manage-dialog]") : null;
+    var anchor = (dlg && dlg.querySelector("[data-manage-confirm]")) || document.getElementById("memory-confirm");
     C.askConfirm({
       anchor: anchor,
       title: "删除记忆",
@@ -248,7 +329,7 @@
     }).then(function (yes) {
       if (!yes) return;
       api("DELETE", "/api/memory/" + encodeURIComponent(item.id)).then(function (result) {
-        if (result.data && result.data.ok) loadMemories();
+        if (result.data && result.data.ok) { C.closeCurrentOverlay(); loadMemories(); }
       });
     });
   }
@@ -317,13 +398,15 @@
     }).then(function (yes) {
       if (!yes) return;
       soulApi("DELETE", "/api/soul/" + encodeURIComponent(item.id)).then(function (res) {
-        if (res.status === 200) loadSouls();
+        if (res.status === 200) { C.closeCurrentOverlay(); loadSouls(); }
       });
     });
   }
 
   var page = document.getElementById("page");
-  page.addEventListener("click", function (event) {
+  page.addEventListener("click", handleClick);
+
+  function handleClick(event) {
     var target = event.target;
     if (!(target instanceof Element)) return;
     var tab = target.closest(".page-tab");
@@ -339,6 +422,12 @@
       else openSoulDialog(null);
       return;
     }
+    var zone = target.closest("[data-manage]");
+    if (zone) {
+      if (target.closest("button, a, input, select, textarea")) return;
+      openManage(zone.getAttribute("data-manage"));
+      return;
+    }
     var cardAct = target.closest("[data-card-act]");
     if (cardAct) {
       var akind = cardAct.getAttribute("data-kind");
@@ -350,10 +439,10 @@
         var act = cardAct.getAttribute("data-card-act");
         if (act === "edit") { if (akind === "memory") openMemoryDialog(afound); else openSoulDialog(afound); }
         else if (act === "history") openSoulHistory(afound);
-        else if (act === "delete") { if (akind === "memory") removeMemory(afound); else deleteSoul(afound); }
+        else if (act === "delete") { if (akind === "memory") removeMemory(afound, cardAct); else deleteSoul(afound); }
       }
     }
-  });
+  }
   render();
   loadMemories();
   loadSouls();
