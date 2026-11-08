@@ -6,6 +6,16 @@ import { json } from "./http";
 import type { Env, WaitCtx } from "./env";
 import { authenticateAgent, fetchConfigForAgent, searchServers } from "./registry";
 import {
+  SoulError,
+  getSoulByName,
+  getVersion,
+  listSouls,
+  recordSoulRead,
+  soulDetail,
+  soulSummary,
+  upsertSoulByName,
+} from "./soul";
+import {
   CalError,
   calendarPublic,
   createEvent,
@@ -229,6 +239,37 @@ const TOOLS = [
       additionalProperties: false,
     },
   },
+  {
+    name: "soul_list",
+    description: "列出全部 Agent 的 Soul 当前版本摘要（Agent 名、版本号、更新时间），不含全文",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "soul_get",
+    description: "按 Agent 名取 Soul 全文，返回当前版本号；传 version 可取某个历史版本。读取会记审计",
+    inputSchema: {
+      type: "object",
+      properties: {
+        agent_name: { type: "string", description: "Agent 名" },
+        version: { type: "number", description: "要取的历史版本号，缺省取当前版" },
+      },
+      required: ["agent_name"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "soul_update",
+    description: "写入某个 Agent 的 Soul 新版全文，版本号自动递增并留历史。该 Agent 还没有 Soul 时自动新建",
+    inputSchema: {
+      type: "object",
+      properties: {
+        agent_name: { type: "string", description: "Agent 名" },
+        content: { type: "string", description: "Soul 全文" },
+      },
+      required: ["agent_name", "content"],
+      additionalProperties: false,
+    },
+  },
 ];
 
 // Every panel tool belongs to a permission domain (see PERMISSION_DOMAINS
@@ -250,6 +291,9 @@ const TOOL_DOMAINS: Record<string, string> = {
   memory_get: "memory",
   memory_upsert: "memory",
   memory_delete: "memory",
+  soul_list: "soul",
+  soul_get: "soul",
+  soul_update: "soul",
 };
 
 function domainOfTool(name: string): string | null {
@@ -357,6 +401,11 @@ async function callTool(request: Request, env: Env, id: unknown, params: unknown
       return await callMemoryTool(env, id, name, record as Record<string, unknown>, auth.agentId);
     } catch (error) {
       if (error instanceof MemError) return toolResult(id, error.message, true);
+  if (name.startsWith("soul_")) {
+    try {
+      return await callSoulTool(env, id, name, record as Record<string, unknown>, auth.agentId);
+    } catch (error) {
+      if (error instanceof SoulError) return toolResult(id, error.message, true);
       throw error;
     }
   }
@@ -374,6 +423,39 @@ async function callTool(request: Request, env: Env, id: unknown, params: unknown
 function argString(args: Record<string, unknown>, key: string): string | undefined {
   const value = args[key];
   return typeof value === "string" ? value : undefined;
+}
+
+async function callSoulTool(env: Env, id: unknown, name: string, args: Record<string, unknown>, agentId: string): Promise<Response> {
+  const now = Date.now();
+  if (name === "soul_list") {
+    const souls = await listSouls(env.DB);
+    return toolResult(id, { souls: souls.map(soulSummary) });
+  }
+  if (name === "soul_get") {
+    const agentName = argString(args, "agent_name");
+    if (!agentName || !agentName.trim()) return toolResult(id, "请提供 agent_name", true);
+    const row = await getSoulByName(env.DB, agentName.trim());
+    if (!row) return toolResult(id, "这个 Agent 还没有 Soul", true);
+    const wanted = typeof args.version === "number" ? args.version : null;
+    if (wanted !== null) {
+      const versionRow = await getVersion(env.DB, row.id, wanted);
+      if (!versionRow) return toolResult(id, "这个版本不存在", true);
+      await recordSoulRead(env.DB, row, agentId, versionRow.version, now);
+      return toolResult(id, {
+        agent_name: row.agent_name,
+        version: versionRow.version,
+        content: versionRow.content,
+        created_at: versionRow.created_at,
+      });
+    }
+    await recordSoulRead(env.DB, row, agentId, row.version, now);
+    return toolResult(id, soulDetail(row));
+  }
+  if (name === "soul_update") {
+    const updated = await upsertSoulByName(env.DB, args.agent_name, args.content, agentId, "mcp", now);
+    return toolResult(id, soulDetail(updated));
+  }
+  return toolResult(id, "未知工具", true);
 }
 
 async function callCalendarTool(env: Env, id: unknown, name: string, args: Record<string, unknown>, agentId: string): Promise<Response> {
