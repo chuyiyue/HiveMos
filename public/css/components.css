@@ -48,6 +48,32 @@ input:focus, textarea:focus, select:focus {
 
 .icon-btn:hover { background: var(--surface-hover); }
 
+/* Segmented track (parity with SMSinBox 的 .segmented): one option pressed
+   at a time. Segments size to their labels and never wrap their own text;
+   the track itself wraps on narrow phones instead of overflowing. */
+.segmented {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  padding: 3px;
+  background: var(--bg-sunken);
+  border-radius: var(--r-md);
+}
+
+.segment {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  min-height: 34px;
+  padding: 4px 12px;
+  background: transparent;
+  color: var(--text-2);
+  border: 0;
+}
+
+/* Keep the generic accent hover out: a pressed segment reads as the surface. */
+.segment:hover { background: var(--surface-hover); color: var(--text); }
+.segment[aria-pressed="true"] { background: var(--surface); color: var(--text); box-shadow: var(--shadow-1); }
+
 .card, .panel {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -338,6 +364,24 @@ dialog.action-menu::backdrop { background: var(--overlay); }
 .switch[aria-checked="true"] { background: var(--accent-button); border-color: transparent; }
 .switch[aria-checked="true"] .switch-knob { left: 20px; background: var(--on-accent); }
 
+/* 分段轨道：选项并排放在凹陷轨道上，选中项抬起；标签不换行 */
+.segmented { display: inline-flex; flex-wrap: wrap; gap: 3px; padding: 3px; background: var(--bg-sunken); border-radius: var(--r-md); }
+.segment {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  min-height: 34px;
+  padding: 0 12px;
+  background: transparent;
+  color: var(--text-2);
+  border: 0;
+}
+.segment:hover { background: var(--surface-hover); color: var(--text); }
+.segment[aria-pressed="true"] { background: var(--surface); color: var(--text); box-shadow: var(--shadow-1); }
+
+@media (max-width: 639px) {
+  .segment { min-height: 44px; }
+}
+
 /* Manage dialog/panel: info head, info card, in-dialog tabs, danger zone. */
 .manage-info-head { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
 .manage-info-icon { flex: none; width: 44px; height: 44px; border-radius: var(--r-md); background: var(--bg-sunken); display: grid; place-items: center; color: var(--text-2); }
@@ -608,6 +652,7 @@ dialog.side-panel[open] { animation: side-panel-in 0.22s ease; }
 
 @media (max-width: 639px) {
   article.record { padding: 16px; }
+  .segment { min-height: 44px; }
 }
 
 /* ---- Card lists: responsive grid ----

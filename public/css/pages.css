@@ -247,6 +247,10 @@ button.copy-btn:hover { background: var(--surface-hover); }
 /* 设置页管理员账号：两列各半 */
 .account-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; align-items: start; }
 
+/* 设置页功能设置：定时任务频率与侧边栏上限各占一列 */
+.feature-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; align-items: start; }
+.feature-item { min-width: 0; }
+
 /* 端口转发与保活弹窗 */
 .port-row { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--r-md); margin-top: 8px; }
 .port-main { display: grid; gap: 1px; min-width: 0; flex: 1; }
@@ -261,6 +265,7 @@ button.copy-btn:hover { background: var(--surface-hover); }
 .account-col { min-width: 0; }
 @media (max-width: 860px) {
   .account-cols { grid-template-columns: 1fr; }
+  .feature-cols { grid-template-columns: 1fr; gap: 16px; }
 }
 .wiz-devices .wiz-device { margin-top: 0; padding: 8px 10px; }
 @media (max-width: 639px) {
@@ -498,6 +503,27 @@ img, svg, video, canvas { max-width: 100%; }
 
 .settings-section:target {
   box-shadow: 0 0 0 2px var(--accent-soft), var(--shadow-1);
+}
+
+/* 功能设置：两项并排一行（对应 SMSinBox /users 的 feature 区），窄屏落成
+   一列。min-width: 0 让半栏能收缩，而不是撑破轨道。 */
+.feature-cols {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 24px;
+  align-items: start;
+}
+
+.feature-item { min-width: 0; }
+.feature-item h3 { margin: 0; }
+.feature-item .subtle { margin: 0; }
+
+@media (max-width: 767px) {
+  .feature-cols { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .feature-item + .feature-item {
+    border-top: 1px solid var(--border);
+    padding-top: 16px;
+  }
 }
 
 @media (min-width: 640px) and (max-width: 1023px) {

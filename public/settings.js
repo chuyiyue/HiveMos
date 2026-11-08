@@ -1,5 +1,7 @@
-/* 管理员账号、两步验证、会话管理、系统信息、侧边栏。
-   版式照 SMSinBox /users：页内设置导航 + 分区面板。数据来自 /api/account/* 与 /api/system/info */
+/* 管理员账号、两步验证、会话管理、功能设置、系统信息。
+   版式照 SMSinBox /users：页内设置导航 + 分区面板。数据来自 /api/account/*、
+   /api/settings 与 /api/system/info；定时任务频率与侧边栏自动展示上限都在
+   /api/settings 这一处读写 */
 (function () {
   var C = window.HiveCommon;
   var state = {
@@ -28,7 +30,10 @@
     sessions: [],
     sessionsError: "",
     pinLimitInput: "",
-    pinLimitError: "",
+    cronInterval: 6,
+    savedCronInterval: 6,
+    savedPinLimit: 5,
+    featuresError: "",
     busy: false,
     focus: "",
     focusSelect: false,
@@ -36,6 +41,22 @@
   var loadToken = 0;
   var totpToken = 0;
   var bound = false;
+
+  var CRON_INTERVAL_OPTIONS = [
+    { hours: 1, label: "每小时" },
+    { hours: 3, label: "每 3 小时" },
+    { hours: 6, label: "每 6 小时" },
+    { hours: 12, label: "每 12 小时" },
+    { hours: 24, label: "每天" },
+  ];
+
+  function cronIntervalLabel(hours) {
+    var value = Number(hours);
+    for (var i = 0; i < CRON_INTERVAL_OPTIONS.length; i += 1) {
+      if (CRON_INTERVAL_OPTIONS[i].hours === value) return CRON_INTERVAL_OPTIONS[i].label;
+    }
+    return "每 6 小时";
+  }
 
   function passwordScore(password) {
     var value = String(password || "");
@@ -586,10 +607,14 @@
       ["保险库条目", count("vault_entries")],
       ["登录会话", String(state.sessions.length)],
       [
-        "快照定时",
+        "定时任务",
         systemFactValue(function (s) {
           var cron = s.cron || {};
-          var head = "每 6 小时（" + C.escapeHtml(cron.schedule || "0 */6 * * *") + "）";
+          var head =
+            cronIntervalLabel(cron.interval_hours) +
+            "执行（" +
+            C.escapeHtml(cron.schedule || "0 * * * *") +
+            "，每小时检查）";
           if (cron.last_run_at) {
             var when = C.formatMinute(cron.last_run_at) || "未知时间";
             return cron.active
@@ -611,45 +636,121 @@
     return panel("system-panel", "系统信息", body);
   }
 
-  function sidebarPanel() {
-    var form =
-      '<form id="sidebar-form" class="form-grid" novalidate>' +
-      '<label>展示上限<input data-field="pinLimitInput" name="pinLimitInput" type="number" min="1" max="20" step="1" inputmode="numeric" value="' +
-      C.escapeHtml(state.pinLimitInput) +
-      '" /><p class="subtle field-hint">侧边栏最多展示的 Agent 数量，固定的包含在内，范围 1–20</p></label>' +
-      fieldError("pin-limit-error", state.pinLimitError) +
-      '<div class="row-actions"><button type="submit"' +
-      (state.busy ? " disabled" : "") +
-      ">保存</button></div></form>";
-    return panel("sidebar-panel", "侧边栏", form);
+  function featureDirty() {
+    if (state.loading) return false;
+    // 按文本比对：非法或空值也算「有改动」，这样保存按钮可点、提交时给出校验提示
+    var raw = String(state.pinLimitInput).trim();
+    return state.cronInterval !== state.savedCronInterval || raw !== String(state.savedPinLimit);
   }
 
-  function submitPinLimit() {
-    var parsed = Number(fieldValue("pinLimitInput"));
-    state.busy = true;
-    state.pinLimitError = "";
+  function paintFeatureState() {
+    var dirty = featureDirty();
+    var save = document.querySelector('#features-form [type="submit"]');
+    if (save) save.disabled = !dirty || state.busy;
+    var hint = document.getElementById("features-dirty");
+    if (hint) hint.hidden = !dirty;
+  }
+
+  function cronSegment() {
+    return (
+      '<div class="segmented" role="group" aria-label="定时任务频率">' +
+      CRON_INTERVAL_OPTIONS.map(function (option) {
+        return (
+          '<button type="button" class="segment" data-action="set-cron-interval" data-hours="' +
+          option.hours +
+          '" aria-pressed="' +
+          (state.cronInterval === option.hours ? "true" : "false") +
+          '">' +
+          C.escapeHtml(option.label) +
+          "</button>"
+        );
+      }).join("") +
+      "</div>"
+    );
+  }
+
+  function featuresPanel() {
+    var dirty = featureDirty();
+    var body =
+      '<form id="features-form" class="stack" novalidate>' +
+      '<div class="feature-cols">' +
+      '<div class="stack feature-item"><h3>定时任务频率</h3>' +
+      '<p class="subtle">控制日历镜像同步、连接状态检查、工具快照刷新与机器保活的实际执行间隔，系统每小时检查一次，未到间隔不执行</p>' +
+      cronSegment() +
+      "</div>" +
+      '<div class="stack feature-item"><h3>侧边栏自动展示上限</h3>' +
+      '<p class="subtle">侧边栏自动填充的 Agent 数量上限，固定的 Agent 不受影响，范围 1 到 20</p>' +
+      '<label>展示上限<input data-field="pinLimitInput" name="pinLimitInput" type="number" min="1" max="20" step="1" inputmode="numeric" value="' +
+      C.escapeHtml(state.pinLimitInput) +
+      '" /></label>' +
+      "</div>" +
+      "</div>" +
+      fieldError("features-error", state.featuresError, "callout danger") +
+      '<div class="row-actions"><button type="submit"' +
+      (!dirty || state.busy ? " disabled" : "") +
+      ">保存功能设置</button><span id=\"features-dirty\" class=\"subtle\"" +
+      (dirty ? "" : " hidden") +
+      ">有改动尚未保存</span></div>" +
+      "</form>";
+    return panel("features-panel", "功能设置", body);
+  }
+
+  function setCronInterval(control) {
+    var hours = Number(control.getAttribute("data-hours"));
+    var known = CRON_INTERVAL_OPTIONS.some(function (option) {
+      return option.hours === hours;
+    });
+    if (!known) return;
+    state.cronInterval = hours;
+    state.featuresError = "";
+    state.focus = '[data-action="set-cron-interval"][data-hours="' + hours + '"]';
     render();
-    api("PATCH", "/api/account/preferences", { sidebar_pin_limit: parsed }).then(function (result) {
+  }
+
+  function submitFeatures() {
+    var raw = String(fieldValue("pinLimitInput")).trim();
+    var limit = Number(raw);
+    state.pinLimitInput = raw;
+    state.featuresError = "";
+    if (raw === "" || !Number.isInteger(limit) || limit < 1 || limit > 20) {
+      state.featuresError = "展示上限需要 1 到 20 之间的整数";
+      state.focus = '[data-field="pinLimitInput"]';
+      render();
+      return;
+    }
+    state.busy = true;
+    render();
+    api("PATCH", "/api/settings", {
+      sidebar_pin_limit: limit,
+      cron_interval_hours: state.cronInterval,
+    }).then(function (result) {
       state.busy = false;
-      if (!result.data || result.data.ok !== true || !result.data.preferences) {
-        fail('[data-field="pinLimitInput"]', "pinLimitError", result, "保存失败，请重试");
+      if (loggedOut(result)) return;
+      var saved = result.data && result.data.settings;
+      if (!result.data || result.data.ok !== true || !saved) {
+        fail("", "featuresError", result, "保存失败，请重试");
         return;
       }
-      state.pinLimitInput = String(result.data.preferences.sidebar_pin_limit);
-      state.pinLimitError = "";
+      state.savedPinLimit = Number(saved.sidebar_pin_limit);
+      state.pinLimitInput = String(saved.sidebar_pin_limit);
+      state.savedCronInterval = Number(saved.cron_interval_hours);
+      state.cronInterval = state.savedCronInterval;
+      state.featuresError = "";
       render();
+      // 系统信息里的「定时任务」行按新间隔重算，否则刚存完还显示旧频率
+      loadSystem();
       window.dispatchEvent(new CustomEvent("hivemos:sidebar-refresh"));
-      toast("侧边栏上限已保存");
+      toast("功能设置已保存");
     });
   }
 
-  // 无左侧导航的堆叠版式（管理员账号 / 会话管理 / 侧边栏 / 系统信息）
+  // 无左侧导航的堆叠版式（管理员账号 / 会话管理 / 功能设置 / 系统信息）
   function settingsLayout() {
     return (
       '<div class="settings"><div class="settings-body">' +
       accountPanel() +
       sessionsPanel() +
-      sidebarPanel() +
+      featuresPanel() +
       systemPanel() +
       "</div></div>"
     );
@@ -717,7 +818,10 @@
       state.accountError = "";
     }
     if (field === "totpCode" || field === "totpPassword") clearNote("totp-error", "totpError");
-    if (field === "pinLimitInput") clearNote("pin-limit-error", "pinLimitError");
+    if (field === "pinLimitInput") {
+      clearNote("features-error", "featuresError");
+      paintFeatureState();
+    }
   }
 
   function clearNote(id, key) {
@@ -755,6 +859,7 @@
     else if (action === "refresh-sessions") reloadSessions();
     else if (action === "revoke-session") revokeSession(control.getAttribute("data-id") || "");
     else if (action === "revoke-others") revokeOthers(control);
+    else if (action === "set-cron-interval") setCronInterval(control);
   }
 
   function onSubmit(event) {
@@ -764,7 +869,7 @@
     if (state.busy) return;
     if (form.id === "profile-form") submitProfile();
     else if (form.id === "password-form") submitPassword();
-    else if (form.id === "sidebar-form") submitPinLimit();
+    else if (form.id === "features-form") submitFeatures();
   }
 
   function fail(slot, key, result, fallback) {
@@ -1134,7 +1239,7 @@
       api("GET", "/api/account/profile"),
       api("GET", "/api/account/totp"),
       api("GET", "/api/account/sessions"),
-      api("GET", "/api/account/preferences"),
+      api("GET", "/api/settings"),
     ]).then(
       function (results) {
         if (token !== loadToken) return;
@@ -1149,12 +1254,16 @@
         var profile = results[0];
         var totp = results[1];
         var sessions = results[2];
-        var preferences = results[3];
-        if (preferences.data && preferences.data.ok === true && preferences.data.preferences) {
-          state.pinLimitInput = String(preferences.data.preferences.sidebar_pin_limit);
-        } else if (!state.pinLimitInput) {
-          state.pinLimitInput = "5";
+        var settingsResult = results[3];
+        if (settingsResult.data && settingsResult.data.ok === true && settingsResult.data.settings) {
+          var savedSettings = settingsResult.data.settings;
+          state.savedPinLimit = Number(savedSettings.sidebar_pin_limit);
+          state.pinLimitInput = String(savedSettings.sidebar_pin_limit);
+          state.savedCronInterval = Number(savedSettings.cron_interval_hours);
+          state.cronInterval = state.savedCronInterval;
         }
+        // 功能设置读不到不拦整页：面板回退到默认值，而保存按钮只有在真改过
+        // （与默认值不同）时才会亮，不会把默认值误写回去。
         var failed = [profile, totp, sessions].filter(function (item) {
           return !item.data || item.data.ok !== true;
         })[0];
@@ -1174,6 +1283,13 @@
       },
     );
   }
+
+  // 手动保存的同类设置：离开页面前提醒还没提交的改动
+  window.addEventListener("beforeunload", function (event) {
+    if (!featureDirty()) return;
+    event.preventDefault();
+    event.returnValue = "";
+  });
 
   load();
 })();
