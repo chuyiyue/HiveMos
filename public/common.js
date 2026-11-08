@@ -190,10 +190,13 @@
     style.id = "hive-avatar-styles";
     style.textContent = [
       ".agent-avatar-img{object-fit:cover;border-radius:26%}",
-      ".manage-avatar-btn{display:grid;place-items:center;width:44px;height:44px;padding:0;border:0;border-radius:var(--r-md);background:var(--bg-sunken);color:var(--text-2);cursor:pointer}",
+      ".manage-avatar-btn{position:relative;overflow:hidden;display:grid;place-items:center;width:44px;height:44px;padding:0;border:0;border-radius:var(--r-md);background:var(--bg-sunken);color:var(--text-2);cursor:pointer}",
       ".manage-avatar-btn:hover{box-shadow:0 0 0 2px var(--accent)}",
       ".manage-avatar-btn .icon{width:24px;height:24px}",
-      ".manage-avatar-btn img{width:44px;height:44px;border-radius:var(--r-md);object-fit:cover;display:block}",
+      ".manage-avatar-btn img.agent-avatar-img{width:44px;height:44px;border-radius:inherit;object-fit:cover;display:block}",
+      ".manage-avatar-edit{position:absolute;inset:0;display:grid;place-items:center;background:rgba(28,25,23,.38);color:#fff;opacity:0;pointer-events:none;transition:opacity var(--dur-base) var(--ease)}",
+      ".manage-avatar-btn:hover .manage-avatar-edit,.manage-avatar-btn:focus-visible .manage-avatar-edit{opacity:1}",
+      ".manage-avatar-edit .icon{width:18px;height:18px}",
       ".avatar-search-label{display:block}",
       ".avatar-search-label input{width:100%;margin-top:6px}",
       ".avatar-cat{margin:16px 0 8px;font-size:var(--fs-sm);font-weight:600;color:var(--text-2)}",
@@ -569,6 +572,7 @@
       "</span>" +
       "<div class=\"manage-info-titles\"><h3 class=\"manage-info-name\">" +
       escapeHtml(o.title || "") +
+      (o.titleSuffix || "") +
       "</h3>" +
       (o.sub ? "<p class=\"manage-info-sub\">" + escapeHtml(o.sub) + "</p>" : "") +
       "</div></div>"
@@ -598,9 +602,7 @@
     var endpoint = mcpEndpoint();
     var advanced =
       "<div class=\"manage-actions\">" +
-      "<button type=\"button\" class=\"secondary\" data-agent-act=\"rename\">改名</button>" +
       "<button type=\"button\" class=\"secondary\" data-agent-act=\"move\">设置分组</button>" +
-      "<button type=\"button\" class=\"secondary\" data-agent-act=\"avatar\">更换头像</button>" +
       (active ? "<button type=\"button\" class=\"secondary\" data-agent-act=\"rotate\">轮换令牌</button>" : "") +
       "</div>" +
       (active
@@ -617,9 +619,11 @@
         iconHtml:
           "<button type=\"button\" class=\"manage-avatar-btn\" data-agent-act=\"avatar\" title=\"更换头像\" aria-label=\"更换头像\">" +
           agentAvatarHtml(agent, "icon") +
+          "<span class=\"manage-avatar-edit\" aria-hidden=\"true\"><svg class=\"icon\" viewBox=\"0 0 24 24\"><use href=\"/icons.svg#icon-edit\"></use></svg></span>" +
           "</button>",
         title: agent.name,
         sub: (active ? "已启用" : "已停用") + " · Agent · " + (partial ? "读取中" : groupName || "未分组"),
+        titleSuffix: "<button type=\"button\" class=\"manage-name-edit\" data-agent-act=\"rename\" title=\"改名\" aria-label=\"改名\"><svg class=\"icon\" viewBox=\"0 0 24 24\" aria-hidden=\"true\"><use href=\"/icons.svg#icon-edit\"></use></svg></button>",
       }) +
       "<div class=\"manage-info-card\"><dl class=\"kv\">" +
       "<div><dt>状态</dt><dd>" +
