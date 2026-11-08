@@ -661,7 +661,7 @@
   }
 
   function list(html, extraClass) {
-    return '<div class="list' + (extraClass ? " " + extraClass : "") + '>' + html + "</div>";
+    return '<div class="list' + (extraClass ? " " + extraClass : "") + '">' + html + "</div>";
   }
 
   // Card lists render as a responsive grid (two columns on desktop, one
