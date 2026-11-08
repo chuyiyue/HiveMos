@@ -29,6 +29,8 @@
   }
   // 与其它板块同一套卡片菜单入口：record 的 extra 里放「高级」按钮
   // 记忆走真后端 /api/memory；加改删后一律以服务端返回为准重新拉取
+  // 标签总量上限：与服务端 src/memory.ts 的 MAX_MEMORY_TAGS 同值，改动时同步。
+  var MAX_MEMORY_TAGS = 30;
   var MEMORIES = [];
   var memoryLoaded = false;
   var memoryError = "";
@@ -706,11 +708,13 @@
   function mergeMemoryTags(srcEl) {
     if (srcEl) srcEl.disabled = true;
     var anchor = srcEl && srcEl.closest ? srcEl.closest(".page-head-actions") : null;
+    var overCap = allMemTags().length > MAX_MEMORY_TAGS;
     C.askConfirm({
       anchor: anchor || srcEl,
       title: "合并近义标签",
-      text:
-        "AI 会把意思相近的标签合并成一个，所有记忆的标签都会被改写；完整映射会记入系统日志。要继续吗？",
+      text: overCap
+        ? "当前标签已超过 " + MAX_MEMORY_TAGS + " 个上限，AI 会把全库收敛成不超过 " + MAX_MEMORY_TAGS + " 个大分类，所有记忆的标签都会被改写；完整映射会记入系统日志。要继续吗？"
+        : "AI 会把意思相近的标签合并成一个，所有记忆的标签都会被改写；完整映射会记入系统日志。要继续吗？",
     }).then(function (yes) {
       if (srcEl) srcEl.disabled = false;
       if (!yes) return;
