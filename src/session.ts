@@ -7,6 +7,7 @@ import {
   sha256Hex,
 } from "./auth";
 import { createSession, deleteSession, findSessionUser } from "./accounts";
+import { logOp } from "./oplog";
 import type { Env } from "./env";
 import { isCrossSite, json, readCookie } from "./http";
 import type { SessionUser } from "./accounts";
@@ -54,6 +55,16 @@ export async function issueSession(
     userAgent: sessionUserAgent(request),
     expiresAt: now + SESSION_TTL_SECONDS * 1000,
     createdAt: now,
+  });
+  // Every completed login flows through here (plain login in index.ts and
+  // the TOTP verify path alike), so this is the one place that records it.
+  await logOp(env.DB, {
+    actor: user.username,
+    module: "账号",
+    action: "登录",
+    targetId: user.id,
+    targetName: user.username,
+    text: "登录了面板",
   });
   const headers = new Headers();
   headers.set("set-cookie", sessionCookieHeader(token, requestIsSecure(request), SESSION_TTL_SECONDS));

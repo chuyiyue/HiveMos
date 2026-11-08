@@ -32,6 +32,7 @@ import {
   updateEvent,
   findConflicts,
 } from "./calendar";
+import { logOp, panelActor } from "./oplog";
 
 const MAX_BODY_BYTES = 2 * 1024 * 1024; // ICS imports can be sizeable.
 const ACTOR = "user";
@@ -110,6 +111,14 @@ async function calendars(request: Request, env: Env): Promise<Response> {
     if (!body.ok) return body.response;
     return wrap(async () => {
       const created = await createCalendar(env.DB, body.value, ACTOR, Date.now());
+      await logOp(env.DB, {
+        actor: await panelActor(request, env),
+        module: "日历",
+        action: "添加",
+        targetId: created.id,
+        targetName: created.name,
+        text: created.kind === "mirror" ? `添加了镜像日历「${created.name}」并完成首次同步` : `添加了日历「${created.name}」`,
+      });
       if (created.kind === "mirror") {
         const report = await syncMirror(env.DB, created, Date.now());
         const fresh = (await listCalendars(env.DB)).find((cal) => cal.id === created.id) ?? created;
@@ -126,11 +135,32 @@ async function calendarOne(request: Request, env: Env, id: string): Promise<Resp
   if (method === "PATCH") {
     const body = await readBody(request);
     if (!body.ok) return body.response;
-    return wrap(async () => json({ ok: true, calendar: calendarPublic(await updateCalendar(env.DB, id, body.value, Date.now())) }));
+    return wrap(async () => {
+      const updated = await updateCalendar(env.DB, id, body.value, Date.now());
+      await logOp(env.DB, {
+        actor: await panelActor(request, env),
+        module: "日历",
+        action: "修改",
+        targetId: id,
+        targetName: updated.name,
+        text: `修改了日历「${updated.name}」`,
+      });
+      return json({ ok: true, calendar: calendarPublic(updated) });
+    });
   }
   if (method === "DELETE") {
     return wrap(async () => {
+      const before = (await listCalendars(env.DB)).find((cal) => cal.id === id);
       await deleteCalendar(env.DB, id, ACTOR, Date.now());
+      const name = before?.name ?? id;
+      await logOp(env.DB, {
+        actor: await panelActor(request, env),
+        module: "日历",
+        action: "删除",
+        targetId: id,
+        targetName: name,
+        text: `删除了日历「${name}」`,
+      });
       return json({ ok: true });
     });
   }
@@ -145,6 +175,14 @@ async function calendarRefresh(request: Request, env: Env, id: string): Promise<
     if (!cal) return json({ ok: false, error: "日历不存在" }, 404);
     const report = await syncMirror(env.DB, cal, Date.now());
     const fresh = (await listCalendars(env.DB)).find((item) => item.id === id) ?? cal;
+    await logOp(env.DB, {
+      actor: await panelActor(request, env),
+      module: "日历",
+      action: "同步",
+      targetId: id,
+      targetName: cal.name,
+      text: `同步了镜像日历「${cal.name}」`,
+    });
     return json({ ok: true, calendar: calendarPublic(fresh), sync: report });
   });
 }
@@ -171,6 +209,14 @@ async function events(request: Request, env: Env): Promise<Response> {
     return wrap(async () => {
       const now = Date.now();
       const created = await createEvent(env.DB, body.value, ACTOR, "panel", now);
+      await logOp(env.DB, {
+        actor: await panelActor(request, env),
+        module: "日历",
+        action: "添加",
+        targetId: created.id,
+        targetName: created.title,
+        text: `添加了日程「${created.title}」`,
+      });
       const conflicts = body.value.check_conflict === false
         ? []
         : await findConflicts(env.DB, { startMs: created.starts_at, endMs: created.ends_at, excludeEventId: created.id });
@@ -197,12 +243,21 @@ async function eventOne(request: Request, env: Env, id: string): Promise<Respons
     const etag = ifMatch ? Number(ifMatch.replace(/"/g, "")) : typeof body.value.etag === "number" ? body.value.etag : null;
     return wrap(async () => {
       const updated = await updateEvent(env.DB, id, body.value, ACTOR, "panel", Date.now(), Number.isFinite(etag) ? etag : null);
+      await logOp(env.DB, {
+        actor: await panelActor(request, env),
+        module: "日历",
+        action: "修改",
+        targetId: id,
+        targetName: updated.title,
+        text: `修改了日程「${updated.title}」`,
+      });
       return json({ ok: true, event: eventPublic(updated) });
     });
   }
   if (method === "DELETE") {
     const url = new URL(request.url);
     return wrap(async () => {
+      const before = await getEvent(env.DB, id);
       const result = await deleteEvent(
         env.DB,
         id,
@@ -210,6 +265,15 @@ async function eventOne(request: Request, env: Env, id: string): Promise<Respons
         ACTOR,
         Date.now(),
       );
+      const name = before?.title ?? id;
+      await logOp(env.DB, {
+        actor: await panelActor(request, env),
+        module: "日历",
+        action: "删除",
+        targetId: id,
+        targetName: name,
+        text: `删除了日程「${name}」`,
+      });
       return json({ ok: true, ...result });
     });
   }
@@ -231,6 +295,14 @@ async function importRoute(request: Request, env: Env): Promise<Response> {
       includeDuplicates: body.value.include_duplicates === true,
       actor: ACTOR,
     }, Date.now());
+    await logOp(env.DB, {
+      actor: await panelActor(request, env),
+      module: "日历",
+      action: "添加",
+      targetId: report.calendar_id,
+      targetName: null,
+      text: `导入了 ICS 日历：新建 ${report.created} 条、更新 ${report.updated} 条日程`,
+    });
     return json({ ok: true, import: report });
   });
 }
@@ -245,6 +317,14 @@ async function feeds(request: Request, env: Env): Promise<Response> {
     if (!body.ok) return body.response;
     return wrap(async () => {
       const { row, token } = await createFeedToken(env.DB, body.value, Date.now());
+      await logOp(env.DB, {
+        actor: await panelActor(request, env),
+        module: "日历",
+        action: "添加",
+        targetId: row.id,
+        targetName: row.name,
+        text: `创建了日历订阅「${row.name}」`,
+      });
       const origin = new URL(request.url).origin;
       return json({ ok: true, feed: { ...feedPublic(row), token, url: origin + "/cal/" + token + ".ics" } }, 201);
     });
@@ -255,7 +335,17 @@ async function feeds(request: Request, env: Env): Promise<Response> {
 async function feedOne(request: Request, env: Env, id: string): Promise<Response> {
   if (request.method.toUpperCase() !== "DELETE") return methodNotAllowed("DELETE");
   return wrap(async () => {
+    const before = (await listFeedTokens(env.DB)).find((feed) => feed.id === id);
     await revokeFeedToken(env.DB, id, Date.now());
+    const name = before?.name ?? id;
+    await logOp(env.DB, {
+      actor: await panelActor(request, env),
+      module: "日历",
+      action: "删除",
+      targetId: id,
+      targetName: name,
+      text: `吊销了日历订阅「${name}」`,
+    });
     return json({ ok: true });
   });
 }

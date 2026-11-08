@@ -31,6 +31,7 @@ import { resolveContentKey } from "./crypto";
 import type { Env } from "./env";
 import { isCrossSite, json, readCookie, readJsonLimited } from "./http";
 import { issueSession, requireAdminUser } from "./session";
+import { logOp } from "./oplog";
 import {
   generateRecoveryCodes,
   generateTotpSecret,
@@ -178,6 +179,14 @@ export async function enableTotpHandler(request: Request, env: Env): Promise<Res
   if (!enabled) return json({ ok: false, error: "绑定状态已变化，请重新开始绑定" }, 409);
   const codes = generateRecoveryCodes();
   await replaceRecoveryCodes(env.DB, user.id, await Promise.all(codes.map((code) => hashRecoveryCode(code))), now);
+  await logOp(env.DB, {
+    actor: user.username,
+    module: "账号",
+    action: "修改",
+    targetId: user.id,
+    targetName: user.username,
+    text: "开启了两步验证",
+  });
   return json({
     ok: true,
     enabled: true,
@@ -222,6 +231,14 @@ export async function disableTotp(request: Request, env: Env): Promise<Response>
   await clearSecondFactorFailures(env, user.id, now);
 
   await clearTotp(env.DB, user.id);
+  await logOp(env.DB, {
+    actor: user.username,
+    module: "账号",
+    action: "修改",
+    targetId: user.id,
+    targetName: user.username,
+    text: "关闭了两步验证",
+  });
   const token = readCookie(request.headers.get("cookie"), SESSION_COOKIE);
   if (token) await deleteUserSessionsExcept(env.DB, user.id, await sha256Hex(token));
   return json({ ok: true, enabled: false });
@@ -262,6 +279,14 @@ export async function regenerateRecoveryCodes(request: Request, env: Env): Promi
 
   const codes = generateRecoveryCodes();
   await replaceRecoveryCodes(env.DB, user.id, await Promise.all(codes.map((code) => hashRecoveryCode(code))), now);
+  await logOp(env.DB, {
+    actor: user.username,
+    module: "账号",
+    action: "修改",
+    targetId: user.id,
+    targetName: user.username,
+    text: "重新生成了两步验证恢复码",
+  });
   return json({ ok: true, recovery_codes: codes, recovery_codes_remaining: codes.length });
 }
 
