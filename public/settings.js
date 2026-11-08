@@ -557,6 +557,18 @@
     });
   }
 
+  // 无左侧导航的堆叠版式（管理员账号 / 登录记录 / 侧边栏 / 系统信息）
+  function settingsLayout() {
+    return (
+      '<div class="settings"><div class="settings-body">' +
+      accountPanel() +
+      sessionsPanel() +
+      sidebarPanel() +
+      systemPanel() +
+      "</div></div>"
+    );
+  }
+
   function render() {
     var active = document.activeElement;
     var activeField = active && active.getAttribute ? active.getAttribute("data-field") : "";
