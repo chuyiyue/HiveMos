@@ -32,8 +32,6 @@
   var MEMORIES = [];
   var memoryLoaded = false;
   var memoryError = "";
-  var GROUPS = [];
-  var memGroupFilter = "all";
   var memTagFilter = "";
   var memNotice = "";
   var memNoticeKind = "ok";
@@ -83,42 +81,8 @@
         render();
       });
   }
-  function loadMemoryGroups() {
-    api("GET", "/api/memory/groups")
-      .then(function (result) {
-        if (result.data && result.data.ok && Array.isArray(result.data.groups)) {
-          GROUPS = result.data.groups;
-          render();
-        }
-      })
-      .catch(function () {
-        // 分组拉不到时记忆列表照常，分组相关入口按空处理
-      });
-  }
-
   function refreshMemories() {
     loadMemories();
-    loadMemoryGroups();
-  }
-
-  function groupNameOf(groupId) {
-    if (!groupId) return "未分组";
-    var found = null;
-    GROUPS.forEach(function (g) {
-      if (g.id === groupId) found = g;
-    });
-    return found ? found.name : "未分组";
-  }
-
-  function groupOptionsHtml(currentId) {
-    var html = "<option value=\"\">未分组</option>";
-    GROUPS.forEach(function (g) {
-      html +=
-        "<option value=\"" + C.escapeHtml(g.id) + "\"" +
-        (currentId === g.id ? " selected" : "") +
-        ">" + C.escapeHtml(g.name) + "</option>";
-    });
-    return html;
   }
 
   function setMemNotice(text, kind) {
@@ -154,14 +118,12 @@
         "<dl class=\"kv\">" +
         "<div><dt>作用域</dt><dd>" + C.escapeHtml(item.scope || "未注明") + "</dd></div>" +
         "<div><dt>来源</dt><dd>" + C.escapeHtml(item.source || "未注明") + "</dd></div>" +
-        "<div><dt>分组</dt><dd>" + C.escapeHtml(groupNameOf(item.group_id)) + "</dd></div>" +
         "<div><dt>更新时间</dt><dd>" + C.escapeHtml(C.formatMinute(item.updated_at) || "未知") + "</dd></div>" +
         "</dl>" +
         "<h3 class=\"manage-subhead\">内容</h3>" +
         "<p>" + C.escapeHtml(excerptOf(item.content)) + "</p>" +
         "<h3 class=\"manage-subhead\">分级设置</h3>" +
         "<label>权重（0–100，读取时高权重排前面）<input name=\"mem-weight\" type=\"number\" min=\"0\" max=\"100\" step=\"1\" value=\"" + (item.weight || 0) + "\" /></label>" +
-        "<label>分组<select name=\"mem-group\">" + groupOptionsHtml(item.group_id) + "</select></label>" +
         "<div class=\"manage-actions\">" +
         "<button type=\"button\" class=\"secondary\" data-card-act=\"tier\" data-kind=\"memory\" data-id=\"" + id + "\">保存分级设置</button>" +
         "<button type=\"button\" class=\"secondary\" data-card-act=\"pin\" data-kind=\"memory\" data-id=\"" + id + "\">" + (item.pinned ? "取消置顶" : "置顶") + "</button>" +
@@ -265,59 +227,53 @@
   }
 
   function memoryToolbar() {
-    var groupChips =
-      "<span class=\"subtle\">分组</span>" +
-      filterChip("data-mem-gfilter", "all", "全部", memGroupFilter === "all") +
-      GROUPS.map(function (g) {
-        return filterChip("data-mem-gfilter", g.id, g.name, memGroupFilter === g.id);
-      }).join("") +
-      filterChip("data-mem-gfilter", "__none__", "未分组", memGroupFilter === "__none__");
     var tags = allMemTags();
-    var tagChips = tags.length
-      ? "<div class=\"tag-row\"><span class=\"subtle\">标签</span>" +
-        tags
-          .map(function (t) {
-            return filterChip("data-mem-tag", t, t, memTagFilter === t);
-          })
-          .join("") +
-        "</div>"
-      : "";
+    if (!tags.length) return "";
     return (
-      "<div class=\"stack\">" +
-      "<div class=\"tag-row\">" + groupChips + "</div>" +
-      tagChips +
+      "<div class=\"tag-row\"><span class=\"subtle\">标签</span>" +
+      tags
+        .map(function (t) {
+          return filterChip("data-mem-tag", t, t, memTagFilter === t);
+        })
+        .join("") +
       "</div>"
     );
+  }
+
+  // 置顶优先，其次权重降序，再按更新时间降序。与列表接口同一口径。
+  function compareMemories(a, b) {
+    if (!!a.pinned !== !!b.pinned) return a.pinned ? -1 : 1;
+    var byWeight = (Number(b.weight) || 0) - (Number(a.weight) || 0);
+    if (byWeight) return byWeight;
+    return (Number(b.updated_at) || 0) - (Number(a.updated_at) || 0);
+  }
+
+  function memoryCardsHtml(rows) {
+    return C.cardList(rows.map(memoryCard).join(""));
   }
 
   function memoryBodyHtml() {
     if (memoryError) return C.emptyState("记忆加载失败", memoryError);
     if (!memoryLoaded) return C.emptyState("正在加载记忆", "");
     if (!MEMORIES.length) return C.emptyState("还没有记忆", "点上方按钮添加第一条");
-    var filtering = memGroupFilter !== "all" || !!memTagFilter;
-    if (!filtering) {
-      return C.groupedSections({
-        groups: GROUPS,
-        items: MEMORIES,
-        groupOf: function (item) {
-          return item.group_id || null;
-        },
-        renderItem: memoryCard,
-        cardGrid: true,
-        bareUngrouped: true,
-        emptyGroupText: "在记忆的管理弹窗里可以移入分组",
-        emptyTitle: "还没有记忆",
-        emptyText: "点上方按钮添加第一条",
-      });
-    }
     var rows = MEMORIES.filter(function (item) {
-      if (memGroupFilter === "__none__" && item.group_id) return false;
-      if (memGroupFilter !== "all" && memGroupFilter !== "__none__" && item.group_id !== memGroupFilter) return false;
       if (memTagFilter && (item.tags || []).indexOf(memTagFilter) === -1) return false;
       return true;
     });
-    if (!rows.length) return C.emptyState("没有符合筛选的记忆", "换个分组或标签看看");
-    return C.cardList(rows.map(memoryCard).join(""));
+    if (!rows.length) return C.emptyState("没有符合筛选的记忆", "换个标签看看");
+    rows.sort(compareMemories);
+    // 标签筛选不再按分组切，整表平铺成一个网格（置顶仍靠排序排在前面）。
+    if (memTagFilter) return memoryCardsHtml(rows);
+    var pinned = [];
+    var rest = [];
+    rows.forEach(function (item) {
+      if (item.pinned) pinned.push(item);
+      else rest.push(item);
+    });
+    var html = "";
+    if (pinned.length) html += C.section("置顶", String(pinned.length) + " 条", memoryCardsHtml(pinned));
+    if (rest.length) html += memoryCardsHtml(rest);
+    return html;
   }
 
   function render() {
@@ -364,7 +320,6 @@
       '<div class="page-head-actions">' +
       (activeTab === "memory"
         ? '<button type="button" class="secondary" data-mem-act="tag-all">AI 补全标签</button>' +
-          '<button type="button" class="secondary" data-mem-act="groups">添加分组</button>' +
           '<button type="button" class="add-button" data-add="memory">添加记忆</button>'
         : '<button type="button" class="add-button" data-add="soul">添加 Soul</button>') +
       "</div></div>";
@@ -471,12 +426,11 @@
 
   // 添加与编辑共用同一套字段构建；item 为空是添加，传入条目是编辑并预填
   function memoryFields(item) {
-    var v = item || { title: "", scope: "", content: "", tags: [], weight: 0, group_id: null };
+    var v = item || { title: "", scope: "", content: "", tags: [], weight: 0 };
     return (
       "<label>标题<input name=\"title\" maxlength=\"80\" autocomplete=\"off\" value=\"" + C.escapeHtml(v.title) + "\" /></label>" +
       "<label>作用域<input name=\"scope\" maxlength=\"40\" autocomplete=\"off\" placeholder=\"例如 全局、工作区或某个 Agent\" value=\"" + C.escapeHtml(v.scope) + "\" /></label>" +
       "<label>内容<textarea name=\"content\" rows=\"4\" maxlength=\"2000\">" + C.escapeHtml(v.content) + "</textarea></label>" +
-      "<label>分组<select name=\"group_id\">" + groupOptionsHtml(v.group_id) + "</select></label>" +
       "<label>权重（0–100）<input name=\"weight\" type=\"number\" min=\"0\" max=\"100\" step=\"1\" value=\"" + (v.weight || 0) + "\" /></label>" +
       tagFieldHtml(v.tags || [])
     );
@@ -491,7 +445,7 @@
       bodyHtml:
         "<label>内容<textarea name=\"text\" rows=\"6\" maxlength=\"20000\" placeholder=\"用自然语言写下要记住的事，一段里可以包含多个事实，保存时 AI 会拆成一条条记忆点并打上标签\"></textarea></label>" +
         "<label>作用域<input name=\"scope\" maxlength=\"40\" autocomplete=\"off\" placeholder=\"例如 全局、工作区或某个 Agent，可留空\"></label>" +
-        "<label>分组<select name=\"group_id\">" + groupOptionsHtml(null) + "</select></label>" + tagFieldHtml([]),
+        tagFieldHtml([]),
       submitLabel: "保存",
       onSubmit: function (ctrl) {
         if (done) {
@@ -503,8 +457,7 @@
           ctrl.setError("请填写要保存的内容");
           return;
         }
-        var groupEl = ctrl.form.querySelector("[name=\"group_id\"]");
-        var payload = { text: text, group_id: groupEl && groupEl.value ? groupEl.value : null };
+        var payload = { text: text };
         var tagsEl = ctrl.form.querySelector("[name=\"tags\"]");
         if (tagsEl && tagsEl.value) payload.tags = tagsEl.value.split(",").filter(function (t) { return !!t; });
         var scope = val(ctrl, "scope");
@@ -546,7 +499,6 @@
       onSubmit: function (ctrl) {
         var title = val(ctrl, "title");
         if (!title) { ctrl.setError("请填写标题"); return; }
-        var groupEl = ctrl.form.querySelector("[name=\"group_id\"]");
         var weightEl = ctrl.form.querySelector("[name=\"weight\"]");
         var weight = weightEl ? Number(weightEl.value) : 0;
         if (!isFinite(weight) || weight < 0 || weight > 100) {
@@ -561,7 +513,6 @@
           title: title,
           scope: val(ctrl, "scope") || "全局",
           content: val(ctrl, "content"),
-          group_id: groupEl ? groupEl.value || null : null,
           weight: Math.floor(weight),
           tags: tags,
         };
@@ -671,7 +622,6 @@
   function saveMemTier(item, srcEl) {
     var dlg = srcEl && srcEl.closest ? srcEl.closest("[data-manage-dialog]") : null;
     var wEl = dlg ? dlg.querySelector("[name=\"mem-weight\"]") : null;
-    var gEl = dlg ? dlg.querySelector("[name=\"mem-group\"]") : null;
     var weight = wEl ? Number(wEl.value) : item.weight || 0;
     if (!isFinite(weight) || weight < 0 || weight > 100) {
       setMemNotice("权重需在 0 到 100 之间", "danger");
@@ -681,7 +631,6 @@
     }
     var payload = {
       weight: Math.floor(weight),
-      group_id: gEl ? gEl.value || null : item.group_id || null,
     };
     patchMemory(item, payload, "分级设置已保存").then(function () {
       C.closeCurrentOverlay();
@@ -726,103 +675,6 @@
         setMemNotice("补标失败，请重试", "danger");
         render();
       });
-  }
-
-  function groupManagerListHtml() {
-    if (!GROUPS.length) return C.emptyState("还没有分组", "在上方新建第一个分组") + "<div data-group-confirm></div>";
-    var rows = GROUPS.map(function (g) {
-      return (
-        "<div class=\"row-actions\">" +
-        "<input name=\"group-name-" + C.escapeHtml(g.id) + "\" value=\"" + C.escapeHtml(g.name) + "\" maxlength=\"40\" />" +
-        "<span class=\"subtle\">" + (g.count || 0) + " 条</span>" +
-        "<button type=\"button\" class=\"secondary\" data-group-save=\"" + C.escapeHtml(g.id) + "\">改名</button>" +
-        "<button type=\"button\" class=\"danger\" data-group-del=\"" + C.escapeHtml(g.id) + "\">删除</button>" +
-        "</div>"
-      );
-    }).join("");
-    return rows + "<div data-group-confirm></div>";
-  }
-
-  function openGroupManager() {
-    var ctrl = C.openManageDialog({
-      size: "sm",
-      title: "管理分组",
-      bodyHtml:
-        "<label>新分组名<input name=\"new-group\" maxlength=\"40\" autocomplete=\"off\" placeholder=\"例如 饮食偏好\" /></label>" +
-        "<div class=\"row-actions\"><button type=\"button\" class=\"secondary\" data-group-create=\"1\">新建分组</button></div>" +
-        "<h3 class=\"manage-subhead\">现有分组</h3>" +
-        "<div data-group-list>" + groupManagerListHtml() + "</div>",
-    });
-    function paintList() {
-      var box = ctrl.dialog.querySelector("[data-group-list]");
-      if (box) box.innerHTML = groupManagerListHtml();
-    }
-    ctrl.dialog.addEventListener("click", function (event) {
-      var t = event.target;
-      if (!(t instanceof Element)) return;
-      if (t.closest("[data-group-create]")) {
-        var input = ctrl.dialog.querySelector("[name=\"new-group\"]");
-        var name = input ? input.value.trim() : "";
-        if (!name) return;
-        api("POST", "/api/memory/groups", { name: name }).then(function (result) {
-          if (result.data && result.data.ok) {
-            setMemNotice("分组「" + name + "」已创建", "ok");
-            loadMemoryGroups();
-            setTimeout(paintList, 350);
-          } else {
-            setMemNotice((result.data && result.data.error) || "建组失败", "danger");
-            C.closeCurrentOverlay();
-            render();
-          }
-        });
-        return;
-      }
-      var save = t.closest("[data-group-save]");
-      if (save) {
-        var gid = save.getAttribute("data-group-save");
-        var nameInput = ctrl.dialog.querySelector("[name=\"group-name-" + gid + "\"]");
-        var next = nameInput ? nameInput.value.trim() : "";
-        if (!next) return;
-        api("PATCH", "/api/memory/groups/" + encodeURIComponent(gid), { name: next }).then(function (result) {
-          if (result.data && result.data.ok) {
-            setMemNotice("分组已改名", "ok");
-            loadMemoryGroups();
-            setTimeout(paintList, 350);
-          } else {
-            setMemNotice((result.data && result.data.error) || "改名失败", "danger");
-            C.closeCurrentOverlay();
-            render();
-          }
-        });
-        return;
-      }
-      var del = t.closest("[data-group-del]");
-      if (del) {
-        var did = del.getAttribute("data-group-del");
-        var group = null;
-        GROUPS.forEach(function (g) { if (g.id === did) group = g; });
-        if (!group) return;
-        var anchor = ctrl.dialog.querySelector("[data-group-confirm]");
-        C.askConfirm({
-          anchor: anchor,
-          title: "删除分组",
-          text: "确认删除分组「" + group.name + "」吗？组内记忆会回到未分组，不会被删除",
-          confirmLabel: "删除",
-          danger: true,
-        }).then(function (yes) {
-          if (!yes) return;
-          api("DELETE", "/api/memory/groups/" + encodeURIComponent(did)).then(function (result) {
-            if (result.data && result.data.ok) {
-              setMemNotice("分组已删除，组内记忆回到未分组", "ok");
-              refreshMemories();
-              setTimeout(function () {
-                if (document.body.contains(ctrl.dialog)) paintList();
-              }, 350);
-            }
-          });
-        });
-      }
-    });
   }
 
   function removeMemory(item, srcEl) {
@@ -934,12 +786,6 @@
       if (pinItem) toggleMemPin(pinItem);
       return;
     }
-    var gfilter = target.closest("[data-mem-gfilter]");
-    if (gfilter) {
-      memGroupFilter = gfilter.getAttribute("data-mem-gfilter") || "all";
-      render();
-      return;
-    }
     var tagChip = target.closest("[data-mem-tag]");
     if (tagChip) {
       var tagValue = tagChip.getAttribute("data-mem-tag") || "";
@@ -949,9 +795,7 @@
     }
     var memAct = target.closest("[data-mem-act]");
     if (memAct) {
-      var actName = memAct.getAttribute("data-mem-act");
-      if (actName === "groups") openGroupManager();
-      else if (actName === "tag-all") tagAllMemories(memAct);
+      if (memAct.getAttribute("data-mem-act") === "tag-all") tagAllMemories(memAct);
       return;
     }
     var zone = target.closest("[data-manage]");
@@ -979,6 +823,5 @@
   }
   render();
   loadMemories();
-  loadMemoryGroups();
   loadSouls();
 })();
