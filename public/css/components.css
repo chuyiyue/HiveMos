@@ -166,7 +166,7 @@ body.modal-open { overflow: hidden; }
 dialog.modal {
   position: fixed;
   inset: 0;
-  width: min(480px, calc(100% - 32px));
+  width: min(60vw, 880px);
   height: fit-content;
   max-height: min(88dvh, 760px);
   margin: auto;
@@ -176,7 +176,15 @@ dialog.modal {
   color: var(--text);
 }
 
-dialog.modal.wide { width: min(600px, calc(100% - 32px)); }
+/* Size tiers by content density: lg for the densest manage dialogs,
+   md the default, sm for light dialogs. The legacy .wide class stays
+   as an alias of lg. */
+dialog.modal.size-lg,
+dialog.modal.wide { width: min(70vw, 1080px); }
+
+dialog.modal.size-md { width: min(60vw, 880px); }
+
+dialog.modal.size-sm { width: min(50vw, 640px); }
 
 dialog.modal::backdrop { background: var(--overlay); }
 
@@ -200,20 +208,15 @@ dialog.modal::backdrop { background: var(--overlay); }
   margin-top: 16px;
 }
 
-/* Phones get a full-screen sheet instead of a floating card. */
+/* Phones keep the same centered card, one step narrower than the
+   viewport, whatever tier the dialog declares. */
 @media (max-width: 639px) {
   dialog.modal,
-  dialog.modal.wide {
-    width: 100%;
-    height: 100dvh;
-    max-height: 100dvh;
-    margin: 0;
-  }
-
-  .modal-card {
-    min-height: 100dvh;
-    max-height: none;
-    border-radius: 0;
+  dialog.modal.wide,
+  dialog.modal.size-lg,
+  dialog.modal.size-md,
+  dialog.modal.size-sm {
+    width: calc(100vw - 24px);
   }
 }
 
@@ -524,7 +527,7 @@ article.record {
 dialog.side-panel {
   inset: 0 0 0 auto;
   margin: 0;
-  width: min(400px, 94vw);
+  width: min(50vw, 520px);
   height: 100dvh;
   max-height: 100dvh;
 }
@@ -538,6 +541,10 @@ dialog.side-panel .modal-card {
 
 @media (min-width: 640px) {
   dialog.side-panel .modal-card { border-radius: var(--r-xl) 0 0 var(--r-xl); }
+}
+
+@media (max-width: 639px) {
+  dialog.side-panel { width: 92vw; }
 }
 
 dialog.side-panel[open] { animation: side-panel-in 0.22s ease; }
