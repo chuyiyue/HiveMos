@@ -331,6 +331,41 @@ dialog.action-menu::backdrop { background: var(--overlay); }
 .switch[aria-checked="true"] { background: var(--accent-button); border-color: transparent; }
 .switch[aria-checked="true"] .switch-knob { left: 20px; background: var(--on-accent); }
 
+/* Manage dialog/panel: info head, info card, in-dialog tabs, danger zone. */
+.manage-info-head { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+.manage-info-icon { flex: none; width: 44px; height: 44px; border-radius: var(--r-md); background: var(--bg-sunken); display: grid; place-items: center; color: var(--text-2); }
+.manage-info-icon .icon { width: 24px; height: 24px; }
+.manage-info-name { margin: 0; font-size: 20px; font-weight: 700; line-height: 1.25; word-break: break-all; }
+.manage-info-sub { margin: 2px 0 0; color: var(--text-3); font-size: var(--fs-sm); }
+.manage-info-card { border: 1px solid var(--border); border-radius: var(--r-md); padding: 6px 14px; margin-bottom: 16px; }
+.manage-tabs { margin-bottom: 14px; }
+.manage-danger-zone { margin-top: 18px; border-top: 1px solid var(--border); padding-top: 14px; }
+.manage-danger-zone .danger { width: 100%; }
+
+/* Permission picker: search box, multi-select menu, removable tags.
+   Changes stay local until the save button commits one PATCH. */
+.perm-picker { display: grid; gap: 10px; }
+.perm-search { width: 100%; }
+.perm-menu { display: grid; gap: 2px; max-height: 232px; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); padding: 4px; }
+.perm-item { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 44px; text-align: left; background: transparent; border: 0; border-radius: calc(var(--r-md) - 4px); padding: 8px 10px; cursor: pointer; color: var(--text); font: inherit; }
+.perm-item:hover { background: var(--surface-hover); }
+.perm-item.is-active { background: var(--surface-hover); box-shadow: inset 0 0 0 2px var(--focus-ring); }
+.perm-item-text { display: grid; gap: 1px; flex: 1; min-width: 0; }
+.perm-item-text strong { font-weight: 600; }
+.perm-item-sub { color: var(--text-3); font-size: var(--fs-sm); }
+.perm-item-check { flex: none; width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; color: transparent; border: 1px solid var(--border-strong); font-size: 12px; }
+.perm-item.is-selected .perm-item-check { background: var(--accent-button); border-color: transparent; color: var(--on-accent); }
+.perm-menu-empty { margin: 6px 10px; color: var(--text-3); font-size: var(--fs-sm); }
+.perm-tags { display: flex; flex-wrap: wrap; gap: 8px; min-height: 30px; align-items: center; }
+.perm-tag { display: inline-flex; align-items: center; gap: 4px; padding: 4px 4px 4px 12px; border-radius: 999px; background: var(--bg-sunken); border: 1px solid var(--border); font-size: var(--fs-sm); font-weight: 500; }
+.perm-tag-x { border: 0; background: transparent; width: 22px; height: 22px; min-height: 22px; padding: 0; border-radius: 50%; cursor: pointer; color: var(--text-3); font-size: 14px; line-height: 1; }
+.perm-tag-x:hover { background: var(--surface-hover); color: var(--text); }
+.perm-foot { display: flex; align-items: center; gap: 10px; }
+.perm-save.is-dirty { background: var(--accent-button); color: var(--on-accent); border-color: transparent; }
+.perm-save.is-saved { background: var(--success-soft); color: var(--success-text); border-color: transparent; }
+.perm-dirty-dot { display: inline-block; width: 8px; height: 8px; margin-left: 6px; border-radius: 50%; background: var(--danger); vertical-align: middle; }
+.perm-dirty-dot[hidden] { display: none; }
+
 /* Reference device-card layout (SMSinBox): one column — head row, meta
    grid, button row. .record also has rules in pages.css; the article
    selector here outranks them. */

@@ -555,6 +555,8 @@
       var agent = findAgent(id);
       if (!agent) return;
       C.openAgentManage(agent.id, {
+        agent: agent,
+        groups: state.groups,
         onChanged: function (message) {
           if (message) {
             state.notice = message;
