@@ -1285,7 +1285,7 @@ export async function createAgent(db: D1Database, value: unknown): Promise<{ ok:
   const token = randomAgentToken();
   const now = Date.now();
   let id = newAgentId();
-  for (let attempt = 0; attempt < 5 && (await getAgentById(db, id)); attempt++) id = newAgentId();
+  for (let attempt = 0; attempt < 5 && (await getAgentRow(db, id)); attempt++) id = newAgentId();
   try {
     await prepare(db, "INSERT INTO agents (id, name, token_hash, status, group_id, permissions, last_seen_at, created_at) VALUES (?, ?, ?, 'active', ?, ?, NULL, ?)", [
       id,
