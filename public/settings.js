@@ -442,6 +442,69 @@
     return (os ? os + " · " : "") + browser;
   }
 
+  function parseDevice(value) {
+    if (typeof value !== "string" || !value.trim()) {
+      return { os: "未知", browser: "未知浏览器", type: "未知" };
+    }
+    var ua = value;
+    var isTool = !/^Mozilla\//.test(ua);
+    var os = /Windows NT/.test(ua)
+      ? "Windows"
+      : /Android/.test(ua)
+        ? "Android"
+        : /iPhone|iPad|iPod/.test(ua)
+          ? "iOS"
+          : /Mac OS X/.test(ua)
+            ? "macOS"
+            : /Linux/.test(ua)
+              ? "Linux"
+              : "未知";
+    var m = ua.match(/Edg\/(\d+)/);
+    var browser = m ? "Edge " + m[1] : "";
+    if (!browser) {
+      m = ua.match(/Chrome\/(\d+)/);
+      if (m) browser = "Chrome " + m[1];
+    }
+    if (!browser) {
+      m = ua.match(/Firefox\/(\d+)/);
+      if (m) browser = "Firefox " + m[1];
+    }
+    if (!browser && /Safari\//.test(ua)) {
+      m = ua.match(/Version\/(\d+)/);
+      browser = "Safari" + (m ? " " + m[1] : "");
+    }
+    if (!browser) {
+      m = ua.match(/^([A-Za-z][\w-]*)\//);
+      browser = m ? m[1] : "未知浏览器";
+    }
+    var type = isTool
+      ? "工具"
+      : /iPad|Tablet/.test(ua)
+        ? "平板"
+        : /Android|iPhone|iPod|Mobile/.test(ua)
+          ? "移动"
+          : os === "未知"
+            ? "未知"
+            : "桌面";
+    if (isTool) os = "未知";
+    return { os: os, browser: browser, type: type };
+  }
+
+  function sessionFacts(session) {
+    var d = parseDevice(session.user_agent);
+    function fact(label, value) {
+      return "<div><dt>" + label + "</dt><dd>" + C.escapeHtml(value) + "</dd></div>";
+    }
+    return (
+      '<dl class="session-facts">' +
+      fact("系统", d.os) +
+      fact("浏览器", d.browser) +
+      fact("设备类型", d.type) +
+      fact("IP", session.ip || "未记录") +
+      "</dl>"
+    );
+  }
+
   function sessionWhen(session) {
     var created = C.formatMinute(session.created_at);
     return created ? "登录于 " + created : "会话时间未知";
@@ -457,7 +520,9 @@
       C.escapeHtml(deviceText(session.user_agent)) +
       "</h3>" +
       (current ? C.badge("当前", "accent") : "") +
-      '</div><p class="subtle">' +
+      "</div>" +
+      sessionFacts(session) +
+      '<p class="subtle">' +
       C.escapeHtml(sessionWhen(session)) +
       "</p></div>" +
       '<button type="button" class="' +

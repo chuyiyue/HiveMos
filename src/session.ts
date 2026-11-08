@@ -9,7 +9,7 @@ import {
 import { createSession, deleteSession, findSessionUser } from "./accounts";
 import { logOp } from "./oplog";
 import type { Env } from "./env";
-import { isCrossSite, json, readCookie } from "./http";
+import { isCrossSite, json, readCookie, clientAddress } from "./http";
 import type { SessionUser } from "./accounts";
 
 export type ActiveUser = SessionUser & { session_id: string };
@@ -53,6 +53,7 @@ export async function issueSession(
     id: await sha256Hex(token),
     userId: user.id,
     userAgent: sessionUserAgent(request),
+    ip: clientAddress(request),
     expiresAt: now + SESSION_TTL_SECONDS * 1000,
     createdAt: now,
   });

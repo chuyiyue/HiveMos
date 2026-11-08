@@ -166,6 +166,7 @@ async function listSessions(request: Request, env: Env): Promise<Response> {
       created_at: row.created_at,
       expires_at: row.expires_at,
       user_agent: row.user_agent,
+      ip: row.ip ?? null,
       current: row.id === user.session_id,
     })),
   });

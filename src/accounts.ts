@@ -53,6 +53,7 @@ export interface ListedSession {
   created_at: number;
   expires_at: number;
   user_agent: string | null;
+  ip: string | null;
 }
 
 export const PROFILE_USERNAME_KEY = "profile_username";
@@ -226,11 +227,11 @@ export async function deleteUserSessions(db: D1Database, userId: string): Promis
 
 export async function createSession(
   db: D1Database,
-  session: { id: string; userId: string; userAgent: string | null; expiresAt: number; createdAt: number },
+  session: { id: string; userId: string; userAgent: string | null; ip: string | null; expiresAt: number; createdAt: number },
 ): Promise<void> {
   await db
-    .prepare("INSERT INTO sessions (id, user_id, user_agent, expires_at, created_at) VALUES (?, ?, ?, ?, ?)")
-    .bind(session.id, session.userId, session.userAgent, session.expiresAt, session.createdAt)
+    .prepare("INSERT INTO sessions (id, user_id, user_agent, ip, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+    .bind(session.id, session.userId, session.userAgent, session.ip, session.expiresAt, session.createdAt)
     .run();
 }
 
@@ -254,7 +255,7 @@ export async function deleteSession(db: D1Database, sessionHash: string): Promis
 export async function listUserSessions(db: D1Database, userId: string, now: number): Promise<ListedSession[]> {
   const result = await db
     .prepare(
-      `SELECT id, created_at, expires_at, user_agent
+      `SELECT id, created_at, expires_at, user_agent, ip
        FROM sessions
        WHERE user_id = ? AND expires_at > ?
        ORDER BY created_at DESC, id ASC`,
