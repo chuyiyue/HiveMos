@@ -16,6 +16,7 @@ import {
   listServers,
   listSidebarAgents,
   readPublicServer,
+  revealAgentToken,
   refreshServerSnapshot,
   renameGroup,
   rotateAgentToken,
@@ -38,6 +39,8 @@ export async function handleRegistryRequest(request: Request, env: Env, ctx: Wai
   if (group && group[1]) return groupOne(request, env, group[1]);
   if (path === "/api/sidebar/agents") return sidebarAgents(request, env);
   if (path === "/api/agents") return agentCollection(request, env);
+  const reveal = /^\/api\/agents\/([A-Za-z0-9_-]+)\/reveal-token$/.exec(path);
+  if (reveal && reveal[1]) return agentRevealToken(request, env, reveal[1]);
   const rotate = /^\/api\/agents\/([A-Za-z0-9_-]+)\/rotate$/.exec(path);
   if (rotate && rotate[1]) return agentRotate(request, env, rotate[1]);
   const agent = /^\/api\/agents\/([A-Za-z0-9_-]+)$/.exec(path);
@@ -138,7 +141,7 @@ async function agentCollection(request: Request, env: Env): Promise<Response> {
     if (gate) return gate;
     const body = await readJson(request);
     if (!body.ok) return body.response;
-    const created = await createAgent(env.DB, body.value);
+    const created = await createAgent(env, body.value);
     if (!created.ok) return json({ ok: false, error: created.error }, created.status);
     return json({ ok: true, agent: created.agent }, 201);
   }
@@ -166,11 +169,20 @@ async function agentOne(request: Request, env: Env, id: string): Promise<Respons
   return methodNotAllowed("PATCH, DELETE");
 }
 
+async function agentRevealToken(request: Request, env: Env, id: string): Promise<Response> {
+  if (request.method.toUpperCase() !== "POST") return methodNotAllowed("POST");
+  const gate = await mutationGate(request);
+  if (gate) return gate;
+  const revealed = await revealAgentToken(env, id);
+  if (!revealed.ok) return json({ ok: false, error: revealed.error }, revealed.status);
+  return json({ ok: true, token: revealed.token });
+}
+
 async function agentRotate(request: Request, env: Env, id: string): Promise<Response> {
   if (request.method.toUpperCase() !== "POST") return methodNotAllowed("POST");
   const gate = await mutationGate(request);
   if (gate) return gate;
-  const rotated = await rotateAgentToken(env.DB, id);
+  const rotated = await rotateAgentToken(env, id);
   if (!rotated.ok) return json({ ok: false, error: rotated.error }, rotated.status);
   return json({ ok: true, agent: rotated.agent, token: rotated.token });
 }
