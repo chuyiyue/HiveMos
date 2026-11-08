@@ -301,11 +301,12 @@ img, svg, video, canvas { max-width: 100%; }
    right edge flush with the content container below. */
 .page-head { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
 .page-head .page-tabs { margin-bottom: 0; flex: none; }
-.page-head-actions { margin-left: auto; display: flex; align-items: center; }
+.page-head-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; }
 .page-head-actions[hidden] { display: none; }
 .page-head .add-bar { gap: 8px; }
 .page-head .add-button,
-.page-head .add-group-button {
+.page-head .add-group-button,
+.page-head-actions .secondary {
   width: auto;
   flex: none;
   height: 40px;
@@ -318,6 +319,7 @@ img, svg, video, canvas { max-width: 100%; }
 @media (max-width: 639px) {
   .page-head { flex-direction: column; align-items: stretch; gap: 0; }
   .page-head-actions { margin-left: 0; margin-top: 12px; }
+  .page-head-actions > button { flex: 1 1 auto; }
   .page-head .add-bar { width: 100%; }
   .page-head .add-bar .add-button { flex: 1 1 auto; width: auto; }
   .page-head .add-button,
