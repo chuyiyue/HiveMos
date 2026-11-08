@@ -687,6 +687,9 @@ async function callMemoryTool(env: Env, id: unknown, name: string, args: Record<
     if (!memId) return toolResult(id, "请提供 id", true);
     const row = await deleteMemory(env.DB, memId, channel, now);
     return toolResult(id, { memory: memoryPublic(row), deleted: true });
+  }
+  return toolResult(id, "未知工具", true);
+}
 async function callTasksTool(env: Env, id: unknown, name: string, args: Record<string, unknown>, agentId: string): Promise<Response> {
   const now = Date.now();
   if (name === "tasks_list") {
@@ -712,6 +715,9 @@ async function callTasksTool(env: Env, id: unknown, name: string, args: Record<s
     if (!taskId) return toolResult(id, "请提供 task_id", true);
     const completed = await completeTask(env.DB, taskId, agentId, now);
     return toolResult(id, { task: taskPublic(completed) });
+  }
+  return toolResult(id, "未知工具", true);
+}
 
 async function callMachinesTool(env: Env, id: unknown, name: string, args: Record<string, unknown>, agentId: string): Promise<Response> {
   const now = Date.now();
