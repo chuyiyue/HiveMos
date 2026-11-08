@@ -387,8 +387,11 @@ export async function updateMachine(
       next.ssh_port = sshPort;
       changed.push("ssh_port");
     }
+    // ssh_user is credential-adjacent like the secret: on update an absent
+    // or empty value means "keep the stored one" (it can be replaced, not
+    // cleared), because the panel never receives it back to prefill.
     const sshUser = readOptionalText(input, "ssh_user", 60, "SSH 用户名");
-    if (sshUser !== undefined) {
+    if (sshUser) {
       next.ssh_user = sshUser;
       changed.push("ssh_user");
     }
@@ -478,14 +481,16 @@ export async function revealMachineSecret(
   key: ContentKey,
   actor: string,
   now: number,
-): Promise<{ kind: string; secret: string }> {
+): Promise<{ kind: string; secret: string; ssh_user: string }> {
   const row = await getMachine(db, id);
   if (!row) throw new MachineError(404, "机器不存在");
   if (row.kind === "cloud") throw new MachineError(400, "云主机没有保存机密");
   const stored = row.kind === "server" ? row.ssh_secret_enc : row.api_token_enc;
   const secret = await openMachineSecret(key, stored);
   await writeAudit(db, { machineId: id, actor, source: "panel", action: "reveal", detail: { kind: row.kind } }, now);
-  return { kind: row.kind, secret };
+  // ssh_user rides along here (and only here / the edit form / get_access):
+  // it stays out of cards and out of the public projection on purpose.
+  return { kind: row.kind, secret, ssh_user: row.kind === "server" ? row.ssh_user : "" };
 }
 
 // Panel action on a Worker entry: use the stored token to list the Workers
