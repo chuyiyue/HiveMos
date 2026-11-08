@@ -191,13 +191,29 @@
       C.escapeHtml(server.id) +
       '">查看</button><button type="button" class="secondary" data-action="edit" data-id="' +
       C.escapeHtml(server.id) +
-      '">编辑</button><button type="button" class="secondary" data-action="menu" data-id="' +
-      C.escapeHtml(server.id) +
-      '">高级</button></div></div><dl class="kv">' +
+      '">编辑</button></div></div><dl class="kv">' +
       kv("分类", C.escapeHtml(server.category || "未分类")) +
       kv("快照", pill(meta[0], meta[1]) + (time ? ' <span class="subtle">' + C.escapeHtml(time) + "</span>" : "")) +
       kv("版本", '<span class="mono">v' + C.escapeHtml(String(server.version)) + "</span>") +
-      "</dl></article>"
+      "</dl>" +
+      C.expandPanel(
+        "mcp:" + server.id,
+        C.expandActions(
+          '<button type="button" class="secondary" data-action="open" data-id="' +
+            C.escapeHtml(server.id) +
+            '">查看详情</button><button type="button" class="secondary" data-action="edit" data-id="' +
+            C.escapeHtml(server.id) +
+            '">编辑条目</button><button type="button" class="secondary" data-action="refresh" data-id="' +
+            C.escapeHtml(server.id) +
+            '">刷新快照</button><button type="button" class="secondary" data-action="snapshot" data-id="' +
+            C.escapeHtml(server.id) +
+            '">手填快照</button><button type="button" class="danger" data-action="delete" data-id="' +
+            C.escapeHtml(server.id) +
+            '">删除条目</button>',
+        ),
+      ) +
+      C.expandToggle("mcp:" + server.id) +
+      "</article>"
     );
   }
 
@@ -362,10 +378,16 @@
         ["版本", C.escapeHtml(item.version)],
         ["引用", C.escapeHtml(item.used || "暂无")],
       ],
-      extra:
-        '<div class="row-actions"><button type="button" class="secondary" data-action="local-menu" data-scope="skills" data-id="' +
-        C.escapeHtml(item.id) +
-        '">高级</button></div><div class="confirm-slot" data-confirm-item="' +
+      expandKey: "skills:" + item.id,
+      expandBody:
+        C.expandActions(
+          '<button type="button" class="secondary" data-action="local-edit" data-scope="skills" data-id="' +
+            C.escapeHtml(item.id) +
+            '">编辑</button><button type="button" class="danger" data-action="local-delete" data-scope="skills" data-id="' +
+            C.escapeHtml(item.id) +
+            '">删除</button>',
+        ) +
+        '<div class="confirm-slot" data-confirm-item="' +
         C.escapeHtml("skills:" + item.id) +
         '"></div>',
     });
@@ -375,7 +397,6 @@
     var store = state.local.skills;
     return (
       '<div class="stack">' +
-      C.addBar({ addLabel: "添加技能", addAction: "local-add", groupAction: "add-group" }) +
       groupedHtml("skills", state.groups, store.items, skillsCard, "点上方「添加技能」登记第一个") +
       C.section("待审核", "", C.emptyState("没有待审核的技能", "新提交的技能会先出现在这里")) +
       "</div>"
@@ -392,10 +413,16 @@
         ["端点", C.escapeHtml(item.base)],
         ["鉴权", C.escapeHtml(item.auth)],
       ],
-      extra:
-        '<div class="row-actions"><button type="button" class="secondary" data-action="local-menu" data-scope="api" data-id="' +
-        C.escapeHtml(item.id) +
-        '">高级</button></div><div class="confirm-slot" data-confirm-item="' +
+      expandKey: "api:" + item.id,
+      expandBody:
+        C.expandActions(
+          '<button type="button" class="secondary" data-action="local-edit" data-scope="api" data-id="' +
+            C.escapeHtml(item.id) +
+            '">编辑</button><button type="button" class="danger" data-action="local-delete" data-scope="api" data-id="' +
+            C.escapeHtml(item.id) +
+            '">删除</button>',
+        ) +
+        '<div class="confirm-slot" data-confirm-item="' +
         C.escapeHtml("api:" + item.id) +
         '"></div>',
     });
@@ -405,7 +432,6 @@
     var store = state.local.api;
     return (
       '<div class="stack">' +
-      C.addBar({ addLabel: "添加 API", addAction: "local-add", groupAction: "add-group" }) +
       groupedHtml("api", state.groups, store.items, apiCard, "点上方「添加 API」登记第一个") +
       "</div>"
     );
@@ -419,6 +445,9 @@
     document.querySelectorAll("[data-panel]").forEach(function (panel) {
       panel.hidden = panel.getAttribute("data-panel") !== name;
     });
+    document.querySelectorAll("[data-head-actions]").forEach(function (el) {
+      el.hidden = el.getAttribute("data-head-actions") !== name;
+    });
     history.replaceState(null, "", "#" + name);
   }
 
@@ -427,24 +456,40 @@
     if (state.loading) body += C.section("服务", "", C.emptyState("正在读取", "稍等片刻"));
     else if (state.loadError) body += C.section("服务", "", '<p class="callout danger" role="alert">' + C.escapeHtml(state.loadError) + "</p>");
     else {
-      body += C.addBar({ addLabel: "添加条目", addAction: "add", groupAction: "add-group" });
       body += groupedHtml("mcp", state.groups, state.servers, card, "点上方「添加条目」登记第一条");
       body += detailHtml(selected());
     }
+    var head =
+      '<div class="page-head"><div class="page-tabs" role="tablist">' +
+      '<button class="page-tab" type="button" role="tab" data-tab="mcp" aria-selected="' +
+      (activeTab === "mcp" ? "true" : "false") +
+      '">MCP</button>' +
+      '<button class="page-tab" type="button" role="tab" data-tab="skills" aria-selected="' +
+      (activeTab === "skills" ? "true" : "false") +
+      '">Skills</button>' +
+      '<button class="page-tab" type="button" role="tab" data-tab="api" aria-selected="' +
+      (activeTab === "api" ? "true" : "false") +
+      '">API</button>' +
+      "</div>" +
+      '<div class="page-head-actions" data-head-actions="mcp"' +
+      (activeTab === "mcp" ? "" : " hidden") +
+      ">" +
+      C.addBar({ addLabel: "添加条目", addAction: "add", groupAction: "add-group" }) +
+      "</div>" +
+      '<div class="page-head-actions" data-head-actions="skills"' +
+      (activeTab === "skills" ? "" : " hidden") +
+      ">" +
+      C.addBar({ addLabel: "添加技能", addAction: "local-add", groupAction: "add-group" }) +
+      "</div>" +
+      '<div class="page-head-actions" data-head-actions="api"' +
+      (activeTab === "api" ? "" : " hidden") +
+      ">" +
+      C.addBar({ addLabel: "添加 API", addAction: "local-add", groupAction: "add-group" }) +
+      "</div></div>";
     C.mount(
       C.layout(
         "",
-        "<div class=\"page-tabs\" role=\"tablist\">" +
-          "<button class=\"page-tab\" type=\"button\" role=\"tab\" data-tab=\"mcp\" aria-selected=\"" +
-          (activeTab === "mcp" ? "true" : "false") +
-          "\">MCP</button>" +
-          "<button class=\"page-tab\" type=\"button\" role=\"tab\" data-tab=\"skills\" aria-selected=\"" +
-          (activeTab === "skills" ? "true" : "false") +
-          "\">Skills</button>" +
-          "<button class=\"page-tab\" type=\"button\" role=\"tab\" data-tab=\"api\" aria-selected=\"" +
-          (activeTab === "api" ? "true" : "false") +
-          "\">API</button>" +
-          "</div>" +
+        head +
           "<div data-panel=\"mcp\"" +
           (activeTab === "mcp" ? "" : " hidden") +
           "><div class=\"stack\">" +
@@ -511,7 +556,6 @@
     if (action === "open") openServer(id, true);
     else if (action === "add") openCreateDialog();
     else if (action === "edit") openEditDialog(id);
-    else if (action === "menu") openServerMenu(id);
     else if (action === "snapshot") openSnapshotDialog(id);
     else if (action === "refresh") refresh(id);
     else if (action === "delete") removeServer(id);
@@ -524,10 +568,14 @@
       if (group2) deleteGroupFlow(group2);
     } else if (action === "local-add") openLocalDialog(activeTab, null);
     else if (action === "local-add-group") openLocalGroupDialog(activeTab, null);
-    else if (action === "local-menu") {
-      var menuScope = button.getAttribute("data-scope") || "";
-      var menuItem = findLocalItem(menuScope, id);
-      if (menuItem) openLocalMenu(menuScope, menuItem);
+    else if (action === "local-edit") {
+      var editScope = button.getAttribute("data-scope") || "";
+      var editItem = findLocalItem(editScope, id);
+      if (editItem) openLocalDialog(editScope, editItem);
+    } else if (action === "local-delete") {
+      var delScope2 = button.getAttribute("data-scope") || "";
+      var delItem = findLocalItem(delScope2, id);
+      if (delItem) deleteLocalItem(delScope2, delItem);
     } else if (action === "local-rename-group") {
       var renameScope = button.getAttribute("data-scope") || "";
       var localGroup = findLocalGroup(renameScope, id);
@@ -974,51 +1022,7 @@
     });
   }
 
-  // ---- MCP 卡片高级菜单（中央悬浮菜单，与 Agent 页共用 C.openActionMenu） ----
-
-  function openServerMenu(id) {
-    var server = state.servers.find(function (item) {
-      return item.id === id;
-    });
-    if (!server) return;
-    C.openActionMenu({
-      title: server.title || server.name,
-      items: [
-        {
-          label: "查看详情",
-          onSelect: function () {
-            openServer(id, true);
-          },
-        },
-        {
-          label: "编辑条目",
-          onSelect: function () {
-            openEditDialog(id);
-          },
-        },
-        {
-          label: "刷新快照",
-          onSelect: function () {
-            refresh(id);
-          },
-        },
-        {
-          label: "手填快照",
-          onSelect: function () {
-            openSnapshotDialog(id);
-          },
-        },
-        {
-          label: "删除条目",
-          danger: true,
-          onSelect: function () {
-            openServer(id, false);
-            removeServer(id);
-          },
-        },
-      ],
-    });
-  }
+  // ---- MCP 卡片动作（展开区按钮直达，逻辑与原菜单一致） ----
 
   // ---- Skills / API 页签（条目走 /api/extras/*，分组共用后端池） ----
 
@@ -1223,27 +1227,6 @@
       state.notice = "已删除分组";
       state.noticeKind = "ok";
       render();
-    });
-  }
-
-  function openLocalMenu(scope, item) {
-    C.openActionMenu({
-      title: item.name,
-      items: [
-        {
-          label: "编辑",
-          onSelect: function () {
-            openLocalDialog(scope, item);
-          },
-        },
-        {
-          label: "删除",
-          danger: true,
-          onSelect: function () {
-            deleteLocalItem(scope, item);
-          },
-        },
-      ],
     });
   }
 

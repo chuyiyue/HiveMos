@@ -137,28 +137,125 @@
     });
   }
 
-  function openTaskMenu(item, anchor) {
-    var items = [
-      {
-        label: "编辑",
-        onSelect: function () { openTaskDialog(item); },
-      },
-    ];
-    if (item.status !== "done") {
-      items.push({
-        label: "标记完成",
-        onSelect: function () { completeTask(item); },
-      });
-    }
-    items.push({
-      label: "删除",
+  // ---- 展开区内容与动作（原中央菜单的动作全部收进卡片展开区） ----
+
+  function taskExpandBody(item) {
+    var id = C.escapeHtml(item.id);
+    var btns =
+      '<button type="button" class="secondary" data-action="task-edit" data-id="' + id + '">编辑</button>';
+    if (item.status !== "done")
+      btns += '<button type="button" class="secondary" data-action="task-complete" data-id="' + id + '">标记完成</button>';
+    btns += '<button type="button" class="danger" data-action="task-delete" data-id="' + id + '">删除</button>';
+    return C.expandActions(btns);
+  }
+
+  function calendarExpandBody(item) {
+    var id = C.escapeHtml(item.id);
+    var btns =
+      '<button type="button" class="secondary" data-action="cal-edit" data-id="' + id + '">编辑</button>';
+    if (!item.is_default)
+      btns += '<button type="button" class="secondary" data-action="cal-default" data-id="' + id + '">设为默认</button>';
+    if (item.kind === "mirror")
+      btns += '<button type="button" class="secondary" data-action="cal-refresh" data-id="' + id + '">立即刷新</button>';
+    btns += '<button type="button" class="danger" data-action="cal-delete" data-id="' + id + '">删除日历</button>';
+    return C.expandActions(btns);
+  }
+
+  function setDefaultCalendar(item) {
+    api("PATCH", "/api/calendar/calendars/" + encodeURIComponent(item.id), { is_default: true }).then(function (res) {
+      setNotice(res.data.ok ? "已设为默认日历" : (res.data.error || "设置失败"), !res.data.ok);
+      cal.loaded = false;
+      loadCalendar();
+    });
+  }
+
+  function refreshCalendarNow(item) {
+    setNotice("正在刷新订阅…", false);
+    render();
+    api("POST", "/api/calendar/calendars/" + encodeURIComponent(item.id) + "/refresh").then(function (res) {
+      var sync = res.data.sync || {};
+      setNotice(res.data.ok ? (sync.ok ? "刷新完成：新增 " + (sync.added || 0) + "、更新 " + (sync.updated || 0) + "、删除 " + (sync.deleted || 0) : "刷新失败：" + (sync.error || "未知错误")) : (res.data.error || "刷新失败"), !(res.data.ok && sync.ok));
+      cal.loaded = false;
+      loadCalendar();
+    });
+  }
+
+  function deleteCalendar(item, anchor) {
+    C.askConfirm({
+      anchor: anchor,
+      title: "删除日历",
+      text: "确认删除日历「" + item.name + "」吗？里面的日程会一起被删除",
+      confirmLabel: "删除",
       danger: true,
-      onSelect: function () { deleteTask(item, anchor); },
+    }).then(function (yes) {
+      if (!yes) return;
+      api("DELETE", "/api/calendar/calendars/" + encodeURIComponent(item.id)).then(function (res) {
+        setNotice(res.data.ok ? "日历已删除" : (res.data.error || "删除失败"), !res.data.ok);
+        cal.loaded = false;
+        loadCalendar();
+      });
     });
-    C.openActionMenu({
-      title: item.title,
-      items: items,
+  }
+
+  function eventExpandBody(inst) {
+    var owner = calById(inst.calendar_id);
+    var readOnly = owner && owner.kind === "mirror";
+    var key = C.escapeHtml(instKey(inst));
+    var btns =
+      '<button type="button" class="secondary" data-action="event-detail" data-key="' + key + '">查看详情</button>';
+    if (!readOnly) {
+      if (inst.recurring) {
+        btns +=
+          '<button type="button" class="secondary" data-action="event-edit-instance" data-key="' + key + '">编辑这一次</button>' +
+          '<button type="button" class="secondary" data-action="event-edit-series" data-key="' + key + '">编辑整个系列</button>' +
+          '<button type="button" class="danger" data-action="event-delete-instance" data-key="' + key + '">删除这一次</button>' +
+          '<button type="button" class="danger" data-action="event-delete-series" data-key="' + key + '">删除整个系列</button>';
+      } else {
+        btns +=
+          '<button type="button" class="secondary" data-action="event-edit" data-key="' + key + '">编辑</button>' +
+          '<button type="button" class="danger" data-action="event-delete" data-key="' + key + '">删除</button>';
+      }
+    }
+    return (
+      C.expandActions(btns) +
+      (readOnly ? '<p class="subtle expand-note">订阅日历的日程只能查看，不能在面板里改</p>' : "")
+    );
+  }
+
+  function editEventInstance(inst, scope) {
+    if (scope === "single") {
+      api("GET", "/api/calendar/events/" + encodeURIComponent(inst.event_id)).then(function (res) {
+        openEditEvent(inst, res.data.ok ? res.data.event : null);
+      });
+      return;
+    }
+    inst.scope = scope;
+    api("GET", "/api/calendar/events/" + encodeURIComponent(inst.master_id)).then(function (res) {
+      openEditEvent(inst, res.data.ok ? res.data.event : null);
     });
+  }
+
+  function deleteEventInstance(inst, scope, anchor) {
+    var doDelete = function () {
+      var url = "/api/calendar/events/" + encodeURIComponent(inst.is_exception && scope === "instance" ? inst.event_id : inst.master_id);
+      if (scope === "instance" && !inst.is_exception) url += "?scope=instance&instance_start=" + encodeURIComponent(inst.start);
+      api("DELETE", url).then(function (res) {
+        setNotice(res.data.ok ? "日程已删除" : (res.data.error || "删除失败"), !res.data.ok);
+        cal.loaded = false;
+        loadCalendar();
+      });
+    };
+    if (inst.recurring) {
+      doDelete();
+      return;
+    }
+    C.askConfirm({
+      anchor: anchor,
+      title: "删除日程",
+      text: "确认删除日程「" + inst.title + "」吗？",
+      confirmLabel: "删除",
+      danger: true,
+    }).then(function (yes) { if (yes) doDelete("series"); });
   }
 
   // --------------------------------------------------------------- calendar
@@ -295,8 +392,8 @@
     if (!cal.calendars.length) return C.emptyState("还没有日历", "点上方「添加日历」新建，或订阅一个外部日历");
     return C.list(cal.calendars.map(function (item) {
       var recordHtml = calendarRecord(item);
-      var button = '<div class="row-actions"><button type="button" class="secondary" data-action="cal-menu" data-id="' + C.escapeHtml(item.id) + '">管理</button></div>';
-      return recordHtml.replace("</article>", button + "</article>");
+      var inject = C.expandPanel("cal:" + item.id, calendarExpandBody(item)) + C.expandToggle("cal:" + item.id);
+      return recordHtml.replace("</article>", inject + "</article>");
     }).join(""));
   }
 
@@ -345,8 +442,8 @@
         status: inst.status === "cancelled" ? "disabled" : "active",
         facts: facts,
       });
-      var button = '<div class="row-actions"><button type="button" class="secondary" data-action="event-menu" data-key="' + C.escapeHtml(instKey(inst)) + '">管理</button></div>';
-      return html.replace("</article>", button + "</article>");
+      var inject = C.expandPanel("event:" + instKey(inst), eventExpandBody(inst)) + C.expandToggle("event:" + instKey(inst));
+      return html.replace("</article>", inject + "</article>");
     }).join(""));
   }
 
@@ -364,8 +461,15 @@
           ["最近使用", C.escapeHtml(feed.last_used_at ? (C.formatMinute(feed.last_used_at) || "未知") : "还没被拉取")],
         ],
       });
-      var button = feed.revoked ? "" : '<div class="row-actions"><button type="button" class="secondary" data-action="feed-revoke" data-id="' + C.escapeHtml(feed.id) + '">吊销</button></div>';
-      return html.replace("</article>", button + "</article>");
+      var inject = feed.revoked
+        ? ""
+        : C.expandPanel(
+            "feed:" + feed.id,
+            C.expandActions(
+              '<button type="button" class="danger" data-action="feed-revoke" data-id="' + C.escapeHtml(feed.id) + '">吊销</button>',
+            ),
+          ) + C.expandToggle("feed:" + feed.id);
+      return html.replace("</article>", inject + "</article>");
     }).join("");
     return C.section("订阅链接", "刷新间隔由设备日历决定，不是实时同步", C.list(rows), addButton);
   }
@@ -380,7 +484,6 @@
       '<button type="button" class="secondary" data-action="cal-next">下个月</button>';
     return (
       "<div class=\"stack\">" +
-      C.addBar({ addLabel: "添加日程", addAction: "add-event", groupLabel: "添加日历", groupAction: "add-calendar" }) +
       (cal.notice ? '<p class="callout' + (cal.noticeDanger ? " danger" : "") + '" role="status">' + C.escapeHtml(cal.notice) + "</p>" : "") +
       (cal.error ? '<p class="callout danger" role="alert">' + C.escapeHtml(cal.error) + "</p>" : "") +
       C.section("日历", cal.calendars.length + " 个", calendarListHtml()) +
@@ -479,59 +582,6 @@
         reader.readAsText(file);
       });
     }
-  }
-
-  function openCalendarMenu(item, anchor) {
-    var items = [
-      { label: "编辑", hint: "改名、颜色、时区", onSelect: function () { openEditCalendar(item); } },
-    ];
-    if (!item.is_default) {
-      items.push({
-        label: "设为默认", hint: "Agent 不指定日历时落到这里",
-        onSelect: function () {
-          api("PATCH", "/api/calendar/calendars/" + encodeURIComponent(item.id), { is_default: true }).then(function (res) {
-            setNotice(res.data.ok ? "已设为默认日历" : (res.data.error || "设置失败"), !res.data.ok);
-            cal.loaded = false;
-            loadCalendar();
-          });
-        },
-      });
-    }
-    if (item.kind === "mirror") {
-      items.push({
-        label: "立即刷新", hint: "马上拉一次订阅源",
-        onSelect: function () {
-          setNotice("正在刷新订阅…", false);
-          render();
-          api("POST", "/api/calendar/calendars/" + encodeURIComponent(item.id) + "/refresh").then(function (res) {
-            var sync = res.data.sync || {};
-            setNotice(res.data.ok ? (sync.ok ? "刷新完成：新增 " + (sync.added || 0) + "、更新 " + (sync.updated || 0) + "、删除 " + (sync.deleted || 0) : "刷新失败：" + (sync.error || "未知错误")) : (res.data.error || "刷新失败"), !(res.data.ok && sync.ok));
-            cal.loaded = false;
-            loadCalendar();
-          });
-        },
-      });
-    }
-    items.push({
-      label: "删除日历", hint: "里面的日程会一起删掉", danger: true,
-      onSelect: function () {
-        C.askConfirm({
-          anchor: anchor,
-          title: "删除日历",
-          text: "确认删除日历「" + item.name + "」吗？里面的日程会一起被删除",
-          confirmLabel: "删除",
-          danger: true,
-        }).then(function (yes) {
-          if (!yes) return;
-          api("DELETE", "/api/calendar/calendars/" + encodeURIComponent(item.id)).then(function (res) {
-            setNotice(res.data.ok ? "日历已删除" : (res.data.error || "删除失败"), !res.data.ok);
-            cal.loaded = false;
-            loadCalendar();
-          });
-        });
-      },
-    });
-    C.openActionMenu({ title: item.name, items: items });
   }
 
   function openEditCalendar(item) {
@@ -722,73 +772,6 @@
     });
   }
 
-  function openEventMenu(inst, anchor) {
-    inst.scope = undefined;
-    var owner = calById(inst.calendar_id);
-    var readOnly = owner && owner.kind === "mirror";
-    var doDelete = function (scope) {
-      var url = "/api/calendar/events/" + encodeURIComponent(inst.is_exception && scope === "instance" ? inst.event_id : inst.master_id);
-      if (scope === "instance" && !inst.is_exception) url += "?scope=instance&instance_start=" + encodeURIComponent(inst.start);
-      api("DELETE", url).then(function (res) {
-        setNotice(res.data.ok ? "日程已删除" : (res.data.error || "删除失败"), !res.data.ok);
-        cal.loaded = false;
-        loadCalendar();
-      });
-    };
-    var items = [
-      { label: "查看详情", onSelect: function () { openEventDetail(inst); } },
-    ];
-    if (!readOnly) {
-      items.push({
-        label: "编辑",
-        onSelect: function () {
-          if (inst.recurring) {
-            C.openActionMenu({
-              title: "编辑重复日程",
-              items: [
-                { label: "只改这一次", onSelect: function () { pickScope("instance"); } },
-                { label: "改整个系列", onSelect: function () { pickScope("series"); } },
-              ],
-            });
-          } else {
-            api("GET", "/api/calendar/events/" + encodeURIComponent(inst.event_id)).then(function (res) {
-              openEditEvent(inst, res.data.ok ? res.data.event : null);
-            });
-          }
-          function pickScope(scope) {
-            inst.scope = scope;
-            api("GET", "/api/calendar/events/" + encodeURIComponent(inst.master_id)).then(function (res) {
-              openEditEvent(inst, res.data.ok ? res.data.event : null);
-            });
-          }
-        },
-      });
-      items.push({
-        label: "删除", danger: true,
-        onSelect: function () {
-          if (inst.recurring) {
-            C.openActionMenu({
-              title: "删除重复日程",
-              items: [
-                { label: "只删这一次", onSelect: function () { doDelete("instance"); } },
-                { label: "删整个系列", danger: true, onSelect: function () { doDelete("series"); } },
-              ],
-            });
-          } else {
-            C.askConfirm({
-              anchor: anchor,
-              title: "删除日程",
-              text: "确认删除日程「" + inst.title + "」吗？",
-              confirmLabel: "删除",
-              danger: true,
-            }).then(function (yes) { if (yes) doDelete("series"); });
-          }
-        },
-      });
-    }
-    C.openActionMenu({ title: inst.title, items: items });
-  }
-
   function openAddFeed() {
     var options = '<option value="">全部日历</option>' + cal.calendars.map(function (item) {
       return '<option value="' + C.escapeHtml(item.id) + '">' + C.escapeHtml(item.name) + "</option>";
@@ -839,7 +822,7 @@
       if (item.note) facts.push(["备注", C.escapeHtml(item.note)]);
       facts.push(["更新时间", C.escapeHtml(C.formatMinute(Date.parse(item.updated_at)))]);
       if (item.completed_at) facts.push(["完成时间", C.escapeHtml(C.formatMinute(Date.parse(item.completed_at)))]);
-      return C.record({ id: item.id, title: item.title, status: item.status, facts: facts, extra: "<div class=\"row-actions\"><button type=\"button\" class=\"secondary\" data-action=\"task-menu\" data-id=\"" + C.escapeHtml(item.id) + "\">高级</button></div>" });
+      return C.record({ id: item.id, title: item.title, status: item.status, facts: facts, expandKey: "task:" + item.id, expandBody: taskExpandBody(item) });
     }).join("");
     var tasksBody;
     if (taskState.error) tasksBody = C.emptyState("任务读取失败", taskState.error);
@@ -848,18 +831,29 @@
     else tasksBody = C.list(taskCards);
     var tasksHtml =
       "<div class=\"stack\">" +
-      "<button type=\"button\" class=\"add-button\" data-add=\"task\">添加任务</button>" +
       C.section("任务", String(taskState.tasks.length) + " 条", tasksBody) +
       C.section("失败队列", "", C.emptyState("失败队列是空的", "失败的传递会留在这里，方便原样重试")) +
       "</div>";
 
+    var head =
+      '<div class="page-head"><div class="page-tabs" role="tablist">' +
+      '<button class="page-tab" type="button" role="tab" data-tab="tasks" aria-selected="' +
+      (activeTab === "tasks" ? "true" : "false") +
+      '">任务</button>' +
+      '<button class="page-tab" type="button" role="tab" data-tab="calendar" aria-selected="' +
+      (activeTab === "calendar" ? "true" : "false") +
+      '">日历</button>' +
+      "</div>" +
+      '<div class="page-head-actions">' +
+      (activeTab === "tasks"
+        ? '<button type="button" class="add-button" data-add="task">添加任务</button>'
+        : C.addBar({ addLabel: "添加日程", addAction: "add-event", groupLabel: "添加日历", groupAction: "add-calendar" })) +
+      "</div></div>";
+
     C.mount(
       C.layout(
         "",
-        "<div class=\"page-tabs\" role=\"tablist\">" +
-          "<button class=\"page-tab\" type=\"button\" role=\"tab\" data-tab=\"tasks\" aria-selected=\"" + (activeTab === "tasks" ? "true" : "false") + "\">任务</button>" +
-          "<button class=\"page-tab\" type=\"button\" role=\"tab\" data-tab=\"calendar\" aria-selected=\"" + (activeTab === "calendar" ? "true" : "false") + "\">日历</button>" +
-          "</div>" +
+        head +
           "<div data-panel=\"tasks\"" + (activeTab === "tasks" ? "" : " hidden") + ">" + tasksHtml + "</div>" +
           "<div data-panel=\"calendar\"" + (activeTab === "calendar" ? "" : " hidden") + ">" + calendarHtml() + "</div>"
       )
@@ -885,18 +879,53 @@
       if (action === "add-event") { setNotice("", false); openAddEvent(); }
       else if (action === "add-calendar") { setNotice("", false); openAddCalendar(); }
       else if (action === "add-feed") openAddFeed();
-      else if (action === "task-menu") {
+      else if (action === "task-edit") {
         var task = taskById(actionEl.getAttribute("data-id"));
-        if (task) openTaskMenu(task, actionEl.closest("article") || actionEl);
+        if (task) openTaskDialog(task);
+      }
+      else if (action === "task-complete") {
+        var task2 = taskById(actionEl.getAttribute("data-id"));
+        if (task2) completeTask(task2);
+      }
+      else if (action === "task-delete") {
+        var task3 = taskById(actionEl.getAttribute("data-id"));
+        if (task3) deleteTask(task3, actionEl.closest("article") || actionEl);
       }
       else if (action === "cal-prev") { cal.month--; if (cal.month < 0) { cal.month = 11; cal.year--; } cal.loaded = false; loadCalendar(); }
       else if (action === "cal-next") { cal.month++; if (cal.month > 11) { cal.month = 0; cal.year++; } cal.loaded = false; loadCalendar(); }
-      else if (action === "cal-menu") {
+      else if (action === "cal-edit") {
         var item = calById(actionEl.getAttribute("data-id"));
-        if (item) openCalendarMenu(item, actionEl.closest("article") || actionEl);
-      } else if (action === "event-menu") {
+        if (item) openEditCalendar(item);
+      } else if (action === "cal-default") {
+        var item2 = calById(actionEl.getAttribute("data-id"));
+        if (item2) setDefaultCalendar(item2);
+      } else if (action === "cal-refresh") {
+        var item3 = calById(actionEl.getAttribute("data-id"));
+        if (item3) refreshCalendarNow(item3);
+      } else if (action === "cal-delete") {
+        var item4 = calById(actionEl.getAttribute("data-id"));
+        if (item4) deleteCalendar(item4, actionEl.closest("article") || actionEl);
+      } else if (action === "event-detail") {
         var inst = cal.byKey[actionEl.getAttribute("data-key")];
-        if (inst) openEventMenu(inst, actionEl.closest("article") || actionEl);
+        if (inst) openEventDetail(inst);
+      } else if (action === "event-edit") {
+        var inst2 = cal.byKey[actionEl.getAttribute("data-key")];
+        if (inst2) editEventInstance(inst2, "single");
+      } else if (action === "event-edit-instance") {
+        var inst3 = cal.byKey[actionEl.getAttribute("data-key")];
+        if (inst3) editEventInstance(inst3, "instance");
+      } else if (action === "event-edit-series") {
+        var inst4 = cal.byKey[actionEl.getAttribute("data-key")];
+        if (inst4) editEventInstance(inst4, "series");
+      } else if (action === "event-delete") {
+        var inst5 = cal.byKey[actionEl.getAttribute("data-key")];
+        if (inst5) deleteEventInstance(inst5, "series", actionEl.closest("article") || actionEl);
+      } else if (action === "event-delete-instance") {
+        var inst6 = cal.byKey[actionEl.getAttribute("data-key")];
+        if (inst6) deleteEventInstance(inst6, "instance", actionEl.closest("article") || actionEl);
+      } else if (action === "event-delete-series") {
+        var inst7 = cal.byKey[actionEl.getAttribute("data-key")];
+        if (inst7) deleteEventInstance(inst7, "series", actionEl.closest("article") || actionEl);
       } else if (action === "feed-revoke") {
         var feed = null;
         cal.feeds.forEach(function (f) { if (f.id === actionEl.getAttribute("data-id")) feed = f; });
@@ -907,7 +936,13 @@
     var chip = target.closest("[data-event-key]");
     if (chip) {
       var chipInst = cal.byKey[chip.getAttribute("data-event-key")];
-      if (chipInst) openEventMenu(chipInst, chip);
+      if (chipInst) {
+        cal.selected = instanceDateKey(chipInst);
+        C.setCardExpanded("event:" + instKey(chipInst), true);
+        render();
+        var rowEl = document.getElementById("evrow-" + instKey(chipInst).replace(/[^A-Za-z0-9_-]/g, "_"));
+        if (rowEl) rowEl.scrollIntoView({ block: "nearest" });
+      }
       return;
     }
     var day = target.closest("[data-day]");
