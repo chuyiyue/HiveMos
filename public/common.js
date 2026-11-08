@@ -232,12 +232,61 @@
   // Pages fill the body, wire their own delegated handlers onto ctrl.dialog
   // (the mcp-skills wireDialog pattern), and use ctrl.confirmSlot as the
   // askConfirm anchor for flows started inside.
+  // ---- Two-step in-place delete confirmation (global) ----
+  // Any [data-confirm-delete] button: the first click only arms it (the
+  // label becomes the confirm text); the second click on the same button
+  // lets the page handler run the delete. Arming resets after a few
+  // seconds, when another button is clicked, or when a new overlay opens.
+  // Disable / revoke actions do not use this; they keep their own flows.
+  var armedDeleteBtn = null;
+  var armedDeleteTimer = null;
+  function disarmDelete() {
+    if (armedDeleteTimer) {
+      clearTimeout(armedDeleteTimer);
+      armedDeleteTimer = null;
+    }
+    if (armedDeleteBtn) {
+      var btn = armedDeleteBtn;
+      armedDeleteBtn = null;
+      btn.classList.remove("is-armed");
+      btn.removeAttribute("data-armed");
+      if (btn.dataset.armLabel !== undefined) {
+        btn.innerHTML = btn.dataset.armLabel;
+        delete btn.dataset.armLabel;
+      }
+    }
+  }
+  document.addEventListener(
+    "click",
+    function (event) {
+      var target = event.target;
+      if (!(target instanceof Element)) return;
+      var btn = target.closest("[data-confirm-delete]");
+      if (btn && btn === armedDeleteBtn) {
+        disarmDelete();
+        return;
+      }
+      if (armedDeleteBtn) disarmDelete();
+      if (!btn) return;
+      event.preventDefault();
+      event.stopPropagation();
+      armedDeleteBtn = btn;
+      btn.dataset.armLabel = btn.innerHTML;
+      btn.textContent = "确认删除";
+      btn.classList.add("is-armed");
+      btn.setAttribute("data-armed", "1");
+      armedDeleteTimer = setTimeout(disarmDelete, 3500);
+    },
+    true,
+  );
+
   var currentOverlay = null;
 
   var CLOSE_ICON =
     "<svg class=\"icon\" viewBox=\"0 0 24 24\" aria-hidden=\"true\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\"><path d=\"M6 6l12 12M18 6L6 18\"/></svg>";
 
   function buildOverlay(options, panel) {
+    disarmDelete();
     if (currentOverlay) currentOverlay.close();
     var dialog = document.createElement("dialog");
     dialog.className = panel ? "modal side-panel" : "modal manage-dialog" + (options.wide ? " wide" : "");
@@ -283,11 +332,35 @@
       },
     };
     currentOverlay = ctrl;
-    closeBtn.addEventListener("click", function () {
+    var closeGuard = typeof options.onBeforeClose === "function" ? options.onBeforeClose : null;
+    var closeApproved = false;
+    ctrl.requestClose = function () {
+      if (!closeGuard || closeApproved) {
+        ctrl.close();
+        return;
+      }
+      Promise.resolve(closeGuard()).then(function (ok) {
+        if (ok) {
+          closeApproved = true;
+          ctrl.close();
+        }
+      });
+    };
+    ctrl.forceClose = function () {
+      closeApproved = true;
       ctrl.close();
+    };
+    closeBtn.addEventListener("click", function () {
+      ctrl.requestClose();
     });
     dialog.addEventListener("click", function (event) {
-      if (event.target === dialog) ctrl.close();
+      if (event.target === dialog) ctrl.requestClose();
+    });
+    dialog.addEventListener("cancel", function (event) {
+      if (closeGuard && !closeApproved) {
+        event.preventDefault();
+        ctrl.requestClose();
+      }
     });
     dialog.addEventListener("close", function () {
       document.body.classList.remove("modal-open");
@@ -357,68 +430,188 @@
     return perms.length + " / " + PERM_DOMAINS.length + "：" + labels.join("、");
   }
 
-  function agentPermRows(agent) {
-    var enabled = new Set(agent.permissions || []);
+  function orderedPerms(set) {
     return PERM_DOMAINS.map(function (entry) {
-      var on = enabled.has(entry[0]);
-      return (
-        "<div class=\"perm-row\"><div class=\"perm-meta\"><strong>" +
-        escapeHtml(entry[1]) +
-        "</strong><span class=\"subtle\">" +
-        escapeHtml(entry[0] + " · " + entry[2]) +
-        "</span></div><button type=\"button\" class=\"switch\" role=\"switch\" aria-checked=\"" +
-        (on ? "true" : "false") +
-        "\" data-perm=\"" +
-        escapeHtml(entry[0]) +
-        "\" aria-label=\"" +
-        escapeHtml(entry[1]) +
-        "\"><span class=\"switch-knob\"></span></button></div>"
-      );
-    }).join("");
+      return entry[0];
+    }).filter(function (domain) {
+      return set.has(domain);
+    });
   }
 
-  function agentManageBody(agent, groupName) {
+  function permSetsEqual(a, b) {
+    if (a.size !== b.size) return false;
+    var same = true;
+    a.forEach(function (domain) {
+      if (!b.has(domain)) same = false;
+    });
+    return same;
+  }
+
+  function permTagsHtml(set) {
+    var chosen = PERM_DOMAINS.filter(function (entry) {
+      return set.has(entry[0]);
+    });
+    if (!chosen.length) return '<span class="subtle">未开启任何功能</span>';
+    return chosen
+      .map(function (entry) {
+        return (
+          '<span class="perm-tag">' +
+          escapeHtml(entry[1]) +
+          '<button type="button" class="perm-tag-x" data-perm-remove="' +
+          escapeHtml(entry[0]) +
+          '" aria-label="移除' +
+          escapeHtml(entry[1]) +
+          '权限">×</button></span>'
+        );
+      })
+      .join("");
+  }
+
+  function permPickerHtml(agent) {
+    var enabled = new Set(agent.permissions || []);
+    var items = PERM_DOMAINS.map(function (entry) {
+      var on = enabled.has(entry[0]);
+      return (
+        '<button type="button" class="perm-item' +
+        (on ? " is-selected" : "") +
+        '" role="option" aria-selected="' +
+        (on ? "true" : "false") +
+        '" data-perm-item="' +
+        escapeHtml(entry[0]) +
+        '"><span class="perm-item-text"><strong>' +
+        escapeHtml(entry[1]) +
+        '</strong><span class="perm-item-sub">' +
+        escapeHtml(entry[0] + " · " + entry[2]) +
+        '</span></span><span class="perm-item-check" aria-hidden="true">✓</span></button>'
+      );
+    }).join("");
+    return (
+      '<div class="perm-picker" data-perm-picker>' +
+      '<input type="text" class="perm-search" data-perm-search placeholder="搜索权限" autocomplete="off" role="combobox" aria-expanded="false" aria-haspopup="listbox" aria-label="搜索并点选权限" />' +
+      '<div class="perm-menu" data-perm-menu role="listbox" aria-multiselectable="true" aria-label="权限列表" hidden>' +
+      items +
+      '<p class="perm-menu-empty" data-perm-menu-empty hidden>没有匹配的权限</p></div>' +
+      '<div class="perm-tags" data-perm-tags>' +
+      permTagsHtml(enabled) +
+      "</div>" +
+      '<div class="perm-foot"><button type="button" class="perm-save" data-perm-save disabled>保存权限</button></div>' +
+      "</div>"
+    );
+  }
+
+  function mcpEndpoint() {
+    return location.origin + "/mcp";
+  }
+
+  function manageInfoHead(o) {
+    return (
+      "<div class=\"manage-info-head\"><span class=\"manage-info-icon\"><svg class=\"icon\" viewBox=\"0 0 24 24\" aria-hidden=\"true\"><use href=\"/icons.svg#icon-" +
+      escapeHtml(o.icon || "bot") +
+      "\"></use></svg></span>" +
+      "<div class=\"manage-info-titles\"><h3 class=\"manage-info-name\">" +
+      escapeHtml(o.title || "") +
+      "</h3>" +
+      (o.sub ? "<p class=\"manage-info-sub\">" + escapeHtml(o.sub) + "</p>" : "") +
+      "</div></div>"
+    );
+  }
+
+  function wireManageTabs(ctrl) {
+    ctrl.dialog.addEventListener("click", function (event) {
+      var target = event.target;
+      if (!(target instanceof Element)) return;
+      var tab = target.closest("[data-mtab]");
+      if (!tab) return;
+      var name = tab.getAttribute("data-mtab");
+      Array.prototype.forEach.call(ctrl.bodyEl.querySelectorAll("[data-mtab]"), function (btn) {
+        btn.setAttribute("aria-selected", btn.getAttribute("data-mtab") === name ? "true" : "false");
+      });
+      Array.prototype.forEach.call(ctrl.bodyEl.querySelectorAll("[data-mpanel]"), function (panel) {
+        panel.hidden = panel.getAttribute("data-mpanel") !== name;
+      });
+    });
+  }
+
+  function agentManageBody(agent, groupName, opts) {
+    var partial = !!(opts && opts.partial);
     var active = agent.status === "active";
-    var actions =
+    var endpoint = mcpEndpoint();
+    var advanced =
+      "<div class=\"manage-actions\">" +
       "<button type=\"button\" class=\"secondary\" data-agent-act=\"rename\">改名</button>" +
-      "<button type=\"button\" class=\"secondary\" data-agent-act=\"move\">移动分组</button>" +
-      "<button type=\"button\" class=\"secondary\" data-agent-act=\"pin\">" +
-      (agent.pinned_at ? "取消固定" : "固定到侧边栏") +
-      "</button>";
-    if (active) {
-      actions +=
-        "<button type=\"button\" class=\"secondary\" data-agent-act=\"rotate\">轮换令牌</button>" +
-        "<button type=\"button\" class=\"danger\" data-agent-act=\"disable\">停用</button>";
-    }
+      "<button type=\"button\" class=\"secondary\" data-agent-act=\"move\">设置分组</button>" +
+      (active ? "<button type=\"button\" class=\"secondary\" data-agent-act=\"rotate\">轮换令牌</button>" : "") +
+      "</div>" +
+      (active
+        ? "<div class=\"manage-danger-zone\"><p class=\"subtle\">删除后该 Agent 会被停用，令牌立即失效</p>" +
+          "<button type=\"button\" class=\"danger\" data-confirm-delete data-agent-act=\"disable\">删除</button></div>"
+        : "<p class=\"subtle\">这个 Agent 已停用</p>");
+    var permSection = partial
+      ? '<p class="subtle" data-perm-pending>权限读取中</p>'
+      : permPickerHtml(agent);
     return (
       "<p class=\"manage-status\" data-manage-status role=\"status\"></p>" +
-      "<dl class=\"kv\">" +
-      "<div><dt>标识</dt><dd><span class=\"mono\">" +
-      escapeHtml(agent.id) +
-      "</span></dd></div>" +
+      manageInfoHead({
+        icon: "bot",
+        title: agent.name,
+        sub: (active ? "已启用" : "已停用") + " · Agent · " + (partial ? "读取中" : groupName || "未分组"),
+      }) +
+      "<div class=\"manage-info-card\"><dl class=\"kv\">" +
       "<div><dt>状态</dt><dd>" +
       statusPill(active ? "enabled" : "disabled") +
       "</dd></div>" +
+      "<div><dt>标识</dt><dd><span class=\"mono\">" +
+      escapeHtml(agent.id) +
+      "</span> <button type=\"button\" class=\"copy-btn\" data-copy=\"" +
+      escapeHtml(agent.id) +
+      "\" data-label=\"复制\">复制</button></dd></div>" +
+      "<div><dt>接入地址</dt><dd><span class=\"mono\">" +
+      escapeHtml(endpoint) +
+      "</span> <button type=\"button\" class=\"copy-btn\" data-copy=\"" +
+      escapeHtml(endpoint) +
+      "\" data-label=\"复制\">复制</button></dd></div>" +
+      "</dl></div>" +
+      "<div class=\"page-tabs manage-tabs\" role=\"tablist\" aria-label=\"Agent 管理\">" +
+      "<button type=\"button\" class=\"page-tab\" role=\"tab\" data-mtab=\"overview\" aria-selected=\"true\">概览</button>" +
+      "<button type=\"button\" class=\"page-tab\" role=\"tab\" data-mtab=\"perms\" aria-selected=\"false\">权限<span class=\"perm-dirty-dot\" data-perm-dirty hidden title=\"有未保存改动\"></span></button>" +
+      "<button type=\"button\" class=\"page-tab\" role=\"tab\" data-mtab=\"advanced\" aria-selected=\"false\">高级设置</button>" +
+      "</div>" +
+      "<div data-mpanel=\"overview\">" +
+      "<dl class=\"kv\">" +
+      "<div><dt>名称</dt><dd>" +
+      escapeHtml(agent.name) +
+      "</dd></div>" +
+      "<div><dt>状态</dt><dd>" +
+      (active ? "已启用" : "已停用") +
+      "</dd></div>" +
       "<div><dt>分组</dt><dd>" +
-      escapeHtml(groupName || "未分组") +
+      (partial ? "读取中" : escapeHtml(groupName || "未分组")) +
       "</dd></div>" +
-      "<div><dt>权限</dt><dd>" +
-      escapeHtml(permTextOf(agent)) +
-      "</dd></div>" +
-      "<div><dt>最近调用</dt><dd>" +
+      "<div><dt>权限</dt><dd><span data-perm-summary>" +
+      (partial ? "读取中" : escapeHtml(permTextOf(agent))) +
+      "</span></dd></div>" +
+      "<div><dt>上次调用</dt><dd>" +
       escapeHtml(formatMinute(agent.last_seen_at) || "还没有调用") +
       "</dd></div>" +
-      "<div><dt>创建</dt><dd>" +
-      escapeHtml(formatMinute(agent.created_at) || "未知") +
+      "<div><dt>创建时间</dt><dd>" +
+      (partial ? "读取中" : escapeHtml(formatMinute(agent.created_at) || "未知")) +
       "</dd></div>" +
       "</dl>" +
       "<div class=\"manage-actions\">" +
-      actions +
+      "<button type=\"button\" class=\"secondary\" data-copy=\"" +
+      escapeHtml(agent.id) +
+      "\" data-label=\"复制标识\">复制标识</button>" +
+      "<button type=\"button\" class=\"secondary\" data-copy=\"" +
+      escapeHtml(endpoint) +
+      "\" data-label=\"复制接入地址\">复制接入地址</button>" +
       "</div>" +
-      "<h3 class=\"manage-subhead\">系统功能权限</h3>" +
-      "<p class=\"subtle manage-note\">这个 Agent 通过面板 MCP 能访问的系统功能，拨动开关立即生效</p>" +
-      "<div class=\"perm-list\">" +
-      agentPermRows(agent) +
+      "</div>" +
+      "<div data-mpanel=\"perms\" hidden>" +
+      "<p class=\"subtle manage-note\">这个 Agent 通过面板 MCP 能访问的系统功能，在下方点选后点保存权限统一生效</p>" +
+      permSection +
+      "</div>" +
+      "<div data-mpanel=\"advanced\" hidden>" +
+      advanced +
       "</div>"
     );
   }
@@ -429,13 +622,19 @@
 
   function openAgentManage(agentId, options) {
     options = options || {};
-    var ctrl = (options.panel ? openSidePanel : openManageDialog)({
-      title: "Agent",
-      bodyHtml: emptyState("正在读取", "稍等片刻"),
-    });
-    var agent = null;
-    var groups = [];
+    var seed = options.agent && options.agent.id === agentId ? options.agent : null;
+    var agent = seed;
+    var groups = Array.isArray(options.groups) ? options.groups.slice() : [];
+    var groupsKnown = Array.isArray(options.groups);
+    var partial = !!seed && !("group_id" in seed);
     var busy = false;
+    var interacted = false;
+
+    var permSaved = new Set(seed && seed.permissions ? seed.permissions : []);
+    var permDesired = new Set(permSaved);
+    var permSaving = false;
+    var permActiveKey = null;
+    var promptOpen = false;
 
     function groupNameOf(target) {
       if (!target || !target.group_id) return "未分组";
@@ -444,6 +643,16 @@
       });
       return found ? found.name : "未分组";
     }
+
+    var ctrl = (options.panel ? openSidePanel : openManageDialog)({
+      title: seed ? seed.name : "Agent",
+      bodyHtml: seed
+        ? agentManageBody(seed, groupNameOf(seed), { partial: partial })
+        : emptyState("正在读取", "稍等片刻"),
+      onBeforeClose: function () {
+        return guardClose();
+      },
+    });
 
     function setStatus(text, isError) {
       var el = ctrl.bodyEl.querySelector("[data-manage-status]");
@@ -457,7 +666,233 @@
       if (typeof options.onChanged === "function") options.onChanged(message || "");
     }
 
-    function refresh() {
+    // ---- Permission picker (local pending state; one PATCH on save) ----
+
+    function isPermDirty() {
+      return !partial && !permSetsEqual(permDesired, permSaved);
+    }
+
+    function permEls() {
+      return {
+        search: ctrl.bodyEl.querySelector("[data-perm-search]"),
+        menu: ctrl.bodyEl.querySelector("[data-perm-menu]"),
+        tags: ctrl.bodyEl.querySelector("[data-perm-tags]"),
+        save: ctrl.bodyEl.querySelector("[data-perm-save]"),
+        dirty: ctrl.bodyEl.querySelector("[data-perm-dirty]"),
+        summary: ctrl.bodyEl.querySelector("[data-perm-summary]"),
+        empty: ctrl.bodyEl.querySelector("[data-perm-menu-empty]"),
+      };
+    }
+
+    function syncPermUI() {
+      var els = permEls();
+      if (els.tags) els.tags.innerHTML = permTagsHtml(permDesired);
+      if (els.menu) {
+        Array.prototype.forEach.call(els.menu.querySelectorAll("[data-perm-item]"), function (btn) {
+          var key = btn.getAttribute("data-perm-item");
+          var on = permDesired.has(key);
+          btn.classList.toggle("is-selected", on);
+          btn.setAttribute("aria-selected", on ? "true" : "false");
+          btn.classList.toggle("is-active", key === permActiveKey);
+        });
+      }
+      var dirty = isPermDirty();
+      if (els.save) {
+        els.save.disabled = !dirty || permSaving;
+        els.save.classList.toggle("is-dirty", dirty);
+      }
+      if (els.dirty) els.dirty.hidden = !dirty;
+    }
+
+    function updatePermSummary() {
+      var els = permEls();
+      if (els.summary && agent) els.summary.textContent = permTextOf(agent);
+    }
+
+    function visiblePermItems() {
+      var els = permEls();
+      if (!els.menu) return [];
+      return Array.prototype.filter.call(els.menu.querySelectorAll("[data-perm-item]"), function (btn) {
+        return !btn.hidden;
+      });
+    }
+
+    function filterPermMenu(keyword) {
+      var els = permEls();
+      if (!els.menu) return;
+      var needle = String(keyword || "").trim().toLowerCase();
+      var shown = 0;
+      Array.prototype.forEach.call(els.menu.querySelectorAll("[data-perm-item]"), function (btn) {
+        var key = btn.getAttribute("data-perm-item");
+        var entry = PERM_DOMAINS.find(function (item) {
+          return item[0] === key;
+        });
+        var hay = entry ? (entry[1] + " " + entry[0] + " " + entry[2]).toLowerCase() : key;
+        var hit = !needle || hay.indexOf(needle) !== -1;
+        btn.hidden = !hit;
+        if (hit) shown += 1;
+      });
+      if (els.empty) els.empty.hidden = shown > 0;
+      var visible = visiblePermItems();
+      if (
+        permActiveKey &&
+        !visible.some(function (btn) {
+          return btn.getAttribute("data-perm-item") === permActiveKey;
+        })
+      ) {
+        permActiveKey = visible.length ? visible[0].getAttribute("data-perm-item") : null;
+        syncPermUI();
+      }
+    }
+
+    function openPermMenu() {
+      var els = permEls();
+      if (!els.menu) return;
+      els.menu.hidden = false;
+      if (els.search) els.search.setAttribute("aria-expanded", "true");
+      if (!permActiveKey) permActiveKey = PERM_DOMAINS[0][0];
+      filterPermMenu(els.search ? els.search.value : "");
+      syncPermUI();
+    }
+
+    function closePermMenu() {
+      var els = permEls();
+      if (!els.menu) return;
+      els.menu.hidden = true;
+      if (els.search) els.search.setAttribute("aria-expanded", "false");
+    }
+
+    function permMenuOpen() {
+      var els = permEls();
+      return !!els.menu && !els.menu.hidden;
+    }
+
+    function togglePerm(domain) {
+      if (partial || !domain) return;
+      interacted = true;
+      if (permDesired.has(domain)) permDesired.delete(domain);
+      else permDesired.add(domain);
+      syncPermUI();
+    }
+
+    function flashPermSaved() {
+      var els = permEls();
+      if (!els.save) return;
+      var btn = els.save;
+      btn.textContent = "已保存";
+      btn.classList.add("is-saved");
+      setTimeout(function () {
+        if (btn.isConnected) {
+          btn.textContent = "保存权限";
+          btn.classList.remove("is-saved");
+        }
+      }, 1600);
+    }
+
+    function savePerms() {
+      if (permSaving) return Promise.resolve(false);
+      if (!isPermDirty()) return Promise.resolve(true);
+      permSaving = true;
+      syncPermUI();
+      var target = orderedPerms(permDesired);
+      return agentApi("PATCH", "/api/agents/" + encodeURIComponent(agentId), { permissions: target })
+        .then(function (result) {
+          permSaving = false;
+          if (result.status === 401) {
+            location.assign("/login.html");
+            return false;
+          }
+          if (!result.data || result.data.ok !== true) {
+            setStatus((result.data && result.data.error) || "权限没有保存，请重试", true);
+            syncPermUI();
+            return false;
+          }
+          permSaved = new Set(target);
+          if (agent) agent.permissions = target.slice();
+          updatePermSummary();
+          syncPermUI();
+          flashPermSaved();
+          setStatus("已保存权限", false);
+          changed("已保存权限");
+          return true;
+        })
+        .catch(function () {
+          permSaving = false;
+          setStatus("网络异常，请重试", true);
+          syncPermUI();
+          return false;
+        });
+    }
+
+    function promptPendingPerms(saveLabel, discardLabel) {
+      if (!isPermDirty()) return Promise.resolve("saved");
+      if (promptOpen) return Promise.resolve("stay");
+      promptOpen = true;
+      return new Promise(function (resolve) {
+        var slot = ctrl.confirmSlot;
+        var panel = document.createElement("div");
+        panel.className = "confirm-panel";
+        panel.setAttribute("role", "group");
+        panel.setAttribute("aria-label", "权限未保存");
+        var text = document.createElement("p");
+        text.textContent = "权限改动还没有保存，离开前要保存吗？";
+        var actions = document.createElement("div");
+        actions.className = "confirm-actions";
+        var saveBtn = document.createElement("button");
+        saveBtn.type = "button";
+        saveBtn.textContent = saveLabel;
+        var discardBtn = document.createElement("button");
+        discardBtn.type = "button";
+        discardBtn.className = "secondary";
+        discardBtn.textContent = discardLabel;
+        var stayBtn = document.createElement("button");
+        stayBtn.type = "button";
+        stayBtn.className = "secondary";
+        stayBtn.textContent = "继续编辑";
+        actions.append(saveBtn, discardBtn, stayBtn);
+        panel.append(text, actions);
+        slot.append(panel);
+        function finish(value) {
+          promptOpen = false;
+          panel.remove();
+          resolve(value);
+        }
+        saveBtn.addEventListener("click", function () {
+          saveBtn.disabled = true;
+          savePerms().then(function (ok) {
+            finish(ok ? "saved" : "stay");
+          });
+        });
+        discardBtn.addEventListener("click", function () {
+          permDesired = new Set(permSaved);
+          syncPermUI();
+          finish("discarded");
+        });
+        stayBtn.addEventListener("click", function () {
+          finish("stay");
+        });
+        saveBtn.focus();
+      });
+    }
+
+    function guardClose() {
+      if (!isPermDirty()) return true;
+      return promptPendingPerms("保存并退出", "不保存退出").then(function (r) {
+        return r !== "stay";
+      });
+    }
+
+    function guardAction() {
+      if (!isPermDirty()) return Promise.resolve(true);
+      return promptPendingPerms("保存并继续", "不保存").then(function (r) {
+        return r !== "stay";
+      });
+    }
+
+    // ---- Data: render from the seed at once; verify silently in background ----
+
+    function refresh(settings) {
+      var silent = !!(settings && settings.silent);
       return Promise.all([agentApi("GET", "/api/agents"), agentApi("GET", "/api/groups?scope=agent")])
         .then(function (results) {
           if (results[0].status === 401) {
@@ -465,26 +900,45 @@
             return;
           }
           var list = results[0].data && results[0].data.ok === true ? results[0].data.agents || [] : [];
-          groups = results[1].data && results[1].data.ok === true ? results[1].data.groups || [] : [];
-          agent =
+          var freshGroups = results[1].data && results[1].data.ok === true ? results[1].data.groups || [] : [];
+          var fresh =
             list.find(function (item) {
               return item.id === agentId;
             }) || null;
-          if (!agent) {
-            ctrl.setTitle("Agent");
-            ctrl.setBody(emptyState("找不到这个 Agent", "它可能已经被停用或删除"));
+          if (!fresh) {
+            if (!silent || !agent) {
+              ctrl.setTitle("Agent");
+              ctrl.setBody(emptyState("找不到这个 Agent", "它可能已经被停用或删除"));
+            }
             return;
           }
-          ctrl.setTitle(agent.name);
-          ctrl.setBody(agentManageBody(agent, groupNameOf(agent)));
+          var dataChanged =
+            !agent ||
+            partial ||
+            JSON.stringify(fresh) !== JSON.stringify(agent) ||
+            JSON.stringify(freshGroups) !== JSON.stringify(groups);
+          groups = freshGroups;
+          groupsKnown = true;
+          agent = fresh;
+          partial = false;
+          if (!isPermDirty() && !permSaving) {
+            permSaved = new Set(fresh.permissions || []);
+            permDesired = new Set(permSaved);
+          }
+          if (!dataChanged) return;
+          if (silent && (interacted || busy)) return;
+          ctrl.setTitle(fresh.name);
+          ctrl.setBody(agentManageBody(fresh, groupNameOf(fresh), {}));
+          syncPermUI();
         })
         .catch(function () {
-          ctrl.setBody(emptyState("读取失败", "网络异常，请稍后重试"));
+          if (!silent) ctrl.setBody(emptyState("读取失败", "网络异常，请稍后重试"));
         });
     }
 
     function patch(body, okMessage) {
       if (busy || !agent) return Promise.resolve(false);
+      interacted = true;
       busy = true;
       return agentApi("PATCH", "/api/agents/" + encodeURIComponent(agent.id), body)
         .then(function (result) {
@@ -514,6 +968,12 @@
     }
 
     function doRename() {
+      guardAction().then(function (ok) {
+        if (ok) openRenameForm();
+      });
+    }
+
+    function openRenameForm() {
       openFormDialog({
         title: "改名",
         bodyHtml:
@@ -539,6 +999,19 @@
     }
 
     function doMove() {
+      guardAction().then(function (ok) {
+        if (!ok) return;
+        if (!groupsKnown) {
+          initialRefresh.then(function () {
+            openMoveForm();
+          });
+          return;
+        }
+        openMoveForm();
+      });
+    }
+
+    function openMoveForm() {
       openFormDialog({
         title: "移动分组",
         bodyHtml: "<label>分组" + groupSelect("group_id", groups, agent.group_id || "") + "</label>",
@@ -556,6 +1029,12 @@
     }
 
     function doRotate() {
+      guardAction().then(function (ok) {
+        if (ok) openRotateConfirm();
+      });
+    }
+
+    function openRotateConfirm() {
       askConfirm({
         anchor: ctrl.confirmSlot,
         title: "轮换令牌",
@@ -598,14 +1077,13 @@
     }
 
     function doDisable() {
-      askConfirm({
-        anchor: ctrl.confirmSlot,
-        title: "停用设备",
-        text: "确认停用「" + agent.name + "」吗？停用后该令牌不能再调用注册表",
-        confirmLabel: "停用",
-        danger: true,
-      }).then(function (yes) {
-        if (!yes || busy) return;
+      guardAction().then(function (ok) {
+        if (ok) openDisableConfirm();
+      });
+    }
+
+    function openDisableConfirm() {
+      
         busy = true;
         agentApi("DELETE", "/api/agents/" + encodeURIComponent(agent.id))
           .then(function (result) {
@@ -615,48 +1093,93 @@
               return;
             }
             if (!result.data || result.data.ok !== true) {
-              setStatus((result.data && result.data.error) || "没有停用，请重试", true);
+              setStatus((result.data && result.data.error) || "没有删除成功，请重试", true);
               return;
             }
-            ctrl.close();
-            changed("已停用");
+            ctrl.forceClose();
+            changed("已删除");
           })
           .catch(function () {
             busy = false;
             setStatus("网络异常，请重试", true);
           });
-      });
+      
     }
 
     ctrl.dialog.addEventListener("click", function (event) {
       var target = event.target;
       if (!(target instanceof Element)) return;
-      var permBtn = target.closest("[data-perm]");
-      if (permBtn) {
-        if (busy || !agent) return;
-        var domain = permBtn.getAttribute("data-perm");
-        var next = new Set(agent.permissions || []);
-        if (next.has(domain)) next.delete(domain);
-        else next.add(domain);
-        permBtn.setAttribute("aria-checked", next.has(domain) ? "true" : "false");
-        var ordered = PERM_DOMAINS.map(function (entry) {
-          return entry[0];
-        }).filter(function (entry) {
-          return next.has(entry);
-        });
-        patch({ permissions: ordered }, "已保存权限");
+      var removeBtn = target.closest("[data-perm-remove]");
+      if (removeBtn) {
+        togglePerm(removeBtn.getAttribute("data-perm-remove"));
         return;
       }
+      var itemBtn = target.closest("[data-perm-item]");
+      if (itemBtn) {
+        togglePerm(itemBtn.getAttribute("data-perm-item"));
+        var els = permEls();
+        if (els.search) els.search.focus();
+        return;
+      }
+      if (target.closest("[data-perm-save]")) {
+        savePerms();
+        return;
+      }
+      if (!target.closest("[data-perm-picker]")) closePermMenu();
       var actBtn = target.closest("[data-agent-act]");
       if (!actBtn || busy || !agent) return;
       var act = actBtn.getAttribute("data-agent-act");
+      interacted = true;
       if (act === "rename") doRename();
       else if (act === "move") doMove();
-      else if (act === "pin") patch({ pinned: !agent.pinned_at }, agent.pinned_at ? "已取消固定" : "已固定到侧边栏");
       else if (act === "rotate") doRotate();
       else if (act === "disable") doDisable();
     });
-    refresh();
+
+    ctrl.dialog.addEventListener("focusin", function (event) {
+      if (event.target instanceof Element && event.target.closest("[data-perm-search]")) openPermMenu();
+    });
+
+    ctrl.dialog.addEventListener("input", function (event) {
+      if (event.target instanceof Element && event.target.closest("[data-perm-search]")) {
+        openPermMenu();
+        filterPermMenu(event.target.value);
+      }
+    });
+
+    ctrl.dialog.addEventListener("keydown", function (event) {
+      var target = event.target;
+      if (!(target instanceof Element) || !target.closest("[data-perm-search]")) return;
+      if (event.key === "Escape") {
+        if (permMenuOpen()) {
+          event.preventDefault();
+          event.stopPropagation();
+          closePermMenu();
+        }
+        return;
+      }
+      if (!permMenuOpen()) return;
+      var visible = visiblePermItems();
+      if (!visible.length) return;
+      var keys = visible.map(function (btn) {
+        return btn.getAttribute("data-perm-item");
+      });
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        var idx = keys.indexOf(permActiveKey);
+        idx = event.key === "ArrowDown" ? Math.min(idx + 1, keys.length - 1) : Math.max(idx - 1, 0);
+        permActiveKey = keys[idx];
+        syncPermUI();
+        if (visible[idx] && visible[idx].scrollIntoView) visible[idx].scrollIntoView({ block: "nearest" });
+      } else if (event.key === "Enter") {
+        event.preventDefault();
+        if (permActiveKey && keys.indexOf(permActiveKey) !== -1) togglePerm(permActiveKey);
+      }
+    });
+
+    wireManageTabs(ctrl);
+    syncPermUI();
+    var initialRefresh = refresh(seed ? { silent: true } : undefined);
     return ctrl;
   }
 
@@ -1088,6 +1611,9 @@
     closeCurrentOverlay: closeCurrentOverlay,
     openSidePanel: openSidePanel,
     openAgentManage: openAgentManage,
+    manageInfoHead: manageInfoHead,
+    wireManageTabs: wireManageTabs,
+    mcpEndpoint: mcpEndpoint,
     permDomains: PERM_DOMAINS,
     metaGrid: metaGrid,
     iconSvg: iconSvg,

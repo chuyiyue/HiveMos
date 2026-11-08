@@ -60,16 +60,53 @@
 
   function openMachineManage(kind, item) {
     var id = C.escapeHtml(item.id);
+    function row(label, valueHtml) {
+      return "<div><dt>" + label + "</dt><dd>" + valueHtml + "</dd></div>";
+    }
+    var facts = "";
+    if (kind === "server") {
+      facts =
+        row("备注", C.escapeHtml(item.note || "无")) +
+        row("主机名", C.escapeHtml(item.hostname || "未填写")) +
+        row("系统", C.escapeHtml(item.os || "未填写")) +
+        row(
+          "主机 IP",
+          C.escapeHtml(item.ip || "未填写") +
+            (item.ip
+              ? " <button type=\"button\" class=\"copy-btn\" data-copy=\"" + C.escapeHtml(item.ip) + "\" data-label=\"复制\">复制</button>"
+              : "")
+        );
+    } else if (kind === "worker") {
+      facts =
+        row("Cloudflare 账号", C.escapeHtml(item.cf_account_id || "未填写")) +
+        row("API 令牌", item.api_token_tail ? "末四位 " + C.escapeHtml(item.api_token_tail) : "未填写") +
+        row("版本", C.escapeHtml(item.version || "未记录")) +
+        row("更新时间", C.escapeHtml(C.formatMinute(item.updated_at) || "—"));
+    } else {
+      facts =
+        row("厂商", C.escapeHtml(item.vendor || "未填写")) +
+        row("接入备注", C.escapeHtml(item.access_note || "无")) +
+        row("地域", C.escapeHtml(item.region || "未填写"));
+    }
     var btns = "";
-    if (kind === "server")
-      btns += "<button type=\"button\" class=\"secondary\" data-mact=\"reveal\" data-kind=\"server\" data-id=\"" + id + "\">查看 SSH 密码</button>";
-    if (kind === "worker")
-      btns += "<button type=\"button\" class=\"secondary\" data-mact=\"workers\" data-kind=\"worker\" data-id=\"" + id + "\">查看 Workers</button>";
-    btns += "<button type=\"button\" class=\"secondary\" data-mact=\"edit\" data-kind=\"" + kind + "\" data-id=\"" + id + "\">编辑</button>";
-    btns += "<button type=\"button\" class=\"danger\" data-mact=\"delete\" data-kind=\"" + kind + "\" data-id=\"" + id + "\">删除</button>";
+    if (kind !== "cloud")
+      btns += "<button type=\"button\" class=\"secondary\" data-mact=\"edit\" data-kind=\"" + kind + "\" data-id=\"" + id + "\">编辑</button>";
+    btns += "<button type=\"button\" class=\"danger\" data-confirm-delete data-mact=\"delete\" data-kind=\"" + kind + "\" data-id=\"" + id + "\">删除</button>";
+    var kindLabel = kind === "server" ? "服务器" : kind === "worker" ? "Worker" : "云主机";
     var ctrl = C.openManageDialog({
       title: item.name,
-      bodyHtml: "<div class=\"manage-actions\">" + btns + "</div>",
+      bodyHtml:
+        C.manageInfoHead({
+          icon: kind === "worker" ? "layout" : "monitor",
+          title: item.name,
+          sub: kindLabel + (item.region && kind !== "worker" ? " · " + item.region : ""),
+        }) +
+        "<div class=\"manage-info-card\"><dl class=\"kv\">" +
+        facts +
+        "</dl></div>" +
+        "<div class=\"manage-actions\">" +
+        btns +
+        "</div>",
     });
     ctrl.dialog.addEventListener("click", handleClick);
   }
@@ -77,18 +114,11 @@
   function deleteMachine(kind, item, anchor) {
     var dlg = anchor && anchor.closest ? anchor.closest("[data-manage-dialog]") : null;
     var mount = (dlg && dlg.querySelector("[data-manage-confirm]")) || anchor;
-    C.askConfirm({
-      anchor: mount,
-      title: "删除" + TITLE_FOR[kind],
-      text: "确认删除「" + item.name + "」吗？删除后无法恢复",
-      confirmLabel: "删除",
-      danger: true,
-    }).then(function (yes) {
-      if (!yes) return;
+    
       api("DELETE", "/api/machines/" + encodeURIComponent(item.id)).then(function (res) {
         if (res.data && res.data.ok) { C.closeCurrentOverlay(); load(); }
       });
-    });
+    
   }
 
   function card(kind, item, facts) {

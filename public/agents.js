@@ -96,7 +96,10 @@
       actions:
         "<button type=\"button\" class=\"secondary\" data-copy=\"" +
         C.escapeHtml(agent.id) +
-        "\" data-label=\"复制标识\">复制标识</button>",
+        "\" data-label=\"复制标识\">复制标识</button>" +
+        "<button type=\"button\" class=\"secondary\" data-copy=\"" +
+        C.escapeHtml(C.mcpEndpoint()) +
+        "\" data-label=\"复制接入地址\">复制接入地址</button>",
       manage: "agent:" + agent.id,
     });
   }
@@ -105,11 +108,9 @@
     return (
       '<button type="button" class="secondary" data-action="rename-group" data-id="' +
       C.escapeHtml(group.id) +
-      '">改名</button><button type="button" class="danger" data-action="delete-group" data-id="' +
+      '">改名</button><button type="button" class="danger" data-confirm-delete data-action="delete-group" data-id="' +
       C.escapeHtml(group.id) +
-      '">删除</button><span class="confirm-slot" data-confirm-group="' +
-      C.escapeHtml(group.id) +
-      '"></span>'
+      '">删除</button>'
     );
   }
 
@@ -291,9 +292,6 @@
       });
   }
 
-  function confirmAnchor(selector) {
-    return document.querySelector(selector);
-  }
 
   function cssEscape(value) {
     return window.CSS && CSS.escape ? CSS.escape(value) : value;
@@ -441,15 +439,7 @@
   }
 
   function deleteGroup(group) {
-    var anchor = confirmAnchor('[data-confirm-group="' + cssEscape(group.id) + '"]');
-    C.askConfirm({
-      anchor: anchor,
-      title: "删除分组",
-      text: "确认删除分组「" + group.name + "」吗？组内设备会回到未分组，不会被删除",
-      confirmLabel: "删除",
-      danger: true,
-    }).then(function (yes) {
-      if (!yes || state.busy) return;
+    
       state.busy = true;
       api("DELETE", "/api/groups/" + encodeURIComponent(group.id))
         .then(function (result) {
@@ -471,7 +461,7 @@
           state.noticeKind = "danger";
           render();
         });
-    });
+    
   }
 
   function togglePin(agent) {
@@ -553,6 +543,8 @@
       var agent = findAgent(id);
       if (!agent) return;
       C.openAgentManage(agent.id, {
+        agent: agent,
+        groups: state.groups,
         onChanged: function (message) {
           if (message) {
             state.notice = message;
@@ -579,9 +571,8 @@
         "</dl>" +
         "<div class=\"manage-actions\">" +
         "<button type=\"button\" class=\"secondary\" data-action=\"app-edit\" data-id=\"" + id + "\">编辑</button>" +
-        "<button type=\"button\" class=\"danger\" data-action=\"app-delete\" data-id=\"" + id + "\">删除</button>" +
-        "</div>" +
-        "<div class=\"confirm-slot\" data-confirm-app-item=\"" + id + "\"></div>",
+        "<button type=\"button\" class=\"danger\" data-confirm-delete data-action=\"app-delete\" data-id=\"" + id + "\">删除</button>" +
+        "</div>"
     });
     ctrl.dialog.addEventListener("click", handleClick);
   }
@@ -590,11 +581,9 @@
     return (
       '<button type="button" class="secondary" data-action="app-rename-group" data-id="' +
       C.escapeHtml(group.id) +
-      '">改名</button><button type="button" class="danger" data-action="app-delete-group" data-id="' +
+      '">改名</button><button type="button" class="danger" data-confirm-delete data-action="app-delete-group" data-id="' +
       C.escapeHtml(group.id) +
-      '">删除</button><span class="confirm-slot" data-confirm-app-group="' +
-      C.escapeHtml(group.id) +
-      '"></span>'
+      '">删除</button>'
     );
   }
 
@@ -723,15 +712,7 @@
   }
 
   function deleteAppGroup(group) {
-    var anchor = confirmAnchor('[data-confirm-app-group="' + cssEscape(group.id) + '"]');
-    C.askConfirm({
-      anchor: anchor,
-      title: "删除分组",
-      text: "确认删除分组「" + group.name + "」吗？组内应用会回到未分组，不会被删除",
-      confirmLabel: "删除",
-      danger: true,
-    }).then(function (yes) {
-      if (!yes) return;
+    
       state.apps.groups = state.apps.groups.filter(function (item) {
         return item.id !== group.id;
       });
@@ -741,19 +722,11 @@
       state.notice = "已删除分组";
       state.noticeKind = "ok";
       render();
-    });
+    
   }
 
   function deleteApp(item) {
-    var anchor = confirmAnchor('[data-confirm-app-item="' + cssEscape(item.id) + '"]');
-    C.askConfirm({
-      anchor: anchor,
-      title: "删除应用",
-      text: "确认删除「" + item.name + "」吗？删除后不可恢复",
-      confirmLabel: "删除",
-      danger: true,
-    }).then(function (yes) {
-      if (!yes) return;
+    
       api("DELETE", "/api/extras/apps/" + encodeURIComponent(item.id))
         .then(function (result) {
           if (authRedirect(result.status)) return;
@@ -776,7 +749,7 @@
           state.noticeKind = "danger";
           render();
         });
-    });
+    
   }
 
   render();

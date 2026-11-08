@@ -122,6 +122,13 @@
         if (common && typeof common.openAgentManage === "function") {
           common.openAgentManage(agent.id, {
             panel: true,
+            agent: {
+              id: agent.id,
+              name: agent.name,
+              status: agent.status,
+              last_seen_at: agent.last_seen_at,
+              pinned_at: agent.pinned ? agent.last_seen_at || 1 : null,
+            },
             onChanged: function () {
               loadSidebarAgents();
             },

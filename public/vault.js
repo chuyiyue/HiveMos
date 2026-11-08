@@ -116,8 +116,7 @@
       "</dl>" +
       "<div class=\"manage-actions\">" +
       "<button type=\"button\" class=\"secondary\" data-vact=\"edit\" data-kind=\"secret\" data-id=\"" + id + "\">编辑</button>" +
-      "<button type=\"button\" class=\"secondary\" data-vact=\"reveal\" data-kind=\"secret\" data-id=\"" + id + "\">查看密码</button>" +
-      "<button type=\"button\" class=\"danger\" data-vact=\"delete\" data-kind=\"secret\" data-id=\"" + id + "\">删除</button>" +
+      "<button type=\"button\" class=\"danger\" data-confirm-delete data-vact=\"delete\" data-kind=\"secret\" data-id=\"" + id + "\">删除</button>" +
       "</div>"
     );
   }
@@ -156,7 +155,13 @@
   }
 
   function openEntryManage(item) {
-    wireManage(C.openManageDialog({ title: item.name, bodyHtml: entryManageBody(item) }));
+    wireManage(
+      C.openManageDialog({
+        title: item.name,
+        bodyHtml:
+          C.manageInfoHead({ icon: "lock", title: item.name, sub: "账号密码" }) + entryManageBody(item),
+      })
+    );
   }
 
   function openGatewayManage(item) {
@@ -165,10 +170,16 @@
       C.openManageDialog({
         title: item.name,
         bodyHtml:
+          C.manageInfoHead({ icon: "gateway", title: item.name, sub: "模型网关" }) +
+          "<div class=\"manage-info-card\"><dl class=\"kv\">" +
+          vaultFact("协议", item.proto || "未填写") +
+          vaultFact("地址", item.base_url || "未填写") +
+          vaultFact("模型", item.models || "0 个模型") +
+          vaultFact("密钥", item.tail ? "末四位 " + item.tail : "已保存") +
+          "</dl></div>" +
           "<div class=\"manage-actions\">" +
           "<button type=\"button\" class=\"secondary\" data-vact=\"edit\" data-kind=\"gateway\" data-id=\"" + id + "\">编辑</button>" +
-          "<button type=\"button\" class=\"secondary\" data-vact=\"reveal\" data-kind=\"gateway\" data-id=\"" + id + "\">查看密钥</button>" +
-          "<button type=\"button\" class=\"danger\" data-vact=\"delete\" data-kind=\"gateway\" data-id=\"" + id + "\">删除</button>" +
+          "<button type=\"button\" class=\"danger\" data-confirm-delete data-vact=\"delete\" data-kind=\"gateway\" data-id=\"" + id + "\">删除</button>" +
           "</div>",
       })
     );
@@ -180,9 +191,14 @@
       C.openManageDialog({
         title: item.address,
         bodyHtml:
+          C.manageInfoHead({ icon: "lock", title: item.address, sub: "邮箱" }) +
+          "<div class=\"manage-info-card\"><dl class=\"kv\">" +
+          vaultFact("用途", item.purpose || "未标注") +
+          vaultFact("入口", item.portal || "未填写") +
+          (item.note ? vaultFact("备注", item.note) : "") +
+          "</dl></div>" +
           "<div class=\"manage-actions\">" +
-          "<button type=\"button\" class=\"secondary\" data-vact=\"edit\" data-kind=\"email\" data-id=\"" + id + "\">编辑</button>" +
-          "<button type=\"button\" class=\"danger\" data-vact=\"delete\" data-kind=\"email\" data-id=\"" + id + "\">删除</button>" +
+          "<button type=\"button\" class=\"danger\" data-confirm-delete data-vact=\"delete\" data-kind=\"email\" data-id=\"" + id + "\">删除</button>" +
           "</div>",
       })
     );
@@ -272,8 +288,7 @@
         head +
           "<div data-panel=\"vault\"" + (activeTab === "vault" ? "" : " hidden") + ">" + vaultHtml + "</div>" +
           "<div data-panel=\"gateway\"" + (activeTab === "gateway" ? "" : " hidden") + ">" + gatewayHtml + "</div>" +
-          "<div data-panel=\"email\"" + (activeTab === "email" ? "" : " hidden") + ">" + emailHtml + "</div>" +
-          "<div id=\"vault-confirm\"></div>"
+          "<div data-panel=\"email\"" + (activeTab === "email" ? "" : " hidden") + ">" + emailHtml + "</div>"
       )
     );
   }
@@ -425,19 +440,11 @@
     var url = kind === "secret" ? "/api/vault/entries/" : kind === "gateway" ? "/api/vault/gateways/" : "/api/vault/emails/";
     var reload = kind === "secret" ? loadEntries : kind === "gateway" ? loadGateways : loadEmails;
     var dlg = srcEl && srcEl.closest ? srcEl.closest("[data-manage-dialog]") : null;
-    var anchor = (dlg && dlg.querySelector("[data-manage-confirm]")) || document.getElementById("vault-confirm");
-    C.askConfirm({
-      anchor: anchor,
-      title: "删除" + label,
-      text: "确认删除「" + title + "」吗？删除后无法恢复",
-      confirmLabel: "删除",
-      danger: true,
-    }).then(function (yes) {
-      if (!yes) return;
+    
       api("DELETE", url + encodeURIComponent(item.id)).then(function (result) {
         if (result.data && result.data.ok) { C.closeCurrentOverlay(); reload(); }
       });
-    });
+    
   }
 
   var page = document.getElementById("page");
