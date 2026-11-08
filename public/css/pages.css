@@ -394,12 +394,8 @@ img, svg, video, canvas { max-width: 100%; }
 
 @media (max-width: 639px) {
   .page-head { flex-direction: column; align-items: stretch; gap: 0; }
-  .page-head-actions { margin-left: 0; margin-top: 12px; flex-wrap: wrap; }
-  .page-head-actions > button { flex: 1 1 auto; }
-  .page-head-actions > button.secondary {
-    flex: 0 0 auto;
-    width: fit-content;
-  }
+  .page-head-actions { margin-left: 0; margin-top: 12px; flex-wrap: nowrap; }
+  .page-head-actions > button { flex: 1 1 0; min-width: 0; padding-left: 10px; padding-right: 10px; }
   .page-head .add-bar { width: 100%; }
   .page-head .add-bar .add-button { flex: 1 1 auto; width: auto; }
   .page-head .add-button,
@@ -411,7 +407,7 @@ img, svg, video, canvas { max-width: 100%; }
     font-size: var(--fs-md);
     font-weight: 600;
   }
-  .page-head > .page-head-actions .add-button { flex: 0 1 auto; width: auto; }
+  .page-head > .page-head-actions .add-button { flex: 1 1 0; }
   /* Mobile: add buttons show just 添加 — the current tab already says what. */
   button.add-button { font-size: 0; }
   button.add-button::after { content: "添加"; font-size: var(--fs-md); }
