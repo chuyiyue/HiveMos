@@ -121,6 +121,7 @@
       body = C.section("设备", "", '<p class="callout danger" role="alert">' + C.escapeHtml(state.loadError) + "</p>");
     } else {
       body = C.groupedSections({
+        cardGrid: true,
         groups: state.groups,
         items: state.agents,
         groupOf: function (agent) {
@@ -601,6 +602,7 @@
     return (
       '<div class="stack">' +
       C.groupedSections({
+        cardGrid: true,
         groups: state.apps.groups,
         items: state.apps.items,
         groupOf: function (item) {

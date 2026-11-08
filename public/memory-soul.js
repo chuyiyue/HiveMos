@@ -158,7 +158,7 @@
     if (memoryError) memoryBody = C.emptyState("记忆加载失败", memoryError);
     else if (!memoryLoaded) memoryBody = C.emptyState("正在加载记忆", "");
     else if (!MEMORIES.length) memoryBody = C.emptyState("还没有记忆", "点上方按钮添加第一条");
-    else memoryBody = C.list(memCards);
+    else memoryBody = C.cardList(memCards);
     var memoryHtml =
       "<div class=\"stack\">" +
       C.section("记忆", String(MEMORIES.length) + " 条", memoryBody) +
@@ -182,7 +182,7 @@
     var soulBody = !soulsLoaded
       ? C.emptyState("正在加载 Soul", "马上就好")
       : SOULS.length
-        ? C.list(soulCards)
+        ? C.cardList(soulCards)
         : C.emptyState("还没有 Soul", "给 Agent 添加人格定义后会列在这里");
     var soulHtml =
       "<div class=\"stack\">" +

@@ -561,3 +561,23 @@ dialog.side-panel[open] { animation: side-panel-in 0.22s ease; }
 @media (max-width: 639px) {
   article.record { padding: 16px; }
 }
+
+/* ---- Card lists: responsive grid ----
+   .card-grid is .list plus columns. Mobile stays one column (the .list
+   base). Desktop (>=1024px) is always two columns — the content column
+   caps at 1080px, so two is also the maximum. The middle band uses an
+   auto-fill floor of 400px per card: two columns only appear once each
+   card can keep a readable ~400px (with the 64px rail sidebar that is
+   roughly from a 950px viewport up), otherwise it falls back to one
+   column instead of squeezing. Cards keep their natural height
+   (align-items: start); nothing inside the card is stretched. */
+.card-grid { align-items: start; }
+.card-grid > * { min-width: 0; }
+
+@media (min-width: 640px) and (max-width: 1023px) {
+  .card-grid { grid-template-columns: repeat(auto-fill, minmax(min(400px, 100%), 1fr)); }
+}
+
+@media (min-width: 1024px) {
+  .card-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

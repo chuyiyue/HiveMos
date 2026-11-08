@@ -903,7 +903,7 @@
     if (taskState.error) tasksBody = C.emptyState("任务读取失败", taskState.error);
     else if (!taskState.loaded) tasksBody = C.emptyState("正在读取任务", "请稍候");
     else if (!taskState.tasks.length) tasksBody = C.emptyState("还没有任务", "点上方「添加任务」新建第一条");
-    else tasksBody = C.list(taskCards);
+    else tasksBody = C.cardList(taskCards);
     var tasksHtml =
       "<div class=\"stack\">" +
       C.section("任务", String(taskState.tasks.length) + " 条", tasksBody) +

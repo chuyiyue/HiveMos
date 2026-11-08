@@ -365,6 +365,7 @@
 
   function groupedHtml(scope, groups, items, renderItem, emptyText) {
     return C.groupedSections({
+      cardGrid: true,
       groups: groups,
       items: items,
       groupOf: function (item) {
