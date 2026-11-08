@@ -1,8 +1,9 @@
 // Panel REST for the vault board. Routes sit behind the admin session gate
 // (the caller in index.ts has already authenticated); mutations additionally
 // pass the cross-site check here, same as memory-http. List responses only
-// ever carry the tail of a secret; plaintext leaves through POST
-// /api/vault/reveal, which writes an access-log row.
+// ever carry the tail of a secret, or smtp_secret_set for a mailbox SMTP
+// password. Plaintext leaves through POST /api/vault/reveal, which writes
+// an access-log row.
 
 import { isCrossSite, json, readJsonLimited } from "./http";
 import type { Env, WaitCtx } from "./env";
@@ -185,7 +186,7 @@ async function emails(request: Request, env: Env): Promise<Response> {
   if (method === "POST") {
     const body = await readBody(request);
     if (body instanceof Response) return body;
-    const created = await createEmail(env.DB, body, Date.now());
+    const created = await createEmail(env.DB, env, body, Date.now());
     await logOp(env.DB, {
       actor: await panelActor(request, env),
       module: "保险库",
@@ -204,7 +205,7 @@ async function emailOneHandler(request: Request, env: Env, id: string): Promise<
   if (method === "PATCH" || method === "PUT") {
     const body = await readBody(request);
     if (body instanceof Response) return body;
-    const updated = await updateEmail(env.DB, id, body, Date.now());
+    const updated = await updateEmail(env.DB, env, id, body, Date.now());
     await logOp(env.DB, {
       actor: await panelActor(request, env),
       module: "保险库",

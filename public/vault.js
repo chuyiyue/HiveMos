@@ -2,7 +2,8 @@
    账号列表只显示名称。密码仍要点「显示」或「查看密码」才经 reveal 取明文，
    服务端先写 vault_access_log 再返回；明文用 copy-text，点击即复制完整值。
    模型网关密钥在网关页签和管理弹窗里完整展示，同样走 reveal；太长只在视觉上
-   单行省略。某一条拉取失败时该格回退末四位，不让整张卡片报错。 */
+   单行省略。某一条拉取失败时该格回退末四位，不让整张卡片报错。
+   邮箱 SMTP 密码只在管理弹窗里经同一条 reveal 取出后全量展示，点文本复制。 */
 (function () {
   var C = window.HiveCommon;
   var activeTab = location.hash === "#gateway" ? "gateway" : location.hash === "#email" ? "email" : "vault";
@@ -15,6 +16,8 @@
   var loadErrors = {};
   // 网关密钥明文缓存：ok 后不再重复 reveal，避免每次重绘都多写一条访问记录。
   var gatewayKeys = {};
+  // 邮箱 SMTP 密码同样缓存，管理弹窗重复打开不再多写访问记录。
+  var emailSecrets = {};
   var accessRefreshTimer = null;
 
   function api(method, url, body) {
@@ -336,6 +339,95 @@
     );
   }
 
+  function findEmail(id) {
+    var found = null;
+    (EMAILS || []).forEach(function (entry) { if (entry.id === id) found = entry; });
+    return found;
+  }
+
+  function emailSecretInner(item) {
+    var entry = emailSecrets[item.id];
+    if (entry && entry.status === "ok") return entry.value ? copyValueHtml(entry.value) : "已保存";
+    if (entry && entry.status === "error") {
+      return "<span class=\"copy-text\" data-email-secret-retry=\"" + C.escapeHtml(item.id) + "\" title=\"读取失败，点击重试\">读取失败</span>";
+    }
+    return "读取中";
+  }
+
+  // 管理弹窗打开时拉一次。已成功或正在拉取时不重复请求；force 只用来在失败后再拉。
+  function ensureEmailSecret(id, force) {
+    var entry = emailSecrets[id];
+    if (entry && (entry.status === "loading" || entry.status === "ok")) return;
+    if (entry && entry.status === "error" && !force) return;
+    var ticket = {};
+    emailSecrets[id] = { status: "loading", value: "", ticket: ticket };
+    api("POST", "/api/vault/reveal", { kind: "email", id: id }).then(function (result) {
+      if (!emailSecrets[id] || emailSecrets[id].ticket !== ticket) return;
+      var value = result.data && result.data.ok && result.data.reveal ? result.data.reveal.value : null;
+      if (typeof value === "string") {
+        emailSecrets[id] = { status: "ok", value: value };
+        paintEmailSecret(id);
+        refreshAccessSoon();
+      } else {
+        emailSecrets[id] = { status: "error", value: "" };
+        paintEmailSecret(id);
+      }
+    }).catch(function () {
+      if (!emailSecrets[id] || emailSecrets[id].ticket !== ticket) return;
+      emailSecrets[id] = { status: "error", value: "" };
+      paintEmailSecret(id);
+    });
+  }
+
+  function emailSecretHtml(item) {
+    if (!item.smtp_secret_set && !(emailSecrets[item.id] && emailSecrets[item.id].status === "ok" && emailSecrets[item.id].value)) {
+      return "未设置";
+    }
+    ensureEmailSecret(item.id, true);
+    return "<span data-email-secret=\"" + C.escapeHtml(item.id) + "\">" + emailSecretInner(item) + "</span>";
+  }
+
+  function paintEmailSecret(id) {
+    var item = findEmail(id);
+    if (!item) return;
+    var html = emailSecretInner(item);
+    document.querySelectorAll("[data-email-secret]").forEach(function (node) {
+      if (node.getAttribute("data-email-secret") === id) node.innerHTML = html;
+    });
+  }
+
+  function retryEmailSecret(id) {
+    if (!id) return;
+    delete emailSecrets[id];
+    ensureEmailSecret(id, true);
+    paintEmailSecret(id);
+  }
+
+  function smtpSecurityLabel(value) {
+    if (value === "ssl") return "SSL";
+    if (value === "starttls") return "STARTTLS";
+    if (value === "none") return "无";
+    return "未选择";
+  }
+
+  function emailSmtpBlock(item) {
+    if (!item.smtp_host) {
+      return C.record({ id: "smtp-" + item.id, title: "SMTP", lede: "未配置 SMTP" });
+    }
+    var port = item.smtp_port != null && item.smtp_port !== "" ? String(item.smtp_port) : "未填写";
+    return C.record({
+      id: "smtp-" + item.id,
+      title: "SMTP",
+      facts: [
+        ["服务器", C.escapeHtml(item.smtp_host)],
+        ["端口", C.escapeHtml(port)],
+        ["加密", C.escapeHtml(smtpSecurityLabel(item.smtp_security))],
+        ["用户名", C.escapeHtml(item.smtp_user || "未填写")],
+        ["密码", emailSecretHtml(item)],
+      ],
+    });
+  }
+
   function openEmailManage(item) {
     var id = C.escapeHtml(item.id);
     wireManage(
@@ -349,6 +441,7 @@
           vaultFact("入口", item.portal || "未填写") +
           (item.note ? vaultFact("备注", item.note) : "") +
           "</dl></div>" +
+          emailSmtpBlock(item) +
           "<div class=\"manage-actions\">" +
           "<button type=\"button\" class=\"danger\" data-confirm-delete data-vact=\"delete\" data-kind=\"email\" data-id=\"" + id + "\">删除</button>" +
           "</div>",
@@ -472,9 +565,9 @@
 
   function render() {
     var entriesBody = entriesGroupedBody();
-    var accessBody = sectionBody("access", ACCESS, "还没有访问记录", "查看条目密码或网关密钥后会在这里留下一条", function (items) {
+    var accessBody = sectionBody("access", ACCESS, "还没有访问记录", "查看密码、网关密钥或邮箱 SMTP 密码后会在这里留下一条", function (items) {
       return items.map(function (row) {
-        var what = row.target_kind === "entry" ? "查看密码" : "查看密钥";
+        var what = row.target_kind === "entry" ? "查看密码" : row.target_kind === "email" ? "查看 SMTP 密码" : "查看密钥";
         return C.record({
           id: row.id,
           icon: "eye",
@@ -500,6 +593,10 @@
     var emailBody = sectionBody("emails", EMAILS, "还没有邮箱", "点上方「添加邮箱」把第一个邮箱存进来", function (items) {
       return items.map(function (item) {
         var facts = [["用途", C.escapeHtml(item.purpose || "未标注")], ["入口", C.escapeHtml(item.portal || "未填写")]];
+        if (item.smtp_host) {
+          var smtpEndpoint = item.smtp_host + (item.smtp_port != null && item.smtp_port !== "" ? ":" + item.smtp_port : "");
+          facts.push(["SMTP", C.escapeHtml(smtpEndpoint)]);
+        }
         if (item.note) facts.push(["备注", C.escapeHtml(item.note)]);
         return C.record({
           id: item.id,
@@ -678,32 +775,123 @@
     wireProtoField(ctrl.form);
   }
 
+  var SMTP_PORTS = { ssl: "465", starttls: "587", none: "25" };
+
+  function smtpSecurityField(selected) {
+    var current = selected || "";
+    var options = [["ssl", "SSL"], ["starttls", "STARTTLS"], ["none", "无"]];
+    return (
+      "<div class=\"tag-field\" data-smtp-security>" +
+      "<span>加密方式</span>" +
+      "<div class=\"segmented\" role=\"group\" aria-label=\"加密方式\">" +
+      options.map(function (option) {
+        return (
+          "<button type=\"button\" class=\"segment\" data-smtp-sec=\"" + option[0] + "\" aria-pressed=\"" +
+          (current === option[0] ? "true" : "false") + "\">" + C.escapeHtml(option[1]) + "</button>"
+        );
+      }).join("") +
+      "</div>" +
+      "<input type=\"hidden\" name=\"smtp_security\" value=\"" + C.escapeHtml(current) + "\" />" +
+      "</div>"
+    );
+  }
+
+  // 再点一次已选项会取消，方便整组留空表示不配置。端口仍是上一种加密的默认值时跟着改。
+  function wireSmtpField(form) {
+    var field = form.querySelector("[data-smtp-security]");
+    if (!field) return;
+    var hidden = field.querySelector("input[name=\"smtp_security\"]");
+    var port = form.querySelector("input[name=\"smtp_port\"]");
+    field.addEventListener("click", function (event) {
+      var target = event.target;
+      if (!(target instanceof Element)) return;
+      var btn = target.closest("[data-smtp-sec]");
+      if (!btn || !field.contains(btn)) return;
+      var next = btn.getAttribute("data-smtp-sec") || "";
+      var prev = hidden.value;
+      if (prev === next) next = "";
+      Array.prototype.forEach.call(field.querySelectorAll("[data-smtp-sec]"), function (peer) {
+        peer.setAttribute("aria-pressed", peer.getAttribute("data-smtp-sec") === next ? "true" : "false");
+      });
+      hidden.value = next;
+      if (!port) return;
+      var currentPort = port.value.trim();
+      var prevDefault = SMTP_PORTS[prev] || "";
+      if (!next) {
+        if (!currentPort || currentPort === prevDefault) port.value = "";
+        return;
+      }
+      if (!currentPort || currentPort === prevDefault) port.value = SMTP_PORTS[next] || "";
+    });
+  }
+
   function emailFields(item) {
-    var v = item || { address: "", purpose: "", portal: "", note: "" };
+    var v = item || { address: "", purpose: "", portal: "", note: "", smtp_host: "", smtp_port: null, smtp_security: "", smtp_user: "" };
+    var port = v.smtp_port != null && v.smtp_port !== "" ? String(v.smtp_port) : "";
     return (
       "<label>邮箱地址<input name=\"address\" maxlength=\"120\" autocomplete=\"off\" placeholder=\"name@example.com\" value=\"" + C.escapeHtml(v.address) + "\" /></label>" +
       "<label>用途<input name=\"use\" maxlength=\"40\" autocomplete=\"off\" placeholder=\"例如 主邮箱、注册优先\" value=\"" + C.escapeHtml(v.purpose) + "\" /></label>" +
       "<label>入口<input name=\"portal\" maxlength=\"80\" autocomplete=\"off\" placeholder=\"例如 mail.outtw.com\" value=\"" + C.escapeHtml(v.portal) + "\" /></label>" +
-      "<label>备注<textarea name=\"note\" rows=\"3\" maxlength=\"300\">" + C.escapeHtml(v.note) + "</textarea></label>"
+      "<label>备注<textarea name=\"note\" rows=\"3\" maxlength=\"300\">" + C.escapeHtml(v.note) + "</textarea></label>" +
+      "<div class=\"tag-field\"><span>SMTP</span></div>" +
+      "<label>服务器<input name=\"smtp_host\" maxlength=\"253\" autocomplete=\"off\" placeholder=\"例如 smtp.example.com\" value=\"" + C.escapeHtml(v.smtp_host || "") + "\" /></label>" +
+      "<label>端口<input name=\"smtp_port\" type=\"number\" min=\"1\" max=\"65535\" step=\"1\" inputmode=\"numeric\" autocomplete=\"off\" value=\"" + C.escapeHtml(port) + "\" /></label>" +
+      smtpSecurityField(v.smtp_security || "") +
+      "<label>用户名<input name=\"smtp_user\" maxlength=\"120\" autocomplete=\"off\" placeholder=\"留空则与邮箱地址相同\" value=\"" + C.escapeHtml(v.smtp_user || "") + "\" /></label>" +
+      "<label>密码<input name=\"smtp_secret\" type=\"password\" maxlength=\"2000\" autocomplete=\"off\" />" +
+      (item ? "<p class=\"subtle field-hint\">留空表示不修改</p>" : "") +
+      "</label>"
     );
   }
   function openEmailDialog(item) {
     var editing = !!item;
-    C.openFormDialog({
+    var ctrl = C.openFormDialog({
       title: editing ? "编辑邮箱" : "添加邮箱",
       bodyHtml: emailFields(item),
       submitLabel: editing ? "保存" : "添加",
       onSubmit: function (ctrl) {
         var address = val(ctrl, "address");
         if (!address) { ctrl.setError("请填写邮箱地址"); return; }
-        var payload = { address: address, purpose: val(ctrl, "use"), portal: val(ctrl, "portal"), note: val(ctrl, "note") };
+        var smtpHost = val(ctrl, "smtp_host");
+        var smtpPort = val(ctrl, "smtp_port");
+        var smtpSecurity = val(ctrl, "smtp_security");
+        var smtpUser = val(ctrl, "smtp_user");
+        var smtpSecret = val(ctrl, "smtp_secret");
+        var smtpAny = smtpHost || smtpPort || smtpSecurity || smtpUser || smtpSecret;
+        if (smtpAny && !smtpHost) { ctrl.setError("请填写 SMTP 服务器"); return; }
+        if (smtpHost) {
+          if (smtpSecurity !== "ssl" && smtpSecurity !== "starttls" && smtpSecurity !== "none") {
+            ctrl.setError("请选择加密方式");
+            return;
+          }
+          if (!smtpPort) smtpPort = SMTP_PORTS[smtpSecurity];
+          if (!/^[0-9]+$/.test(smtpPort) || Number(smtpPort) < 1 || Number(smtpPort) > 65535) {
+            ctrl.setError("端口需为 1 到 65535 的整数");
+            return;
+          }
+        }
+        var payload = {
+          address: address,
+          purpose: val(ctrl, "use"),
+          portal: val(ctrl, "portal"),
+          note: val(ctrl, "note"),
+          smtp_host: smtpHost,
+          smtp_port: smtpHost ? Number(smtpPort) : "",
+          smtp_security: smtpHost ? smtpSecurity : "",
+          smtp_user: smtpHost ? smtpUser : "",
+        };
+        if (smtpSecret) payload.smtp_secret = smtpSecret;
         submitForm(
           ctrl,
           editing ? api("PATCH", "/api/vault/emails/" + encodeURIComponent(item.id), payload) : api("POST", "/api/vault/emails", payload),
-          loadEmails
+          function () {
+            if (editing && (smtpSecret || !smtpHost)) delete emailSecrets[item.id];
+            loadEmails();
+          }
         );
       },
     });
+    wireSmtpField(ctrl.form);
   }
 
   // 列表上的「查看密码」：仍要点一次才取明文（服务端记访问记录）。
@@ -758,6 +946,11 @@
     var target = event.target;
     if (!(target instanceof Element)) return;
     if (target.closest("[data-copy]")) return;
+    var emailRetry = target.closest("[data-email-secret-retry]");
+    if (emailRetry) {
+      retryEmailSecret(emailRetry.getAttribute("data-email-secret-retry"));
+      return;
+    }
     var keyRetry = target.closest("[data-gateway-key-retry]");
     if (keyRetry) {
       retryGatewayKey(keyRetry.getAttribute("data-gateway-key-retry"));
