@@ -16,11 +16,56 @@
     return '<div class="row-actions"><button type="button" class="secondary" data-manage="' + kind + '" data-id="' + C.escapeHtml(id) + '">高级</button></div>';
   }
 
-  var MEMORIES = [
-    { id: "mem_pref", title: "回复用简体中文", scope: "工作区", source: "管理员", updated: "2026-11-05 11:02", excerpt: "界面对用户使用简体中文，术语保留英文原名" },
-    { id: "mem_deploy", title: "部署走 Wrangler", scope: "编排", source: "研究", updated: "2026-11-07 09:12", excerpt: "控制面只部署在 Cloudflare Workers，不引入构建步骤" },
-    { id: "mem_name", title: "如何称呼操作者", scope: "全局", source: "管理员", updated: "2026-11-01 16:40", excerpt: "操作者在界面中显示为管理员" },
-  ];
+  // 记忆走真后端 /api/memory；加改删后一律以服务端返回为准重新拉取
+  var MEMORIES = [];
+  var memoryLoaded = false;
+  var memoryError = "";
+
+  function api(method, url, body) {
+    var headers = { accept: "application/json" };
+    var options = { method: method, headers: headers, cache: "no-store" };
+    if (body !== undefined) {
+      headers["content-type"] = "application/json";
+      options.body = JSON.stringify(body);
+    }
+    return fetch(url, options).then(function (response) {
+      return response
+        .json()
+        .catch(function () { return {}; })
+        .then(function (data) { return { status: response.status, data: data || {} }; });
+    });
+  }
+
+  function fmtTime(ms) {
+    if (!ms) return "";
+    var d = new Date(ms);
+    function p(n) { return (n < 10 ? "0" : "") + n; }
+    return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) + " " + p(d.getHours()) + ":" + p(d.getMinutes());
+  }
+
+  function excerptOf(content) {
+    var text = String(content || "");
+    return text.length > 140 ? text.slice(0, 140) + "…" : text;
+  }
+
+  function loadMemories() {
+    api("GET", "/api/memory")
+      .then(function (result) {
+        memoryLoaded = true;
+        if (result.data && result.data.ok && Array.isArray(result.data.memories)) {
+          MEMORIES = result.data.memories;
+          memoryError = "";
+        } else {
+          memoryError = (result.data && result.data.error) || "记忆加载失败";
+        }
+        render();
+      })
+      .catch(function () {
+        memoryLoaded = true;
+        memoryError = "记忆加载失败";
+        render();
+      });
+  }
   var SOULS = [
     { id: "soul_orch", agent: "编排", version: "v12", status: "synced", updated: "2026-11-07 08:55" },
     { id: "soul_research", agent: "研究", version: "v7", status: "syncing", updated: "2026-11-07 09:16" },
@@ -29,13 +74,19 @@
 
   function render() {
     var memCards = MEMORIES.map(function (item) {
-      return C.record({ id: item.id, title: item.title, lede: item.excerpt, facts: [["作用域", C.escapeHtml(item.scope)], ["来源", C.escapeHtml(item.source)], ["更新时间", C.escapeHtml(item.updated)]], extra: manageBtn("memory", item.id) });
+      return C.record({ id: item.id, title: item.title, lede: excerptOf(item.content), facts: [["作用域", C.escapeHtml(item.scope)], ["来源", C.escapeHtml(item.source)], ["更新时间", C.escapeHtml(fmtTime(item.updated_at))]], extra: manageBtn("memory", item.id) });
     }).join("");
+    var memoryBody;
+    if (memoryError) memoryBody = C.emptyState("记忆加载失败", memoryError);
+    else if (!memoryLoaded) memoryBody = C.emptyState("正在加载记忆", "");
+    else if (!MEMORIES.length) memoryBody = C.emptyState("还没有记忆", "点上方按钮添加第一条");
+    else memoryBody = C.list(memCards);
     var memoryHtml =
       "<div class=\"stack\">" +
       "<button type=\"button\" class=\"add-button\" data-add=\"memory\">添加记忆</button>" +
-      C.section("记忆", String(MEMORIES.length) + " 条", C.list(memCards)) +
+      C.section("记忆", String(MEMORIES.length) + " 条", memoryBody) +
       C.section("冲突", "", C.emptyState("没有待合并的记忆", "同一作用域发生冲突时会列在这里")) +
+      "<div id=\"memory-confirm\"></div>" +
       "</div>";
     var soulCards = SOULS.map(function (item) {
       return C.record({ id: item.id, title: item.agent, status: item.status, lede: "当前版本 " + item.version, facts: [["版本", C.escapeHtml(item.version)], ["同步时间", C.escapeHtml(item.updated)]], extra: manageBtn("soul", item.id) });
@@ -61,11 +112,11 @@
 
   // 添加与编辑共用同一套字段构建；item 为空是添加，传入条目是编辑并预填
   function memoryFields(item) {
-    var v = item || { title: "", scope: "", excerpt: "" };
+    var v = item || { title: "", scope: "", content: "" };
     return (
       "<label>标题<input name=\"title\" maxlength=\"80\" autocomplete=\"off\" value=\"" + C.escapeHtml(v.title) + "\" /></label>" +
       "<label>作用域<input name=\"scope\" maxlength=\"40\" autocomplete=\"off\" placeholder=\"例如 全局、工作区或某个 Agent\" value=\"" + C.escapeHtml(v.scope) + "\" /></label>" +
-      "<label>内容<textarea name=\"excerpt\" rows=\"4\" maxlength=\"500\">" + C.escapeHtml(v.excerpt) + "</textarea></label>"
+      "<label>内容<textarea name=\"content\" rows=\"4\" maxlength=\"2000\">" + C.escapeHtml(v.content) + "</textarea></label>"
     );
   }
   function openMemoryDialog(item) {
@@ -77,16 +128,25 @@
       onSubmit: function (ctrl) {
         var title = val(ctrl, "title");
         if (!title) { ctrl.setError("请填写标题"); return; }
-        if (editing) {
-          item.title = title;
-          item.scope = val(ctrl, "scope") || "全局";
-          item.excerpt = val(ctrl, "excerpt");
-          item.updated = now();
-        } else {
-          MEMORIES.unshift({ id: "mem_" + Date.now(), title: title, scope: val(ctrl, "scope") || "全局", source: "管理员", updated: now(), excerpt: val(ctrl, "excerpt") });
-        }
-        ctrl.close();
-        render();
+        var payload = { title: title, scope: val(ctrl, "scope") || "全局", content: val(ctrl, "content") };
+        if (ctrl.setBusy) ctrl.setBusy(true);
+        var request = editing
+          ? api("PATCH", "/api/memory/" + encodeURIComponent(item.id), payload)
+          : api("POST", "/api/memory", payload);
+        request
+          .then(function (result) {
+            if (result.data && result.data.ok) {
+              ctrl.close();
+              loadMemories();
+            } else {
+              if (ctrl.setBusy) ctrl.setBusy(false);
+              ctrl.setError((result.data && result.data.error) || "保存失败，请重试");
+            }
+          })
+          .catch(function () {
+            if (ctrl.setBusy) ctrl.setBusy(false);
+            ctrl.setError("保存失败，请重试");
+          });
       },
     });
   }
@@ -120,18 +180,44 @@
     });
   }
 
+  function removeMemory(item) {
+    var anchor = document.getElementById("memory-confirm");
+    C.askConfirm({
+      anchor: anchor,
+      title: "删除记忆",
+      text: "确认删除「" + item.title + "」吗？删除后从列表移除",
+      confirmLabel: "删除",
+      danger: true,
+    }).then(function (yes) {
+      if (!yes) return;
+      api("DELETE", "/api/memory/" + encodeURIComponent(item.id)).then(function (result) {
+        if (result.data && result.data.ok) loadMemories();
+      });
+    });
+  }
+
   function openManageMenu(kind, item) {
+    var items = [
+      {
+        label: "编辑",
+        onSelect: function () {
+          if (kind === "memory") openMemoryDialog(item);
+          else openSoulDialog(item);
+        },
+      },
+    ];
+    if (kind === "memory") {
+      items.push({
+        label: "删除",
+        danger: true,
+        onSelect: function () {
+          removeMemory(item);
+        },
+      });
+    }
     C.openActionMenu({
       title: kind === "memory" ? item.title : item.agent,
-      items: [
-        {
-          label: "编辑",
-          onSelect: function () {
-            if (kind === "memory") openMemoryDialog(item);
-            else openSoulDialog(item);
-          },
-        },
-      ],
+      items: items,
     });
   }
 
@@ -163,4 +249,5 @@
     }
   });
   render();
+  loadMemories();
 })();
