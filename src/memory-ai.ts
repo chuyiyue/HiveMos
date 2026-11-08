@@ -16,7 +16,12 @@ import {
   type MemoryRow,
 } from "./memory";
 
-const AI_TIMEOUT_MS = 20000;
+// gemma-4 是推理模型：先吐 reasoning 再给正文，max_tokens 给小了正文为空、
+// 调用耗时也长（实测一次拆分约 30 秒），所以额度与超时都按推理模型留足。
+const SPLIT_MAX_TOKENS = 4096;
+const SPLIT_TIMEOUT_MS = 60000;
+const TAG_MAX_TOKENS = 2048;
+const TAG_TIMEOUT_MS = 45000;
 const INGEST_TEXT_MAX = 20000;
 const POINT_CONTENT_MAX = 2000;
 const MAX_POINTS = 50;
@@ -44,7 +49,13 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   });
 }
 
-async function runAi(env: Env, system: string, user: string, maxTokens: number): Promise<string | null> {
+async function runAi(
+  env: Env,
+  system: string,
+  user: string,
+  maxTokens: number,
+  timeoutMs: number,
+): Promise<string | null> {
   if (!env.AI || typeof env.AI.run !== "function") return null;
   try {
     const output = await withTimeout(
@@ -56,7 +67,7 @@ async function runAi(env: Env, system: string, user: string, maxTokens: number):
         temperature: 0,
         max_tokens: maxTokens,
       }),
-      AI_TIMEOUT_MS,
+      timeoutMs,
     );
     return readChatResponse(output);
   } catch {
@@ -150,13 +161,13 @@ const TAG_SYSTEM =
 export async function splitAndTag(env: Env, text: string): Promise<SplitPoint[] | null> {
   // 输入太长时截断喂给 AI 的部分（落库退化路径仍存全文）
   const feed = text.length > 8000 ? text.slice(0, 8000) : text;
-  const raw = await runAi(env, SPLIT_SYSTEM, feed, 1600);
+  const raw = await runAi(env, SPLIT_SYSTEM, feed, SPLIT_MAX_TOKENS, SPLIT_TIMEOUT_MS);
   return parseSplitPayload(raw);
 }
 
 export async function suggestTags(env: Env, title: string, content: string): Promise<string[] | null> {
   const user = "标题：" + title + "\n内容：" + (content || "").slice(0, 1200);
-  const raw = await runAi(env, TAG_SYSTEM, user, 300);
+  const raw = await runAi(env, TAG_SYSTEM, user, TAG_MAX_TOKENS, TAG_TIMEOUT_MS);
   return parseTagsPayload(raw);
 }
 
