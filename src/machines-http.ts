@@ -18,6 +18,7 @@ import {
   putKeepalive,
   renameConnection,
   replaceConnectionCredentials,
+  revealConnectionCredential,
   runKeepaliveSweep,
   syncConnection,
   syncOneMachine,
@@ -50,7 +51,7 @@ const ACTOR = "user";
 export async function handleMachinesRequest(request: Request, env: Env, ctx: WaitCtx, path: string): Promise<Response | null> {
   if (path === "/api/machines/providers/test") return providerTest(request);
   if (path === "/api/machines/providers") return providerCollection(request, env);
-  const providerAction = /^\/api\/machines\/providers\/([A-Za-z0-9_-]+)\/(test|sync|devices|import|credentials)$/.exec(path);
+  const providerAction = /^\/api\/machines\/providers\/([A-Za-z0-9_-]+)\/(test|sync|devices|import|credentials|credential)$/.exec(path);
   if (providerAction && providerAction[1] && providerAction[2]) return providerActionRun(request, env, providerAction[1], providerAction[2]);
   const providerOne = /^\/api\/machines\/providers\/([A-Za-z0-9_-]+)$/.exec(path);
   if (providerOne && providerOne[1]) return providerOneRun(request, env, providerOne[1]);
@@ -321,6 +322,23 @@ async function providerActionRun(request: Request, env: Env, id: string, action:
     return wrap(async () => {
       const devices = await listConnectionDevices(env.DB, vaultKeyOf(env), id);
       return json({ ok: true, devices });
+    });
+  }
+  if (action === "credential") {
+    if (method !== "GET") return methodNotAllowed("GET");
+    return wrap(async () => {
+      const revealed = await revealConnectionCredential(env.DB, vaultKeyOf(env), id, "panel", Date.now());
+      const conn = (await listConnections(env.DB)).find((row) => row.id === id);
+      const name = conn?.name ?? id;
+      await logOp(env.DB, {
+        actor: await panelActor(request, env),
+        module: "云主机",
+        action: "查看",
+        targetId: id,
+        targetName: name,
+        text: `查看了服务商连接「${name}」的凭据`,
+      });
+      return json({ ok: true, credential: revealed.credential });
     });
   }
   if (method !== "POST") return methodNotAllowed("POST");

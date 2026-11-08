@@ -623,6 +623,14 @@ export async function revealMachineSecret(
   const row = await getMachine(db, id);
   if (!row) throw new MachineError(404, "机器不存在");
   if (row.kind === "cloud") throw new MachineError(400, "云主机没有保存机密");
+  // Worker tokens are shown in full on the panel. The audit row lands before
+  // the sealed token is opened, same order as machines_get_access. Server
+  // passwords keep the previous order.
+  if (row.kind === "worker") {
+    await writeAudit(db, { machineId: id, actor, source: "panel", action: "reveal", detail: { kind: row.kind } }, now);
+    const secret = await openMachineSecret(key, row.api_token_enc);
+    return { kind: row.kind, secret, ssh_user: "" };
+  }
   const stored = row.kind === "server" ? row.ssh_secret_enc : row.api_token_enc;
   const secret = await openMachineSecret(key, stored);
   await writeAudit(db, { machineId: id, actor, source: "panel", action: "reveal", detail: { kind: row.kind } }, now);

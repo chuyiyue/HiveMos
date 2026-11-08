@@ -694,7 +694,18 @@ button.is-armed, .is-armed {
 .manage-name-edit:hover { background: var(--surface-hover); color: var(--accent-text); }
 .manage-name-edit .icon { width: 15px; height: 15px; }
 
-.copy-text { cursor: pointer; }
+.copy-text {
+  cursor: pointer;
+  display: inline-block;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+.kv dd .copy-text,
+.card-meta dd .copy-text { display: block; }
 .copy-text:hover { color: var(--accent); }
 
 .pager { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-top: 14px; }

@@ -710,6 +710,33 @@ export async function replaceConnectionCredentials(
   return publicConnectionById(db, id);
 }
 
+// Panel read of the main secret (the value config_tail is taken from).
+// The audit row is written before the sealed config is opened. List
+// responses stay tail-only and never include this plaintext.
+export async function revealConnectionCredential(
+  db: D1Database,
+  key: ContentKey,
+  id: string,
+  actor: string,
+  now: number,
+): Promise<{ credential: string }> {
+  const row = await getConnection(db, id);
+  if (!row) throw new MachineError(404, "连接不存在");
+  await prepare(
+    db,
+    "INSERT INTO machines_audit (id, machine_id, actor, source, action, detail, created_at) VALUES (?, ?, ?, 'panel', 'credential_reveal', ?, ?)",
+    [
+      crypto.randomUUID(),
+      null,
+      actor,
+      JSON.stringify({ connection_id: row.id, provider: row.provider, name: row.name }),
+      now,
+    ],
+  ).run();
+  const config = await storedConfig(db, key, row);
+  return { credential: mainSecretOf(row.provider, config) };
+}
+
 export interface ConnectionDevice extends ProviderDevice {
   imported: boolean;
 }
