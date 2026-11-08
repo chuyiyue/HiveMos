@@ -2180,6 +2180,12 @@
     error.hidden = true;
     var actions = document.createElement("div");
     actions.className = "modal-actions";
+    if (options.actionsLeftHtml) {
+      var actionsLeft = document.createElement("div");
+      actionsLeft.className = "modal-actions-left";
+      actionsLeft.innerHTML = options.actionsLeftHtml;
+      actions.append(actionsLeft);
+    }
     var cancel = document.createElement("button");
     cancel.type = "button";
     cancel.className = "secondary";

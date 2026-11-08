@@ -746,6 +746,7 @@
     var ctrl = C.openFormDialog({
       title: "添加云主机",
       wide: true,
+      actionsLeftHtml: "<button type=\"button\" class=\"secondary\" data-wiz-test>测试连接</button>",
       bodyHtml:
         "<div class=\"auth-type\"><span>服务商</span>" +
         "<div class=\"page-tabs auth-tabs\" role=\"tablist\" aria-label=\"服务商\">" +
@@ -755,8 +756,8 @@
         "<div data-wiz-config>" + wizardConfigFields("huawei") + "</div>" +
         "<label>连接名称（可留空）<input name=\"conn_name\" maxlength=\"60\" autocomplete=\"off\" placeholder=\"留空按服务商自动命名\" /></label>" +
         "<label>导入到分组" + C.groupSelect("group_id", state.groups, "") + "</label>" +
-        "<div class=\"manage-actions\"><button type=\"button\" class=\"secondary\" data-wiz-test>测试连接</button><span class=\"subtle\" data-wiz-status>尚未测试</span></div>" +
-        "<div data-wiz-devices></div>",
+        "<p class=\"subtle\" data-wiz-status>尚未测试</p>" +
+        "<div class=\"wiz-devices\" data-wiz-devices></div>",
       submitLabel: "保存",
       onSubmit: function (c) {
         if (!wiz.tested) { c.setError("请先点「测试连接」，拉到设备列表后才能保存"); return; }

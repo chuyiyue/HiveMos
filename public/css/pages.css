@@ -208,6 +208,16 @@ button.copy-btn:hover { background: var(--surface-hover); }
 .wiz-device-name { font-weight: 600; overflow-wrap: anywhere; }
 .wiz-device-meta { color: var(--text-3); font-size: var(--fs-sm); }
 .wiz-device:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+
+/* 测试连接与取消/保存同排（弹窗页脚左侧组） */
+.modal-actions-left { margin-right: auto; display: flex; gap: 8px; }
+
+/* 选主机网格：左右各一条小条 */
+.wiz-devices { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.wiz-devices .wiz-device { margin-top: 0; padding: 8px 10px; }
+@media (max-width: 639px) {
+  .wiz-devices { grid-template-columns: 1fr; }
+}
 .auth-tabs .page-tab { flex: 1 1 0; font-size: var(--fs-md); }
 .tag-field { display: grid; gap: 6px; font-size: var(--fs-sm); color: var(--text-2); }
 .tag-field .perm-menu { max-height: 148px; }
