@@ -210,7 +210,7 @@
       (options.corner ? "<span class=\"record-corner\">" + options.corner + "</span>" : "") +
       "</div>";
     return (
-      "<article class=\"record\"" +
+      "<article class=\"record" + (options.className ? " " + escapeHtml(options.className) : "") + "\"" +
       idAttr +
       "><div class=\"record-info\"" +
       zoneAttrs +

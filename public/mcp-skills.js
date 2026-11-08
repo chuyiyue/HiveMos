@@ -173,48 +173,59 @@
   function card(server) {
     var meta = snapshotMeta(server);
     var time = C.formatMinute(server.snapshot_at);
-    var selectedClass = server.id === state.selectedId ? " is-selected" : "";
-    return (
-      '<article class="record' +
-      selectedClass +
-      '" id="' +
-      C.escapeHtml(server.id) +
-      '"><div class="record-main"><div class="record-title-row"><h3>' +
-      C.escapeHtml(server.title) +
-      "</h3>" +
-      pill(server.status === "active" ? "ok" : "idle", server.status === "active" ? "已启用" : "已停用") +
-      '</div><p class="mono">' +
-      C.escapeHtml(server.name) +
-      "</p>" +
-      tagsHtml(server.tags) +
-      '<div class="row-actions"><button type="button" class="secondary" data-action="open" data-id="' +
-      C.escapeHtml(server.id) +
-      '">查看</button><button type="button" class="secondary" data-action="edit" data-id="' +
-      C.escapeHtml(server.id) +
-      '">编辑</button></div></div><dl class="kv">' +
-      kv("分类", C.escapeHtml(server.category || "未分类")) +
-      kv("快照", pill(meta[0], meta[1]) + (time ? ' <span class="subtle">' + C.escapeHtml(time) + "</span>" : "")) +
-      kv("版本", '<span class="mono">v' + C.escapeHtml(String(server.version)) + "</span>") +
-      "</dl>" +
-      C.expandPanel(
-        "mcp:" + server.id,
-        C.expandActions(
-          '<button type="button" class="secondary" data-action="open" data-id="' +
-            C.escapeHtml(server.id) +
-            '">查看详情</button><button type="button" class="secondary" data-action="edit" data-id="' +
-            C.escapeHtml(server.id) +
-            '">编辑条目</button><button type="button" class="secondary" data-action="refresh" data-id="' +
-            C.escapeHtml(server.id) +
-            '">刷新快照</button><button type="button" class="secondary" data-action="snapshot" data-id="' +
-            C.escapeHtml(server.id) +
-            '">手填快照</button><button type="button" class="danger" data-action="delete" data-id="' +
-            C.escapeHtml(server.id) +
-            '">删除条目</button>',
-        ),
-      ) +
-      C.expandToggle("mcp:" + server.id) +
-      "</article>"
-    );
+    var id = C.escapeHtml(server.id);
+    return C.record({
+      id: server.id,
+      className: server.id === state.selectedId ? "is-selected" : "",
+      icon: "plug",
+      title: server.title,
+      pill: server.transport || "",
+      status: server.status === "active" ? "enabled" : "disabled",
+      extra: "<p class=\"mono\">" + C.escapeHtml(server.name) + "</p>" + tagsHtml(server.tags),
+      facts: [
+        ["分类", C.escapeHtml(server.category || "未分类")],
+        ["快照", pill(meta[0], meta[1]) + (time ? " <span class=\"subtle\">" + C.escapeHtml(time) + "</span>" : "")],
+        ["版本", "<span class=\"mono\">v" + C.escapeHtml(String(server.version)) + "</span>"],
+      ],
+      actions:
+        "<button type=\"button\" class=\"secondary\" data-action=\"refresh\" data-id=\"" + id + "\">刷新快照</button>" +
+        "<button type=\"button\" class=\"secondary\" data-copy=\"" + C.escapeHtml(server.endpoint_url || "") + "\" data-label=\"复制地址\">复制地址</button>",
+      manage: "mcp:" + server.id,
+    });
+  }
+
+  // ---- 管理弹窗（点卡片信息区打开） ----
+
+  function openManage(key) {
+    if (!key) return;
+    var sep = key.indexOf(":");
+    var kind = key.slice(0, sep);
+    var id = key.slice(sep + 1);
+    if (kind === "mcp") {
+      var server = state.servers.find(function (item) {
+        return item.id === id;
+      });
+      if (server) openServerManage(server);
+    } else if (kind === "skills" || kind === "api") {
+      var item = findLocalItem(kind, id);
+      if (item) openLocalManage(kind, item);
+    }
+  }
+
+  function openServerManage(server) {
+    var id = C.escapeHtml(server.id);
+    var ctrl = C.openManageDialog({
+      title: server.title,
+      bodyHtml:
+        "<div class=\"manage-actions\">" +
+        "<button type=\"button\" class=\"secondary\" data-action=\"open\" data-id=\"" + id + "\">查看详情</button>" +
+        "<button type=\"button\" class=\"secondary\" data-action=\"edit\" data-id=\"" + id + "\">编辑条目</button>" +
+        "<button type=\"button\" class=\"secondary\" data-action=\"refresh\" data-id=\"" + id + "\">刷新快照</button>" +
+        "<button type=\"button\" class=\"secondary\" data-action=\"snapshot\" data-id=\"" + id + "\">手填快照</button>" +
+        "<button type=\"button\" class=\"danger\" data-action=\"delete\" data-id=\"" + id + "\">删除条目</button>" +
+        "</div>",
+    });
+    wireDialog(ctrl);
   }
 
   function detailHtml(server) {
@@ -368,28 +379,47 @@
     });
   }
 
+  function openLocalManage(scope, item) {
+    var id = C.escapeHtml(item.id);
+    var facts;
+    if (scope === "skills") {
+      facts =
+        kv("版本", C.escapeHtml(item.version)) +
+        kv("引用", C.escapeHtml(item.used || "暂无")) +
+        kv("来源", C.escapeHtml(item.source || "未注明"));
+    } else {
+      facts =
+        kv("端点", C.escapeHtml(item.base)) +
+        kv("鉴权", C.escapeHtml(item.auth)) +
+        kv("说明", C.escapeHtml(item.note || "无"));
+    }
+    var ctrl = C.openManageDialog({
+      title: item.name,
+      bodyHtml:
+        "<dl class=\"kv\">" + facts + "</dl>" +
+        "<div class=\"manage-actions\">" +
+        "<button type=\"button\" class=\"secondary\" data-action=\"local-edit\" data-scope=\"" + scope + "\" data-id=\"" + id + "\">编辑</button>" +
+        "<button type=\"button\" class=\"danger\" data-action=\"local-delete\" data-scope=\"" + scope + "\" data-id=\"" + id + "\">删除</button>" +
+        "</div>" +
+        "<div class=\"confirm-slot\" data-confirm-item=\"" + scope + ":" + id + "\"></div>",
+    });
+    wireDialog(ctrl);
+  }
+
   function skillsCard(item) {
     return C.record({
       id: item.id,
+      icon: "puzzle",
       title: item.name,
       status: item.status,
-      lede: item.source,
+      pill: item.source || "",
       facts: [
         ["版本", C.escapeHtml(item.version)],
         ["引用", C.escapeHtml(item.used || "暂无")],
       ],
-      expandKey: "skills:" + item.id,
-      expandBody:
-        C.expandActions(
-          '<button type="button" class="secondary" data-action="local-edit" data-scope="skills" data-id="' +
-            C.escapeHtml(item.id) +
-            '">编辑</button><button type="button" class="danger" data-action="local-delete" data-scope="skills" data-id="' +
-            C.escapeHtml(item.id) +
-            '">删除</button>',
-        ) +
-        '<div class="confirm-slot" data-confirm-item="' +
-        C.escapeHtml("skills:" + item.id) +
-        '"></div>',
+      actions:
+        "<button type=\"button\" class=\"secondary\" data-copy=\"" + C.escapeHtml(item.content || "") + "\" data-label=\"复制正文\">复制正文</button>",
+      manage: "skills:" + item.id,
     });
   }
 
@@ -406,6 +436,7 @@
   function apiCard(item) {
     return C.record({
       id: item.id,
+      icon: "gateway",
       title: item.name,
       status: item.status,
       lede: item.note,
@@ -413,18 +444,9 @@
         ["端点", C.escapeHtml(item.base)],
         ["鉴权", C.escapeHtml(item.auth)],
       ],
-      expandKey: "api:" + item.id,
-      expandBody:
-        C.expandActions(
-          '<button type="button" class="secondary" data-action="local-edit" data-scope="api" data-id="' +
-            C.escapeHtml(item.id) +
-            '">编辑</button><button type="button" class="danger" data-action="local-delete" data-scope="api" data-id="' +
-            C.escapeHtml(item.id) +
-            '">删除</button>',
-        ) +
-        '<div class="confirm-slot" data-confirm-item="' +
-        C.escapeHtml("api:" + item.id) +
-        '"></div>',
+      actions:
+        "<button type=\"button\" class=\"secondary\" data-copy=\"" + C.escapeHtml(item.base || "") + "\" data-label=\"复制地址\">复制地址</button>",
+      manage: "api:" + item.id,
     });
   }
 
@@ -549,16 +571,22 @@
       }
       return;
     }
+    var zone = target.closest("[data-manage]");
+    if (zone) {
+      if (target.closest("button, a, input, select, textarea")) return;
+      openManage(zone.getAttribute("data-manage"));
+      return;
+    }
     var button = target.closest("[data-action]");
     if (!button || state.busy) return;
     var action = button.getAttribute("data-action");
     var id = button.getAttribute("data-id") || state.selectedId;
-    if (action === "open") openServer(id, true);
+    if (action === "open") { openServer(id, true); C.closeCurrentOverlay(); }
     else if (action === "add") openCreateDialog();
-    else if (action === "edit") openEditDialog(id);
-    else if (action === "snapshot") openSnapshotDialog(id);
+    else if (action === "edit") { openEditDialog(id); C.closeCurrentOverlay(); }
+    else if (action === "snapshot") { openSnapshotDialog(id); C.closeCurrentOverlay(); }
     else if (action === "refresh") refresh(id);
-    else if (action === "delete") removeServer(id);
+    else if (action === "delete") removeServer(id, button);
     else if (action === "add-group") openGroupDialog();
     else if (action === "rename-group") {
       var group = findGroup(id);
@@ -814,12 +842,13 @@
       });
   }
 
-  function removeServer(id) {
+  function removeServer(id, srcEl) {
     var server = state.servers.find(function (item) {
       return item.id === id;
     });
     if (!server || state.busy) return;
-    var anchor = document.getElementById("mcp-confirm");
+    var dlg = srcEl && srcEl.closest ? srcEl.closest("[data-manage-dialog]") : null;
+    var anchor = (dlg && dlg.querySelector("[data-manage-confirm]")) || document.getElementById("mcp-confirm");
     C.askConfirm({
       anchor: anchor,
       title: "删除条目",
@@ -844,6 +873,7 @@
           });
           state.notice = "已删除";
           state.noticeKind = "ok";
+          C.closeCurrentOverlay();
           if (state.selectedId === id) {
             state.selectedId = "";
             state.mode = "create";
@@ -1256,6 +1286,7 @@
             return entry.id !== item.id;
           });
           state.notice = "已删除";
+          C.closeCurrentOverlay();
           state.noticeKind = "ok";
           render();
         })
