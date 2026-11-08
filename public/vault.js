@@ -11,6 +11,10 @@
     var el = ctrl.form.querySelector("[name=\"" + name + "\"]");
     return el ? el.value.trim() : "";
   }
+  // 与其它板块同一套卡片菜单入口：record 的 extra 里放「高级」按钮
+  function manageBtn(kind, id) {
+    return '<div class="row-actions"><button type="button" class="secondary" data-manage="' + kind + '" data-id="' + C.escapeHtml(id) + '">高级</button></div>';
+  }
 
   var SECRETS = [
     { id: "sec_gateway", name: "模型网关密钥", kind: "API Key", tail: "91f2", updated: "2026-11-06 09:12" },
@@ -39,7 +43,7 @@
 
   function render() {
     var cards = SECRETS.map(function (item) {
-      return C.record({ id: item.id, title: item.name, status: "stored", facts: [["类型", C.escapeHtml(item.kind)], ["末四位", C.copyLine(C.maskTail(item.tail), "复制末四位")], ["更新时间", C.escapeHtml(item.updated)]] });
+      return C.record({ id: item.id, title: item.name, status: "stored", facts: [["类型", C.escapeHtml(item.kind)], ["末四位", C.copyLine(C.maskTail(item.tail), "复制末四位")], ["更新时间", C.escapeHtml(item.updated)]], extra: manageBtn("secret", item.id) });
     }).join("");
     var auditCards = AUDIT.map(function (item) {
       return C.record({ id: item.id, title: item.who, lede: item.what, facts: [["时间", C.escapeHtml(item.when)]] });
@@ -52,7 +56,7 @@
       C.section("回收站", "", C.emptyState("回收站是空的", "删除的条目会在这里停留，方便核对末四位")) +
       "</div>";
     var gwCards = GATEWAYS.map(function (item) {
-      return C.record({ id: item.id, title: item.name, status: item.status, facts: [["协议", C.escapeHtml(item.proto)], ["地址", C.escapeHtml(item.base)], ["模型", C.escapeHtml(item.models)], ["密钥末四位", C.escapeHtml(item.tail)]] });
+      return C.record({ id: item.id, title: item.name, status: item.status, facts: [["协议", C.escapeHtml(item.proto)], ["地址", C.escapeHtml(item.base)], ["模型", C.escapeHtml(item.models)], ["密钥末四位", C.escapeHtml(item.tail)]], extra: manageBtn("gateway", item.id) });
     }).join("");
     var gatewayHtml =
       "<div class=\"stack\">" +
@@ -64,7 +68,7 @@
     var emailCards = EMAILS.map(function (item) {
       var facts = [["用途", C.escapeHtml(item.use)], ["入口", C.escapeHtml(item.portal)]];
       if (item.note) facts.push(["备注", C.escapeHtml(item.note)]);
-      return C.record({ id: item.id, title: item.address, facts: facts });
+      return C.record({ id: item.id, title: item.address, facts: facts, extra: manageBtn("email", item.id) });
     }).join("");
     var emailHtml =
       "<div class=\"stack\">" +
@@ -86,62 +90,120 @@
     );
   }
 
-  function openAddSecret() {
+  // 添加与编辑共用同一套字段构建；item 为空是添加，传入条目是编辑并预填。
+  // 条目的值只保留末四位，编辑时值留空表示不修改
+  function secretFields(item) {
+    var v = item || { name: "", kind: "" };
+    return (
+      "<label>名称<input name=\"name\" maxlength=\"60\" autocomplete=\"off\" value=\"" + C.escapeHtml(v.name) + "\" /></label>" +
+      "<label>类型<input name=\"kind\" maxlength=\"30\" autocomplete=\"off\" placeholder=\"例如 API Key、Token\" value=\"" + C.escapeHtml(v.kind) + "\" /></label>" +
+      "<label>值<input name=\"value\" maxlength=\"200\" autocomplete=\"off\" /><p class=\"subtle field-hint\">" + (item ? "留空表示不修改，填写后只保留末四位" : "列表里只会保留末四位") + "</p></label>"
+    );
+  }
+  function openSecretDialog(item) {
+    var editing = !!item;
     C.openFormDialog({
-      title: "添加条目",
-      bodyHtml:
-        "<label>名称<input name=\"name\" maxlength=\"60\" autocomplete=\"off\" /></label>" +
-        "<label>类型<input name=\"kind\" maxlength=\"30\" autocomplete=\"off\" placeholder=\"例如 API Key、Token\" /></label>" +
-        "<label>值<input name=\"value\" maxlength=\"200\" autocomplete=\"off\" /><p class=\"subtle field-hint\">列表里只会保留末四位</p></label>",
-      submitLabel: "添加",
+      title: editing ? "编辑条目" : "添加条目",
+      bodyHtml: secretFields(item),
+      submitLabel: editing ? "保存" : "添加",
       onSubmit: function (ctrl) {
         var name = val(ctrl, "name");
         var value = val(ctrl, "value");
         if (!name) { ctrl.setError("请填写名称"); return; }
-        if (!value) { ctrl.setError("请填写值"); return; }
-        SECRETS.unshift({ id: "sec_" + Date.now(), name: name, kind: val(ctrl, "kind") || "Token", tail: value.slice(-4), updated: now() });
-        ctrl.close();
-        render();
-      },
-    });
-  }
-  function openAddGateway() {
-    C.openFormDialog({
-      title: "添加网关",
-      bodyHtml:
-        "<label>名称<input name=\"name\" maxlength=\"60\" autocomplete=\"off\" /></label>" +
-        "<label>协议<input name=\"proto\" maxlength=\"30\" autocomplete=\"off\" placeholder=\"例如 OpenAI 兼容\" /></label>" +
-        "<label>地址<input name=\"base\" maxlength=\"120\" autocomplete=\"off\" /></label>" +
-        "<label>密钥<input name=\"key\" maxlength=\"200\" autocomplete=\"off\" /><p class=\"subtle field-hint\">列表里只会保留末四位</p></label>",
-      submitLabel: "添加",
-      onSubmit: function (ctrl) {
-        var name = val(ctrl, "name");
-        var key = val(ctrl, "key");
-        if (!name) { ctrl.setError("请填写名称"); return; }
-        if (!key) { ctrl.setError("请填写密钥"); return; }
-        GATEWAYS.push({ id: "gw_" + Date.now(), name: name, proto: val(ctrl, "proto") || "OpenAI 兼容", base: val(ctrl, "base") || "未填写地址", models: "0 个模型", tail: key.slice(-4), status: "paused" });
+        if (!editing && !value) { ctrl.setError("请填写值"); return; }
+        if (editing) {
+          item.name = name;
+          item.kind = val(ctrl, "kind") || "Token";
+          if (value) item.tail = value.slice(-4);
+          item.updated = now();
+        } else {
+          SECRETS.unshift({ id: "sec_" + Date.now(), name: name, kind: val(ctrl, "kind") || "Token", tail: value.slice(-4), updated: now() });
+        }
         ctrl.close();
         render();
       },
     });
   }
 
-  function openAddEmail() {
+  function gatewayFields(item) {
+    var v = item || { name: "", proto: "", base: "" };
+    return (
+      "<label>名称<input name=\"name\" maxlength=\"60\" autocomplete=\"off\" value=\"" + C.escapeHtml(v.name) + "\" /></label>" +
+      "<label>协议<input name=\"proto\" maxlength=\"30\" autocomplete=\"off\" placeholder=\"例如 OpenAI 兼容\" value=\"" + C.escapeHtml(v.proto) + "\" /></label>" +
+      "<label>地址<input name=\"base\" maxlength=\"120\" autocomplete=\"off\" value=\"" + C.escapeHtml(v.base) + "\" /></label>" +
+      "<label>密钥<input name=\"key\" maxlength=\"200\" autocomplete=\"off\" /><p class=\"subtle field-hint\">" + (item ? "留空表示不修改，填写后只保留末四位" : "列表里只会保留末四位") + "</p></label>"
+    );
+  }
+  function openGatewayDialog(item) {
+    var editing = !!item;
     C.openFormDialog({
-      title: "添加邮箱",
-      bodyHtml:
-        "<label>邮箱地址<input name=\"address\" maxlength=\"120\" autocomplete=\"off\" placeholder=\"name@example.com\" /></label>" +
-        "<label>用途<input name=\"use\" maxlength=\"40\" autocomplete=\"off\" placeholder=\"例如 主邮箱、注册优先\" /></label>" +
-        "<label>入口<input name=\"portal\" maxlength=\"80\" autocomplete=\"off\" placeholder=\"例如 mail.outtw.com\" /></label>" +
-        "<label>备注<textarea name=\"note\" rows=\"3\" maxlength=\"300\"></textarea></label>",
-      submitLabel: "添加",
+      title: editing ? "编辑网关" : "添加网关",
+      bodyHtml: gatewayFields(item),
+      submitLabel: editing ? "保存" : "添加",
       onSubmit: function (ctrl) {
-        var address = val(ctrl, "address");
-        if (!address) { ctrl.setError("请填写邮箱地址"); return; }
-        EMAILS.push({ id: "em_" + Date.now(), address: address, use: val(ctrl, "use") || "未标注", portal: val(ctrl, "portal") || "未填写", note: val(ctrl, "note") });
+        var name = val(ctrl, "name");
+        var key = val(ctrl, "key");
+        if (!name) { ctrl.setError("请填写名称"); return; }
+        if (!editing && !key) { ctrl.setError("请填写密钥"); return; }
+        if (editing) {
+          item.name = name;
+          item.proto = val(ctrl, "proto") || "OpenAI 兼容";
+          item.base = val(ctrl, "base") || "未填写地址";
+          if (key) item.tail = key.slice(-4);
+        } else {
+          GATEWAYS.push({ id: "gw_" + Date.now(), name: name, proto: val(ctrl, "proto") || "OpenAI 兼容", base: val(ctrl, "base") || "未填写地址", models: "0 个模型", tail: key.slice(-4), status: "paused" });
+        }
         ctrl.close();
         render();
       },
+    });
+  }
+
+  function emailFields(item) {
+    var v = item || { address: "", use: "", portal: "", note: "" };
+    return (
+      "<label>邮箱地址<input name=\"address\" maxlength=\"120\" autocomplete=\"off\" placeholder=\"name@example.com\" value=\"" + C.escapeHtml(v.address) + "\" /></label>" +
+      "<label>用途<input name=\"use\" maxlength=\"40\" autocomplete=\"off\" placeholder=\"例如 主邮箱、注册优先\" value=\"" + C.escapeHtml(v.use) + "\" /></label>" +
+      "<label>入口<input name=\"portal\" maxlength=\"80\" autocomplete=\"off\" placeholder=\"例如 mail.outtw.com\" value=\"" + C.escapeHtml(v.portal) + "\" /></label>" +
+      "<label>备注<textarea name=\"note\" rows=\"3\" maxlength=\"300\">" + C.escapeHtml(v.note) + "</textarea></label>"
+    );
+  }
+  function openEmailDialog(item) {
+    var editing = !!item;
+    C.openFormDialog({
+      title: editing ? "编辑邮箱" : "添加邮箱",
+      bodyHtml: emailFields(item),
+      submitLabel: editing ? "保存" : "添加",
+      onSubmit: function (ctrl) {
+        var address = val(ctrl, "address");
+        if (!address) { ctrl.setError("请填写邮箱地址"); return; }
+        if (editing) {
+          item.address = address;
+          item.use = val(ctrl, "use") || "未标注";
+          item.portal = val(ctrl, "portal") || "未填写";
+          item.note = val(ctrl, "note");
+        } else {
+          EMAILS.push({ id: "em_" + Date.now(), address: address, use: val(ctrl, "use") || "未标注", portal: val(ctrl, "portal") || "未填写", note: val(ctrl, "note") });
+        }
+        ctrl.close();
+        render();
+      },
+    });
+  }
+
+  function openManageMenu(kind, item) {
+    C.openActionMenu({
+      title: kind === "email" ? item.address : item.name,
+      items: [
+        {
+          label: "编辑",
+          onSelect: function () {
+            if (kind === "secret") openSecretDialog(item);
+            else if (kind === "gateway") openGatewayDialog(item);
+            else openEmailDialog(item);
+          },
+        },
+      ],
     });
   }
 
@@ -159,9 +221,19 @@
     var add = target.closest("[data-add]");
     if (add) {
       var kind = add.getAttribute("data-add");
-      if (kind === "secret") openAddSecret();
-      else if (kind === "gateway") openAddGateway();
-      else openAddEmail();
+      if (kind === "secret") openSecretDialog(null);
+      else if (kind === "gateway") openGatewayDialog(null);
+      else openEmailDialog(null);
+      return;
+    }
+    var manage = target.closest("[data-manage]");
+    if (manage) {
+      var mkind = manage.getAttribute("data-manage");
+      var mid = manage.getAttribute("data-id");
+      var pool = mkind === "secret" ? SECRETS : mkind === "gateway" ? GATEWAYS : EMAILS;
+      var found = null;
+      pool.forEach(function (entry) { if (entry.id === mid) found = entry; });
+      if (found) openManageMenu(mkind, found);
     }
   });
   render();

@@ -11,8 +11,12 @@
     var el = ctrl.form.querySelector("[name=\"" + name + "\"]");
     return el ? el.value.trim() : "";
   }
-  function card(item, facts) {
-    return C.record({ id: item.id, title: item.name, status: item.status, lede: item.lede || "", facts: facts });
+  // 与其它板块同一套卡片菜单入口：record 的 extra 里放「高级」按钮
+  function manageBtn(kind, id) {
+    return '<div class="row-actions"><button type="button" class="secondary" data-manage="' + kind + '" data-id="' + C.escapeHtml(id) + '">高级</button></div>';
+  }
+  function card(kind, item, facts) {
+    return C.record({ id: item.id, title: item.name, status: item.status, lede: item.lede || "", facts: facts, extra: manageBtn(kind, item.id) });
   }
 
   var SERVERS = [
@@ -34,14 +38,14 @@
       "<div class=\"stack\">" +
       "<button type=\"button\" class=\"add-button\" data-add=\"server\">添加服务器</button>" +
       C.section("服务器", String(SERVERS.length) + " 台", C.list(SERVERS.map(function (item) {
-        return card(item, [["配置", C.escapeHtml(item.spec)], ["绑定", C.escapeHtml(item.agent)], ["最近心跳", C.escapeHtml(item.heartbeat)]]);
+        return card("server", item, [["配置", C.escapeHtml(item.spec)], ["绑定", C.escapeHtml(item.agent)], ["最近心跳", C.escapeHtml(item.heartbeat)]]);
       }).join(""))) +
       "</div>";
     var hostHtml =
       "<div class=\"stack\">" +
       "<button type=\"button\" class=\"add-button\" data-add=\"host\">添加云主机</button>" +
       C.section("云主机", String(HOSTS.length) + " 台", C.list(HOSTS.map(function (item) {
-        return card(item, [["规格", C.escapeHtml(item.spec)], ["绑定", C.escapeHtml(item.agent)], ["最近心跳", C.escapeHtml(item.heartbeat)]]);
+        return card("host", item, [["规格", C.escapeHtml(item.spec)], ["绑定", C.escapeHtml(item.agent)], ["最近心跳", C.escapeHtml(item.heartbeat)]]);
       }).join(""))) +
       C.section("已释放", "", C.emptyState("没有已释放的云主机", "释放后的实例会留在这里，直到记录被清掉")) +
       "</div>";
@@ -49,7 +53,7 @@
       "<div class=\"stack\">" +
       "<button type=\"button\" class=\"add-button\" data-add=\"worker\">添加 Worker</button>" +
       C.section("Workers", String(WORKERS.length) + " 个", C.list(WORKERS.map(function (item) {
-        return card(item, [["版本", C.escapeHtml(item.ver)], ["更新时间", C.escapeHtml(item.updated)]]);
+        return card("worker", item, [["版本", C.escapeHtml(item.ver)], ["更新时间", C.escapeHtml(item.updated)]]);
       }).join(""))) +
       "</div>";
     C.mount(
@@ -67,25 +71,56 @@
     );
   }
 
-  function openAdd(kind) {
+  // 添加与编辑共用同一套字段构建；item 为空是添加，传入条目是编辑并预填。
+  // 状态、绑定、心跳、版本是运行态字段，不在表单里，编辑时保持不变
+  function itemFields(kind, item) {
+    var v = item || { name: "", lede: "", spec: "" };
     var isWorker = kind === "worker";
+    return (
+      "<label>名称<input name=\"name\" maxlength=\"60\" autocomplete=\"off\" value=\"" + C.escapeHtml(v.name) + "\" /></label>" +
+      (isWorker
+        ? "<label>说明<input name=\"lede\" maxlength=\"60\" autocomplete=\"off\" placeholder=\"例如 本控制面\" value=\"" + C.escapeHtml(v.lede) + "\" /></label>"
+        : "<label>地域<input name=\"lede\" maxlength=\"30\" autocomplete=\"off\" value=\"" + C.escapeHtml(v.lede) + "\" /></label><label>" + (kind === "server" ? "配置" : "规格") + "<input name=\"spec\" maxlength=\"60\" autocomplete=\"off\" placeholder=\"例如 2 核 / 4 GB / 40 GB\" value=\"" + C.escapeHtml(v.spec || "") + "\" /></label>")
+    );
+  }
+
+  function openItemDialog(kind, item) {
+    var editing = !!item;
+    var isWorker = kind === "worker";
+    var titleFor = { server: "服务器", host: "云主机", worker: "Worker" }[kind];
     C.openFormDialog({
-      title: kind === "server" ? "添加服务器" : kind === "host" ? "添加云主机" : "添加 Worker",
-      bodyHtml:
-        "<label>名称<input name=\"name\" maxlength=\"60\" autocomplete=\"off\" /></label>" +
-        (isWorker
-          ? "<label>说明<input name=\"lede\" maxlength=\"60\" autocomplete=\"off\" placeholder=\"例如 本控制面\" /></label>"
-          : "<label>地域<input name=\"lede\" maxlength=\"30\" autocomplete=\"off\" /></label><label>" + (kind === "server" ? "配置" : "规格") + "<input name=\"spec\" maxlength=\"60\" autocomplete=\"off\" placeholder=\"例如 2 核 / 4 GB / 40 GB\" /></label>"),
-      submitLabel: "添加",
+      title: (editing ? "编辑" : "添加") + titleFor,
+      bodyHtml: itemFields(kind, item),
+      submitLabel: editing ? "保存" : "添加",
       onSubmit: function (ctrl) {
         var name = val(ctrl, "name");
         if (!name) { ctrl.setError("请填写名称"); return; }
-        if (isWorker) WORKERS.push({ id: "wk_" + Date.now(), name: name, status: "active", lede: val(ctrl, "lede"), ver: "最新提交", updated: now() });
-        else if (kind === "server") SERVERS.push({ id: "sv_" + Date.now(), name: name, status: "running", lede: val(ctrl, "lede"), spec: val(ctrl, "spec") || "未填写配置", agent: "未绑定", heartbeat: now() });
-        else HOSTS.push({ id: "pc_" + Date.now(), name: name, status: "running", lede: val(ctrl, "lede"), spec: val(ctrl, "spec") || "未填写规格", agent: "未绑定", heartbeat: now() });
+        if (editing) {
+          item.name = name;
+          item.lede = val(ctrl, "lede");
+          if (!isWorker) item.spec = val(ctrl, "spec") || (kind === "server" ? "未填写配置" : "未填写规格");
+        } else if (isWorker) {
+          WORKERS.push({ id: "wk_" + Date.now(), name: name, status: "active", lede: val(ctrl, "lede"), ver: "最新提交", updated: now() });
+        } else if (kind === "server") {
+          SERVERS.push({ id: "sv_" + Date.now(), name: name, status: "running", lede: val(ctrl, "lede"), spec: val(ctrl, "spec") || "未填写配置", agent: "未绑定", heartbeat: now() });
+        } else {
+          HOSTS.push({ id: "pc_" + Date.now(), name: name, status: "running", lede: val(ctrl, "lede"), spec: val(ctrl, "spec") || "未填写规格", agent: "未绑定", heartbeat: now() });
+        }
         ctrl.close();
         render();
       },
+    });
+  }
+
+  function openManageMenu(kind, item) {
+    C.openActionMenu({
+      title: item.name,
+      items: [
+        {
+          label: "编辑",
+          onSelect: function () { openItemDialog(kind, item); },
+        },
+      ],
     });
   }
 
@@ -101,7 +136,19 @@
       return;
     }
     var add = target.closest("[data-add]");
-    if (add) openAdd(add.getAttribute("data-add"));
+    if (add) {
+      openItemDialog(add.getAttribute("data-add"), null);
+      return;
+    }
+    var manage = target.closest("[data-manage]");
+    if (manage) {
+      var mkind = manage.getAttribute("data-manage");
+      var mid = manage.getAttribute("data-id");
+      var pool = mkind === "server" ? SERVERS : mkind === "host" ? HOSTS : WORKERS;
+      var found = null;
+      pool.forEach(function (entry) { if (entry.id === mid) found = entry; });
+      if (found) openManageMenu(mkind, found);
+    }
   });
   render();
 })();

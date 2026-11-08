@@ -35,21 +35,48 @@
     { id: "task_rotate", title: "轮换网关密钥展示", from: "编排", to: "编排", status: "done", updated: "2026-11-06 17:45" },
   ];
 
-  function openAddTask() {
+  // 添加与编辑共用同一套字段构建；item 为空是添加，传入条目是编辑并预填
+  function taskFields(item) {
+    var v = item || { title: "", from: "", to: "" };
+    return (
+      "<label>标题<input name=\"title\" maxlength=\"80\" autocomplete=\"off\" value=\"" + C.escapeHtml(v.title) + "\" /></label>" +
+      "<label>从<input name=\"from\" maxlength=\"40\" autocomplete=\"off\" placeholder=\"发起的 Agent\" value=\"" + C.escapeHtml(v.from) + "\" /></label>" +
+      "<label>到<input name=\"to\" maxlength=\"40\" autocomplete=\"off\" placeholder=\"接收的 Agent\" value=\"" + C.escapeHtml(v.to) + "\" /></label>"
+    );
+  }
+
+  function openTaskDialog(item) {
+    var editing = !!item;
     C.openFormDialog({
-      title: "添加任务",
-      bodyHtml:
-        "<label>标题<input name=\"title\" maxlength=\"80\" autocomplete=\"off\" /></label>" +
-        "<label>从<input name=\"from\" maxlength=\"40\" autocomplete=\"off\" placeholder=\"发起的 Agent\" /></label>" +
-        "<label>到<input name=\"to\" maxlength=\"40\" autocomplete=\"off\" placeholder=\"接收的 Agent\" /></label>",
-      submitLabel: "添加",
+      title: editing ? "编辑任务" : "添加任务",
+      bodyHtml: taskFields(item),
+      submitLabel: editing ? "保存" : "添加",
       onSubmit: function (ctrl) {
         var title = val(ctrl, "title");
         if (!title) { ctrl.setError("请填写标题"); return; }
-        TASKS.unshift({ id: "task_" + Date.now(), title: title, from: val(ctrl, "from") || "管理员", to: val(ctrl, "to") || "未指派", status: "queued", updated: now() });
+        if (editing) {
+          item.title = title;
+          item.from = val(ctrl, "from") || "管理员";
+          item.to = val(ctrl, "to") || "未指派";
+          item.updated = now();
+        } else {
+          TASKS.unshift({ id: "task_" + Date.now(), title: title, from: val(ctrl, "from") || "管理员", to: val(ctrl, "to") || "未指派", status: "queued", updated: now() });
+        }
         ctrl.close();
         render();
       },
+    });
+  }
+
+  function openTaskMenu(item) {
+    C.openActionMenu({
+      title: item.title,
+      items: [
+        {
+          label: "编辑",
+          onSelect: function () { openTaskDialog(item); },
+        },
+      ],
     });
   }
 
@@ -727,7 +754,7 @@
   // ---------------------------------------------------------------- render
   function render() {
     var taskCards = TASKS.map(function (item) {
-      return C.record({ id: item.id, title: item.title, status: item.status, facts: [["从", C.escapeHtml(item.from)], ["到", C.escapeHtml(item.to)], ["更新时间", C.escapeHtml(item.updated)]] });
+      return C.record({ id: item.id, title: item.title, status: item.status, facts: [["从", C.escapeHtml(item.from)], ["到", C.escapeHtml(item.to)], ["更新时间", C.escapeHtml(item.updated)]], extra: "<div class=\"row-actions\"><button type=\"button\" class=\"secondary\" data-action=\"task-menu\" data-id=\"" + C.escapeHtml(item.id) + "\">高级</button></div>" });
     }).join("");
     var tasksHtml =
       "<div class=\"stack\">" +
@@ -767,6 +794,11 @@
       if (action === "add-event") { setNotice("", false); openAddEvent(); }
       else if (action === "add-calendar") { setNotice("", false); openAddCalendar(); }
       else if (action === "add-feed") openAddFeed();
+      else if (action === "task-menu") {
+        var task = null;
+        TASKS.forEach(function (t) { if (t.id === actionEl.getAttribute("data-id")) task = t; });
+        if (task) openTaskMenu(task);
+      }
       else if (action === "cal-prev") { cal.month--; if (cal.month < 0) { cal.month = 11; cal.year--; } cal.loaded = false; loadCalendar(); }
       else if (action === "cal-next") { cal.month++; if (cal.month > 11) { cal.month = 0; cal.year++; } cal.loaded = false; loadCalendar(); }
       else if (action === "cal-menu") {
@@ -795,7 +827,7 @@
       return;
     }
     var add = target.closest("[data-add]");
-    if (add && add.getAttribute("data-add") === "task") openAddTask();
+    if (add && add.getAttribute("data-add") === "task") openTaskDialog(null);
   });
   render();
   if (activeTab === "calendar") loadCalendar();

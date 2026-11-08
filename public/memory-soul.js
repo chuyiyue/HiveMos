@@ -11,6 +11,10 @@
     var el = ctrl.form.querySelector("[name=\"" + name + "\"]");
     return el ? el.value.trim() : "";
   }
+  // 与其它板块同一套卡片菜单入口：record 的 extra 里放「高级」按钮
+  function manageBtn(kind, id) {
+    return '<div class="row-actions"><button type="button" class="secondary" data-manage="' + kind + '" data-id="' + C.escapeHtml(id) + '">高级</button></div>';
+  }
 
   var MEMORIES = [
     { id: "mem_pref", title: "回复用简体中文", scope: "工作区", source: "管理员", updated: "2026-11-05 11:02", excerpt: "界面对用户使用简体中文，术语保留英文原名" },
@@ -25,7 +29,7 @@
 
   function render() {
     var memCards = MEMORIES.map(function (item) {
-      return C.record({ id: item.id, title: item.title, lede: item.excerpt, facts: [["作用域", C.escapeHtml(item.scope)], ["来源", C.escapeHtml(item.source)], ["更新时间", C.escapeHtml(item.updated)]] });
+      return C.record({ id: item.id, title: item.title, lede: item.excerpt, facts: [["作用域", C.escapeHtml(item.scope)], ["来源", C.escapeHtml(item.source)], ["更新时间", C.escapeHtml(item.updated)]], extra: manageBtn("memory", item.id) });
     }).join("");
     var memoryHtml =
       "<div class=\"stack\">" +
@@ -34,7 +38,7 @@
       C.section("冲突", "", C.emptyState("没有待合并的记忆", "同一作用域发生冲突时会列在这里")) +
       "</div>";
     var soulCards = SOULS.map(function (item) {
-      return C.record({ id: item.id, title: item.agent, status: item.status, lede: "当前版本 " + item.version, facts: [["版本", C.escapeHtml(item.version)], ["同步时间", C.escapeHtml(item.updated)]] });
+      return C.record({ id: item.id, title: item.agent, status: item.status, lede: "当前版本 " + item.version, facts: [["版本", C.escapeHtml(item.version)], ["同步时间", C.escapeHtml(item.updated)]], extra: manageBtn("soul", item.id) });
     }).join("");
     var soulHtml =
       "<div class=\"stack\">" +
@@ -55,37 +59,79 @@
     );
   }
 
-  function openAddMemory() {
+  // 添加与编辑共用同一套字段构建；item 为空是添加，传入条目是编辑并预填
+  function memoryFields(item) {
+    var v = item || { title: "", scope: "", excerpt: "" };
+    return (
+      "<label>标题<input name=\"title\" maxlength=\"80\" autocomplete=\"off\" value=\"" + C.escapeHtml(v.title) + "\" /></label>" +
+      "<label>作用域<input name=\"scope\" maxlength=\"40\" autocomplete=\"off\" placeholder=\"例如 全局、工作区或某个 Agent\" value=\"" + C.escapeHtml(v.scope) + "\" /></label>" +
+      "<label>内容<textarea name=\"excerpt\" rows=\"4\" maxlength=\"500\">" + C.escapeHtml(v.excerpt) + "</textarea></label>"
+    );
+  }
+  function openMemoryDialog(item) {
+    var editing = !!item;
     C.openFormDialog({
-      title: "添加记忆",
-      bodyHtml:
-        "<label>标题<input name=\"title\" maxlength=\"80\" autocomplete=\"off\" /></label>" +
-        "<label>作用域<input name=\"scope\" maxlength=\"40\" autocomplete=\"off\" placeholder=\"例如 全局、工作区或某个 Agent\" /></label>" +
-        "<label>内容<textarea name=\"excerpt\" rows=\"4\" maxlength=\"500\"></textarea></label>",
-      submitLabel: "添加",
+      title: editing ? "编辑记忆" : "添加记忆",
+      bodyHtml: memoryFields(item),
+      submitLabel: editing ? "保存" : "添加",
       onSubmit: function (ctrl) {
         var title = val(ctrl, "title");
         if (!title) { ctrl.setError("请填写标题"); return; }
-        MEMORIES.unshift({ id: "mem_" + Date.now(), title: title, scope: val(ctrl, "scope") || "全局", source: "管理员", updated: now(), excerpt: val(ctrl, "excerpt") });
+        if (editing) {
+          item.title = title;
+          item.scope = val(ctrl, "scope") || "全局";
+          item.excerpt = val(ctrl, "excerpt");
+          item.updated = now();
+        } else {
+          MEMORIES.unshift({ id: "mem_" + Date.now(), title: title, scope: val(ctrl, "scope") || "全局", source: "管理员", updated: now(), excerpt: val(ctrl, "excerpt") });
+        }
         ctrl.close();
         render();
       },
     });
   }
-  function openAddSoul() {
+
+  function soulFields(item) {
+    var v = item || { agent: "", version: "" };
+    return (
+      "<label>Agent<input name=\"agent\" maxlength=\"40\" autocomplete=\"off\" value=\"" + C.escapeHtml(v.agent) + "\" /></label>" +
+      "<label>版本<input name=\"version\" maxlength=\"20\" autocomplete=\"off\" placeholder=\"v1\" value=\"" + C.escapeHtml(v.version) + "\" /></label>"
+    );
+  }
+  function openSoulDialog(item) {
+    var editing = !!item;
     C.openFormDialog({
-      title: "添加 Soul",
-      bodyHtml:
-        "<label>Agent<input name=\"agent\" maxlength=\"40\" autocomplete=\"off\" /></label>" +
-        "<label>版本<input name=\"version\" maxlength=\"20\" autocomplete=\"off\" placeholder=\"v1\" /></label>",
-      submitLabel: "添加",
+      title: editing ? "编辑 Soul" : "添加 Soul",
+      bodyHtml: soulFields(item),
+      submitLabel: editing ? "保存" : "添加",
       onSubmit: function (ctrl) {
         var agent = val(ctrl, "agent");
         if (!agent) { ctrl.setError("请填写 Agent"); return; }
-        SOULS.push({ id: "soul_" + Date.now(), agent: agent, version: val(ctrl, "version") || "v1", status: "paused", updated: now() });
+        if (editing) {
+          item.agent = agent;
+          item.version = val(ctrl, "version") || "v1";
+          item.updated = now();
+        } else {
+          SOULS.push({ id: "soul_" + Date.now(), agent: agent, version: val(ctrl, "version") || "v1", status: "paused", updated: now() });
+        }
         ctrl.close();
         render();
       },
+    });
+  }
+
+  function openManageMenu(kind, item) {
+    C.openActionMenu({
+      title: kind === "memory" ? item.title : item.agent,
+      items: [
+        {
+          label: "编辑",
+          onSelect: function () {
+            if (kind === "memory") openMemoryDialog(item);
+            else openSoulDialog(item);
+          },
+        },
+      ],
     });
   }
 
@@ -102,8 +148,18 @@
     }
     var add = target.closest("[data-add]");
     if (add) {
-      if (add.getAttribute("data-add") === "memory") openAddMemory();
-      else openAddSoul();
+      if (add.getAttribute("data-add") === "memory") openMemoryDialog(null);
+      else openSoulDialog(null);
+      return;
+    }
+    var manage = target.closest("[data-manage]");
+    if (manage) {
+      var mkind = manage.getAttribute("data-manage");
+      var mid = manage.getAttribute("data-id");
+      var pool = mkind === "memory" ? MEMORIES : SOULS;
+      var found = null;
+      pool.forEach(function (entry) { if (entry.id === mid) found = entry; });
+      if (found) openManageMenu(mkind, found);
     }
   });
   render();
