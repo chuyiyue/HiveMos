@@ -115,6 +115,13 @@ async function collection(request: Request, env: Env, ctx: WaitCtx): Promise<Res
     if (!body.ok) return body.response;
     return wrap(async () => {
       const created = await createMachine(env.DB, body.value, ACTOR, "panel", Date.now(), vaultKeyOf(env));
+      // Adding a server probes it once, synchronously: when the save
+      // returns, the card already shows the real hostname/OS/status.
+      let fresh = created;
+      if (created.kind === "server") {
+        await probeMachineById(env.DB, created.id, vaultKeyOf(env), ACTOR, Date.now()).catch(() => undefined);
+        fresh = (await getMachine(env.DB, created.id)) ?? created;
+      }
       const kindLabel = MACHINE_KIND_LABELS[created.kind] ?? created.kind;
       await logOp(env.DB, {
         actor: await panelActor(request, env),
@@ -124,7 +131,7 @@ async function collection(request: Request, env: Env, ctx: WaitCtx): Promise<Res
         targetName: created.name,
         text: `添加了${kindLabel}「${created.name}」`,
       });
-      return json({ ok: true, machine: machinePublic(created) }, 201);
+      return json({ ok: true, machine: machinePublic(fresh) }, 201);
     });
   }
   return methodNotAllowed("GET, POST");

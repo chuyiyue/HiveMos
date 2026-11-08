@@ -558,3 +558,6 @@ img, svg, video, canvas { max-width: 100%; }
   .session-row { align-items: stretch; flex-direction: column; }
   .session-row > button { width: 100%; }
 }
+
+.form-grid .form-cols-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width: 480px) { .form-grid .form-cols-2 { grid-template-columns: 1fr; } }

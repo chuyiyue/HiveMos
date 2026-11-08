@@ -522,7 +522,7 @@
       ["系统", item.os || "尚未探活"],
       ["内核", item.kernel || "尚未探活"],
       ["架构", item.arch || "尚未探活"],
-      ["最近探活", item.probe_at ? C.formatMinute(item.probe_at) || "—" : "尚未探活"],
+      ["最近同步", item.probe_at ? C.formatMinute(item.probe_at) || "—" : "尚未同步"],
     ];
     if (item.host_fingerprint) rows.push(["主机指纹", item.host_fingerprint]);
     if (item.probe_status === "error" && item.probe_error) rows.push(["失败原因", item.probe_error]);
@@ -578,8 +578,10 @@
     var html = "";
     if (item) html += C.record({ id: item.id, title: "探活信息", facts: probeFactsRows(item) });
     html +=
+      '<div class="form-cols-2">' +
       "<label>IP<input name=\"ip\" maxlength=\"120\" autocomplete=\"off\" placeholder=\"例如 203.0.113.10\" value=\"" + C.escapeHtml(v.ip || "") + "\" /></label>" +
       "<label>用户名<input name=\"ssh_user\" maxlength=\"60\" autocomplete=\"off\" placeholder=\"" + (item ? "留空表示不修改" : "例如 root") + "\" /></label>" +
+      "</div>" +
       "<div class=\"auth-type\"><span>认证方式</span>" +
       "<div class=\"page-tabs auth-tabs\" role=\"tablist\" aria-label=\"认证方式\">" +
       "<button type=\"button\" class=\"page-tab\" data-auth=\"password\" aria-selected=\"" + (authType === "password") + "\">密码</button>" +
