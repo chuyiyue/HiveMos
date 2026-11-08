@@ -368,7 +368,6 @@ img, svg, video, canvas { max-width: 100%; }
 @media (max-width: 639px) {
   .session-row { align-items: stretch; flex-direction: column; }
   .session-row > button { width: 100%; }
->>>>>>> origin/feat/admin-accounts
 }
 
 /* Board head row (desktop): tab track on the left, the active tab's add
