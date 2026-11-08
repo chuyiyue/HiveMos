@@ -708,3 +708,9 @@ button.account-logout:hover { background: var(--sidebar-bg-hover); color: var(--
   opacity: 1;
   pointer-events: auto;
 }
+
+/* Expanded sidebar: the collapse button (top) and the logout button
+   (bottom) share one column — same 32px box, same right edge. */
+.sidebar-collapse { width: 32px; height: 32px; }
+.account-logout { width: 32px; height: 32px; flex: none; }
+:root:not([data-sidebar="collapsed"]) .sidebar-footer { padding-right: 4px; }
