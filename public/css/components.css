@@ -623,3 +623,52 @@ button.is-armed, .is-armed {
   color: var(--on-danger);
   border-color: transparent;
 }
+
+/* Agent cards: the button row sizes to its content instead of stretching
+   to equal widths (SMSinBox device-card row). Scoped to agent cards. */
+.record.agent-card .card-actions { flex-wrap: wrap; }
+
+.record.agent-card .card-actions > button { flex: 0 1 auto; }
+
+/* Anchored dropdown menu (C.openMenu): white card, one row per item,
+   danger rows in red, armed two-step rows solid danger. */
+.pop-menu {
+  position: fixed;
+  z-index: 120;
+  min-width: 208px;
+  max-width: calc(100vw - 16px);
+  padding: 6px;
+  display: grid;
+  gap: 2px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 0.16);
+}
+
+.pop-menu-item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 38px;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: var(--r-md);
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pop-menu-item:hover,
+.pop-menu-item:focus-visible { background: var(--surface-hover); }
+
+.pop-menu-item.danger { color: var(--danger-text); }
+
+.pop-menu-item.is-armed { background: var(--danger); color: var(--on-danger); }
+
+.pop-menu-item.is-armed:hover,
+.pop-menu-item.is-armed:focus-visible { background: var(--danger); }
+
+.pop-menu-item:disabled { opacity: 0.5; cursor: default; }

@@ -1,10 +1,11 @@
 /* Agent 集群板块，两页签。Agents：按设备管理的方式组织，列表走
    GET /api/agents + GET /api/groups?scope=agent，按分组分区展示；添加 Agent/
    添加分组走弹窗，卡片高级操作（改名、移动分组、高级设置、轮换令牌、停用）
-   走中央菜单，高级设置里是 per-Agent 的系统功能权限开关（PATCH 保存）。
+   走卡片「管理Agent」下拉菜单（改名/分组/权限直达管理弹窗对应页签）。
    应用：接入 MCP 的应用条目，走 /api/extras/apps；分组没有独立的后端
    scope，仍是页内状态（group_id 不落库），其余与 Agents 页签共用同一套
-   操作区、分组分区、卡片与中央菜单。令牌明文只在生成/轮换那一次响应里出现 */
+   操作区、分组分区与卡片。令牌除存摘要外另以 AES-GCM 密封保存，卡片
+   「复制密钥」走 reveal 端点（先写审计再回明文）；页面状态从不持有明文 */
 (function () {
   var C = window.HiveCommon;
 
@@ -83,6 +84,7 @@
     var active = agent.status === "active";
     return C.record({
       id: agent.id,
+      className: "agent-card",
       icon: "bot",
       title: agent.name,
       status: active ? "enabled" : "disabled",
@@ -94,12 +96,15 @@
         ["创建", C.escapeHtml(C.formatMinute(agent.created_at) || "未知")],
       ],
       actions:
-        "<button type=\"button\" class=\"secondary\" data-copy=\"" +
+        "<button type=\"button\" class=\"secondary\" data-action=\"copy-token\" data-id=\"" +
         C.escapeHtml(agent.id) +
-        "\" data-label=\"复制标识\">复制标识</button>" +
-        "<button type=\"button\" class=\"secondary\" data-copy=\"" +
-        C.escapeHtml(C.mcpEndpoint()) +
-        "\" data-label=\"复制接入地址\">复制接入地址</button>",
+        "\">复制密钥</button>" +
+        "<button type=\"button\" class=\"secondary\" data-action=\"rotate-token\" data-id=\"" +
+        C.escapeHtml(agent.id) +
+        "\">轮换密钥</button>" +
+        "<button type=\"button\" class=\"secondary\" data-action=\"manage-agent\" data-id=\"" +
+        C.escapeHtml(agent.id) +
+        "\" aria-haspopup=\"menu\">管理Agent</button>",
       manage: "agent:" + agent.id,
     });
   }
@@ -216,6 +221,16 @@
       var id = button.getAttribute("data-id") || "";
       if (action === "open-create") openCreate();
       else if (action === "add-group") openGroup();
+      else if (action === "copy-token") {
+        var agentC = findAgent(id);
+        if (agentC) copyToken(agentC, button);
+      } else if (action === "rotate-token") {
+        var agentR = findAgent(id);
+        if (agentR) rotateToken(agentR, button);
+      } else if (action === "manage-agent") {
+        var agentM = findAgent(id);
+        if (agentM) openAgentMenu(agentM, button);
+      }
       else if (action === "pin") {
         var agent3 = findAgent(id);
         if (agent3) togglePin(agent3);
@@ -305,7 +320,7 @@
       bodyHtml:
         "<label>名字" +
         '<input data-field="name" name="name" maxlength="64" autocomplete="off" />' +
-        '<p class="subtle field-hint">生成后请立刻复制。令牌不会再次显示</p></label>' +
+        '<p class="subtle field-hint">密钥会加密保存，之后可以在卡片上点「复制密钥」随时复制</p></label>' +
         "<label>分组" +
         C.groupSelect("group_id", state.groups, "") +
         "</label>",
@@ -319,9 +334,9 @@
     });
   }
 
-  // The plaintext token only ever exists in this closure and in the
-  // dialog DOM: closing the dialog removes both, and page state never
-  // holds it, so a render() can never leak it back onto the page.
+  // The plaintext token exists in this closure and in the dialog DOM
+  // only: page state never holds it, so a render() can never leak it back
+  // onto the page. (The server keeps a sealed copy for 复制密钥.)
   function create(ctrl) {
     if (state.busy) return;
     var nameInput = ctrl.form.querySelector('[data-field="name"]');
@@ -345,7 +360,7 @@
         }
         state.notice = "";
         ctrl.showResult(
-          "<p>令牌只显示这一次。关掉这个面板后无法再查看，请立刻复制</p>" + C.copyLine(result.data.agent.token || "", "复制令牌"),
+          "<p>这是新 Agent 的密钥，请复制并配置到 Agent 上；之后也可以在卡片上点「复制密钥」再复制</p>" + C.copyLine(result.data.agent.token || "", "复制令牌"),
           "我已复制",
         );
       })
@@ -490,6 +505,195 @@
       });
   }
 
+
+  // ---- 卡片动作：复制密钥 / 轮换密钥 / 管理Agent 菜单 ----
+
+  function flashButton(button, text, restore) {
+    if (!button || !document.body.contains(button)) return;
+    button.textContent = text;
+    window.setTimeout(function () {
+      if (document.body.contains(button)) button.textContent = restore;
+    }, 1500);
+  }
+
+  function showTokenDialog(title, token, note) {
+    var ctrl = C.openFormDialog({
+      title: title,
+      bodyHtml: "",
+      submitLabel: "完成",
+      onSubmit: function (c) {
+        c.close();
+      },
+    });
+    ctrl.showResult("<p>" + C.escapeHtml(note) + "</p>" + C.copyLine(token, "复制密钥"), "我已复制");
+  }
+
+  function copyToken(agent, button) {
+    if (state.busy) return;
+    state.busy = true;
+    api("POST", "/api/agents/" + encodeURIComponent(agent.id) + "/reveal-token")
+      .then(function (result) {
+        state.busy = false;
+        if (authRedirect(result.status)) return;
+        if (!result.data || result.data.ok !== true || !result.data.token) {
+          state.notice = (result.data && result.data.error) || "没有复制成功，请重试";
+          state.noticeKind = "danger";
+          render();
+          return;
+        }
+        var token = result.data.token;
+        C.copyText(token).then(
+          function () {
+            flashButton(button, "已复制", "复制密钥");
+          },
+          function () {
+            showTokenDialog("密钥", token, "自动复制没有成功，请在这里手动复制");
+          },
+        );
+      })
+      .catch(function () {
+        state.busy = false;
+        state.notice = "网络异常，请重试";
+        state.noticeKind = "danger";
+        render();
+      });
+  }
+
+  function rotateToken(agent, button) {
+    if (state.busy) return;
+    var anchor = button.closest("article") || button;
+    C.askConfirm({
+      anchor: anchor,
+      title: "轮换密钥",
+      text: "确认轮换「" + agent.name + "」的密钥吗？旧密钥会立即失效",
+      confirmLabel: "轮换",
+      danger: true,
+    }).then(function (yes) {
+      if (!yes || state.busy) return;
+      state.busy = true;
+      api("POST", "/api/agents/" + encodeURIComponent(agent.id) + "/rotate")
+        .then(function (result) {
+          state.busy = false;
+          if (authRedirect(result.status)) return;
+          if (!result.data || result.data.ok !== true || !result.data.token) {
+            state.notice = (result.data && result.data.error) || "没有轮换成功，请重试";
+            state.noticeKind = "danger";
+            render();
+            return;
+          }
+          state.notice = "已轮换密钥";
+          state.noticeKind = "ok";
+          showTokenDialog("新密钥", result.data.token, "新密钥已经生效，旧密钥立即失效。之后也可以在卡片上点「复制密钥」再复制");
+          loadAll();
+        })
+        .catch(function () {
+          state.busy = false;
+          state.notice = "网络异常，请重试";
+          state.noticeKind = "danger";
+          render();
+        });
+    });
+  }
+
+  function deleteAgent(agent) {
+    if (state.busy) return;
+    state.busy = true;
+    api("DELETE", "/api/agents/" + encodeURIComponent(agent.id))
+      .then(function (result) {
+        state.busy = false;
+        if (authRedirect(result.status)) return;
+        if (!result.data || result.data.ok !== true) {
+          state.notice = (result.data && result.data.error) || "没有删除，请重试";
+          state.noticeKind = "danger";
+          render();
+          return;
+        }
+        state.notice = "已删除";
+        state.noticeKind = "ok";
+        window.dispatchEvent(new CustomEvent("hivemos:sidebar-refresh"));
+        loadAll();
+      })
+      .catch(function () {
+        state.busy = false;
+        state.notice = "网络异常，请重试";
+        state.noticeKind = "danger";
+        render();
+      });
+  }
+
+  function enableAgent(agent) {
+    if (state.busy) return;
+    state.busy = true;
+    api("PATCH", "/api/agents/" + encodeURIComponent(agent.id), { status: "active" })
+      .then(function (result) {
+        state.busy = false;
+        if (authRedirect(result.status)) return;
+        if (!result.data || result.data.ok !== true) {
+          state.notice = (result.data && result.data.error) || "没有启用成功，请重试";
+          state.noticeKind = "danger";
+          render();
+          return;
+        }
+        state.notice = "已启用";
+        state.noticeKind = "ok";
+        window.dispatchEvent(new CustomEvent("hivemos:sidebar-refresh"));
+        loadAll();
+      })
+      .catch(function () {
+        state.busy = false;
+        state.notice = "网络异常，请重试";
+        state.noticeKind = "danger";
+        render();
+      });
+  }
+
+  function openAgentMenu(agent, button) {
+    var items = [
+      {
+        label: "更改名称",
+        onSelect: function () {
+          openManage("agent:" + agent.id, "advanced");
+        },
+      },
+      {
+        label: "设置分组",
+        onSelect: function () {
+          openManage("agent:" + agent.id, "advanced");
+        },
+      },
+      {
+        label: "设置权限",
+        onSelect: function () {
+          openManage("agent:" + agent.id, "perms");
+        },
+      },
+      {
+        label: agent.pinned_at ? "取消固定" : "固定到侧边栏",
+        onSelect: function () {
+          togglePin(agent);
+        },
+      },
+    ];
+    if (agent.status === "active") {
+      items.push({
+        label: "删除",
+        danger: true,
+        armLabel: "确认删除",
+        onSelect: function () {
+          deleteAgent(agent);
+        },
+      });
+    } else {
+      items.push({
+        label: "启用",
+        onSelect: function () {
+          enableAgent(agent);
+        },
+      });
+    }
+    C.openMenu(button, items);
+  }
+
   // ---- 应用页签（条目走后端，分组页内，与 Agents 页签同一套骨架） ----
 
   function mapApp(row) {
@@ -534,7 +738,7 @@
 
   // ---- 管理弹窗（点卡片信息区打开；Agent 走 common 的共用构建） ----
 
-  function openManage(key) {
+  function openManage(key, tab) {
     if (!key) return;
     var sep = key.indexOf(":");
     var kind = key.slice(0, sep);
@@ -545,6 +749,7 @@
       C.openAgentManage(agent.id, {
         agent: agent,
         groups: state.groups,
+        tab: tab || "overview",
         onChanged: function (message) {
           if (message) {
             state.notice = message;

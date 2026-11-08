@@ -534,6 +534,7 @@
 
   function agentManageBody(agent, groupName, opts) {
     var partial = !!(opts && opts.partial);
+    var initialTab = opts && (opts.tab === "perms" || opts.tab === "advanced") ? opts.tab : "overview";
     var active = agent.status === "active";
     var endpoint = mcpEndpoint();
     var advanced =
@@ -573,11 +574,11 @@
       "\" data-label=\"复制\">复制</button></dd></div>" +
       "</dl></div>" +
       "<div class=\"page-tabs manage-tabs\" role=\"tablist\" aria-label=\"Agent 管理\">" +
-      "<button type=\"button\" class=\"page-tab\" role=\"tab\" data-mtab=\"overview\" aria-selected=\"true\">概览</button>" +
-      "<button type=\"button\" class=\"page-tab\" role=\"tab\" data-mtab=\"perms\" aria-selected=\"false\">权限<span class=\"perm-dirty-dot\" data-perm-dirty hidden title=\"有未保存改动\"></span></button>" +
-      "<button type=\"button\" class=\"page-tab\" role=\"tab\" data-mtab=\"advanced\" aria-selected=\"false\">高级设置</button>" +
+      "<button type=\"button\" class=\"page-tab\" role=\"tab\" data-mtab=\"overview\" aria-selected=\"" + (initialTab === "overview" ? "true" : "false") + "\">概览</button>" +
+      "<button type=\"button\" class=\"page-tab\" role=\"tab\" data-mtab=\"perms\" aria-selected=\"" + (initialTab === "perms" ? "true" : "false") + "\">权限<span class=\"perm-dirty-dot\" data-perm-dirty hidden title=\"有未保存改动\"></span></button>" +
+      "<button type=\"button\" class=\"page-tab\" role=\"tab\" data-mtab=\"advanced\" aria-selected=\"" + (initialTab === "advanced" ? "true" : "false") + "\">高级设置</button>" +
       "</div>" +
-      "<div data-mpanel=\"overview\">" +
+      "<div data-mpanel=\"overview\"" + (initialTab === "overview" ? "" : " hidden") + ">" +
       "<dl class=\"kv\">" +
       "<div><dt>名称</dt><dd>" +
       escapeHtml(agent.name) +
@@ -613,14 +614,138 @@
       "</div>" +
       "</div>" +
       "</div>" +
-      "<div data-mpanel=\"perms\" hidden>" +
+      "<div data-mpanel=\"perms\"" + (initialTab === "perms" ? "" : " hidden") + ">" +
       "<p class=\"subtle manage-note\">这个 Agent 通过面板 MCP 能访问的系统功能，在下方点选后点保存权限统一生效</p>" +
       permSection +
       "</div>" +
-      "<div data-mpanel=\"advanced\" hidden>" +
+      "<div data-mpanel=\"advanced\"" + (initialTab === "advanced" ? "" : " hidden") + ">" +
       advanced +
       "</div>"
     );
+  }
+
+  // ---- Anchored dropdown menu (shared) ----
+  // C.openMenu(anchorBtn, items): a small white card that drops below the
+  // anchor (flips above when the viewport runs out of room), one row per
+  // item, danger rows in red. Closes on outside press, Esc, scroll, or
+  // resize; arrow keys move between rows, and focus returns to the anchor
+  // after Esc. An item with armLabel is a two-step action: the first click
+  // arms it in place (label swaps to armLabel, solid danger), a second
+  // click within a few seconds runs onSelect. Calling openMenu again with
+  // the same anchor toggles the menu shut.
+  var currentMenu = null;
+
+  function closeMenu() {
+    if (!currentMenu) return;
+    var menu = currentMenu;
+    currentMenu = null;
+    if (menu.timer) window.clearTimeout(menu.timer);
+    document.removeEventListener("mousedown", menu.onDocDown, true);
+    document.removeEventListener("keydown", menu.onKey, true);
+    window.removeEventListener("resize", menu.onClose);
+    document.removeEventListener("scroll", menu.onClose, true);
+    if (menu.anchor) {
+      menu.anchor.removeAttribute("aria-expanded");
+      if (menu.restoreFocus) menu.anchor.focus();
+    }
+    menu.el.remove();
+  }
+
+  function openMenu(anchor, items) {
+    if (currentMenu && currentMenu.anchor === anchor) {
+      closeMenu();
+      return null;
+    }
+    closeMenu();
+    disarmDelete();
+    var el = document.createElement("div");
+    el.className = "pop-menu";
+    el.setAttribute("role", "menu");
+    var state = {
+      el: el,
+      anchor: anchor,
+      timer: null,
+      restoreFocus: false,
+      onClose: null,
+      onDocDown: null,
+      onKey: null,
+    };
+    var buttons = [];
+    (items || []).forEach(function (item) {
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "pop-menu-item" + (item.danger ? " danger" : "");
+      btn.setAttribute("role", "menuitem");
+      btn.textContent = item.label || "";
+      if (item.disabled) btn.disabled = true;
+      var armed = false;
+      btn.addEventListener("click", function () {
+        if (item.armLabel && !armed) {
+          armed = true;
+          var original = btn.textContent;
+          btn.textContent = item.armLabel;
+          btn.classList.add("is-armed");
+          state.timer = window.setTimeout(function () {
+            armed = false;
+            btn.textContent = original;
+            btn.classList.remove("is-armed");
+          }, 3500);
+          return;
+        }
+        state.restoreFocus = false;
+        closeMenu();
+        if (typeof item.onSelect === "function") item.onSelect();
+      });
+      buttons.push(btn);
+      el.append(btn);
+    });
+    document.body.append(el);
+    var rect = anchor.getBoundingClientRect();
+    var menuRect = el.getBoundingClientRect();
+    var top = rect.bottom + 6;
+    if (top + menuRect.height > window.innerHeight - 8) {
+      top = Math.max(8, rect.top - menuRect.height - 6);
+    }
+    var left = Math.min(rect.left, window.innerWidth - menuRect.width - 8);
+    el.style.top = Math.max(8, top) + "px";
+    el.style.left = Math.max(8, left) + "px";
+    anchor.setAttribute("aria-expanded", "true");
+    state.onClose = function () {
+      closeMenu();
+    };
+    state.onDocDown = function (event) {
+      var target = event.target;
+      if (target instanceof Element && (el.contains(target) || anchor.contains(target))) return;
+      closeMenu();
+    };
+    state.onKey = function (event) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        state.restoreFocus = true;
+        closeMenu();
+        return;
+      }
+      if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+      var active = buttons.indexOf(document.activeElement);
+      if (active === -1) return;
+      event.preventDefault();
+      var next =
+        event.key === "ArrowDown"
+          ? Math.min(active + 1, buttons.length - 1)
+          : Math.max(active - 1, 0);
+      if (buttons[next]) buttons[next].focus();
+    };
+    document.addEventListener("mousedown", state.onDocDown, true);
+    document.addEventListener("keydown", state.onKey, true);
+    window.addEventListener("resize", state.onClose);
+    document.addEventListener("scroll", state.onClose, true);
+    currentMenu = state;
+    var first = buttons.find(function (btn) {
+      return !btn.disabled;
+    });
+    if (first) first.focus();
+    return { close: closeMenu };
   }
 
   function closeCurrentOverlay() {
@@ -629,6 +754,7 @@
 
   function openAgentManage(agentId, options) {
     options = options || {};
+    var currentTab = options.tab === "perms" || options.tab === "advanced" ? options.tab : "overview";
     var seed = options.agent && options.agent.id === agentId ? options.agent : null;
     var agent = seed;
     var groups = Array.isArray(options.groups) ? options.groups.slice() : [];
@@ -654,7 +780,7 @@
     var ctrl = (options.panel ? openSidePanel : openManageDialog)({
       title: seed ? seed.name : "Agent",
       bodyHtml: seed
-        ? agentManageBody(seed, groupNameOf(seed), { partial: partial })
+        ? agentManageBody(seed, groupNameOf(seed), { partial: partial, tab: currentTab })
         : emptyState("正在读取", "稍等片刻"),
       onBeforeClose: function () {
         return guardClose();
@@ -935,7 +1061,7 @@
           if (!dataChanged) return;
           if (silent && (interacted || busy)) return;
           ctrl.setTitle(fresh.name);
-          ctrl.setBody(agentManageBody(fresh, groupNameOf(fresh), { recordsHtml: agentRecordsHtml }));
+          ctrl.setBody(agentManageBody(fresh, groupNameOf(fresh), { recordsHtml: agentRecordsHtml, tab: currentTab }));
           syncPermUI();
         })
         .catch(function () {
@@ -1211,6 +1337,12 @@
     });
 
     wireManageTabs(ctrl);
+    ctrl.dialog.addEventListener("click", function (event) {
+      var target = event.target;
+      if (!(target instanceof Element)) return;
+      var tabBtn = target.closest("[data-mtab]");
+      if (tabBtn) currentTab = tabBtn.getAttribute("data-mtab") || "overview";
+    });
     syncPermUI();
     // ---- This agent's own records (local async fill; never blocks open) ----
 
@@ -1692,6 +1824,8 @@
     askConfirm: askConfirm,
     openFormDialog: openFormDialog,
     openActionMenu: openActionMenu,
+    openMenu: openMenu,
+    copyText: copyText,
     openManageDialog: openManageDialog,
     closeCurrentOverlay: closeCurrentOverlay,
     openSidePanel: openSidePanel,
