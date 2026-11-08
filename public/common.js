@@ -177,6 +177,59 @@
     );
   }
 
+  // ---- Agent avatars ----
+  // One render rule everywhere an Agent avatar appears: an uploaded image
+  // or an external image link wins, then the library icon, then the
+  // default bot icon. The three sources are mutually exclusive (the
+  // server clears the others whenever one is set).
+  var avatarStylesDone = false;
+  function ensureAvatarStyles() {
+    if (avatarStylesDone) return;
+    avatarStylesDone = true;
+    var style = document.createElement("style");
+    style.id = "hive-avatar-styles";
+    style.textContent = [
+      ".agent-avatar-img{object-fit:cover;border-radius:26%}",
+      ".manage-avatar-btn{display:grid;place-items:center;width:44px;height:44px;padding:0;border:0;border-radius:var(--r-md);background:var(--bg-sunken);color:var(--text-2);cursor:pointer}",
+      ".manage-avatar-btn:hover{box-shadow:0 0 0 2px var(--accent)}",
+      ".manage-avatar-btn .icon{width:24px;height:24px}",
+      ".manage-avatar-btn img{width:44px;height:44px;border-radius:var(--r-md);object-fit:cover;display:block}",
+      ".avatar-search-label{display:block}",
+      ".avatar-search-label input{width:100%;margin-top:6px}",
+      ".avatar-cat{margin:16px 0 8px;font-size:var(--fs-sm);font-weight:600;color:var(--text-2)}",
+      ".avatar-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(62px,1fr));gap:8px}",
+      ".avatar-cell{display:flex;flex-direction:column;align-items:center;gap:5px;padding:10px 2px 8px;border:1px solid var(--border);border-radius:var(--r-md);background:var(--surface);color:var(--text-2);cursor:pointer;font-size:var(--fs-xs);line-height:1.2}",
+      ".avatar-cell:hover{border-color:var(--accent);color:var(--text)}",
+      ".avatar-cell.is-current{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent);color:var(--accent-text)}",
+      ".avatar-cell .icon{width:28px;height:28px}",
+      ".avatar-preview{display:grid;place-items:center;padding:14px 0 6px}",
+      ".avatar-preview img{width:96px;height:96px;border-radius:var(--r-lg);object-fit:cover;border:1px solid var(--border)}",
+      ".avatar-picker-foot{margin-top:18px;justify-content:space-between}",
+    ].join("\n");
+    document.head.append(style);
+  }
+
+  function agentAvatarSrc(agent) {
+    if (!agent) return "";
+    if (agent.has_custom_avatar) return "/api/agents/" + encodeURIComponent(agent.id) + "/avatar";
+    if (agent.avatar_url) return String(agent.avatar_url);
+    return "";
+  }
+
+  function agentAvatarHtml(agent, cls) {
+    ensureAvatarStyles();
+    var src = agentAvatarSrc(agent);
+    if (src) {
+      return "<img class=\"" + cls + " agent-avatar-img\" src=\"" + escapeHtml(src) + "\" alt=\"\" loading=\"lazy\" />";
+    }
+    var symbol = agent && agent.avatar_icon ? "avatar-" + agent.avatar_icon : "icon-bot";
+    return (
+      "<svg class=\"" + cls + "\" viewBox=\"0 0 24 24\" aria-hidden=\"true\"><use href=\"/icons.svg#" +
+      escapeHtml(symbol) +
+      "\"></use></svg>"
+    );
+  }
+
   function metaGrid(pairs) {
     if (!pairs || !pairs.length) return "";
     return (
@@ -201,7 +254,7 @@
       : "";
     var head =
       "<div class=\"record-head\">" +
-      (options.icon ? iconSvg(options.icon) : "") +
+      (options.iconHtml ? options.iconHtml : options.icon ? iconSvg(options.icon) : "") +
       "<h3 class=\"record-name\">" +
       escapeHtml(options.title) +
       "</h3>" +
@@ -505,9 +558,13 @@
 
   function manageInfoHead(o) {
     return (
-      "<div class=\"manage-info-head\"><span class=\"manage-info-icon\"><svg class=\"icon\" viewBox=\"0 0 24 24\" aria-hidden=\"true\"><use href=\"/icons.svg#icon-" +
-      escapeHtml(o.icon || "bot") +
-      "\"></use></svg></span>" +
+      "<div class=\"manage-info-head\"><span class=\"manage-info-icon\">" +
+      (o.iconHtml
+        ? o.iconHtml
+        : "<svg class=\"icon\" viewBox=\"0 0 24 24\" aria-hidden=\"true\"><use href=\"/icons.svg#icon-" +
+          escapeHtml(o.icon || "bot") +
+          "\"></use></svg>") +
+      "</span>" +
       "<div class=\"manage-info-titles\"><h3 class=\"manage-info-name\">" +
       escapeHtml(o.title || "") +
       "</h3>" +
@@ -540,6 +597,7 @@
       "<div class=\"manage-actions\">" +
       "<button type=\"button\" class=\"secondary\" data-agent-act=\"rename\">改名</button>" +
       "<button type=\"button\" class=\"secondary\" data-agent-act=\"move\">设置分组</button>" +
+      "<button type=\"button\" class=\"secondary\" data-agent-act=\"avatar\">更换头像</button>" +
       (active ? "<button type=\"button\" class=\"secondary\" data-agent-act=\"rotate\">轮换令牌</button>" : "") +
       "</div>" +
       (active
@@ -553,7 +611,10 @@
     return (
       "<p class=\"manage-status\" data-manage-status role=\"status\"></p>" +
       manageInfoHead({
-        icon: "bot",
+        iconHtml:
+          "<button type=\"button\" class=\"manage-avatar-btn\" data-agent-act=\"avatar\" title=\"更换头像\" aria-label=\"更换头像\">" +
+          agentAvatarHtml(agent, "icon") +
+          "</button>",
         title: agent.name,
         sub: (active ? "已启用" : "已停用") + " · Agent · " + (partial ? "读取中" : groupName || "未分组"),
       }) +
@@ -1029,6 +1090,496 @@
       });
     }
 
+    // ---- Avatar picker ----
+    // Three mutually exclusive sources in one form, shaped like a chat
+    // sticker panel: a searchable library grid with a recent row, an
+    // upload pane (center-cropped to a 128x128 square client-side), and
+    // an external-link pane that only saves after its preview loads.
+
+    var AVATAR_RECENT_KEY = "hivemos-avatar-recent";
+    var avatarDialog = null;
+
+    function avatarRecents() {
+      try {
+        var raw = JSON.parse(localStorage.getItem(AVATAR_RECENT_KEY) || "[]");
+        return Array.isArray(raw)
+          ? raw.filter(function (id) {
+              return typeof id === "string";
+            })
+          : [];
+      } catch (error) {
+        return [];
+      }
+    }
+
+    function pushAvatarRecent(id) {
+      try {
+        var list = avatarRecents().filter(function (item) {
+          return item !== id;
+        });
+        list.unshift(id);
+        localStorage.setItem(AVATAR_RECENT_KEY, JSON.stringify(list.slice(0, 8)));
+      } catch (error) {}
+    }
+
+    function loadAvatarCatalog() {
+      if (window.HiveAvatars) return Promise.resolve(window.HiveAvatars);
+      return new Promise(function (resolve, reject) {
+        var script = document.createElement("script");
+        script.src = "/avatars.js";
+        script.onload = function () {
+          if (window.HiveAvatars) resolve(window.HiveAvatars);
+          else reject(new Error("catalog missing"));
+        };
+        script.onerror = function () {
+          reject(new Error("catalog load failed"));
+        };
+        document.head.append(script);
+      });
+    }
+
+    function doAvatar() {
+      guardAction().then(function (ok) {
+        if (ok) openAvatarPicker();
+      });
+    }
+
+    function openAvatarPicker() {
+      if (!agent) return;
+      ensureAvatarStyles();
+      loadAvatarCatalog()
+        .then(function (catalog) {
+          buildAvatarPicker(catalog);
+        })
+        .catch(function () {
+          setStatus("图标库加载失败，请重试", true);
+        });
+    }
+
+    function buildAvatarPicker(catalog) {
+      if (avatarDialog) avatarDialog.close();
+      var target = agent;
+      var pickerBusy = false;
+      var pendingBlob = null;
+      var pendingPreviewUrl = "";
+      var linkOk = false;
+      var linkTimer = null;
+
+      var dialog = document.createElement("dialog");
+      dialog.className = "modal wide";
+      dialog.setAttribute("aria-label", "更换头像");
+      var card = document.createElement("div");
+      card.className = "modal-card";
+      var heading = document.createElement("h2");
+      heading.className = "modal-title";
+      heading.textContent = "更换头像";
+      var body = document.createElement("div");
+      body.className = "modal-body avatar-picker";
+      body.innerHTML =
+        '<div class="page-tabs" role="tablist" aria-label="头像来源">' +
+        '<button type="button" class="page-tab" role="tab" data-avatar-tab="icons" aria-selected="true">图标库</button>' +
+        '<button type="button" class="page-tab" role="tab" data-avatar-tab="upload" aria-selected="false">上传图片</button>' +
+        '<button type="button" class="page-tab" role="tab" data-avatar-tab="link" aria-selected="false">图片链接</button>' +
+        "</div>" +
+        '<p class="callout danger" role="alert" data-avatar-error hidden></p>' +
+        '<div data-avatar-pane="icons">' +
+        '<label class="avatar-search-label">搜索<input data-avatar-search type="search" placeholder="搜索图标名称或关键词" autocomplete="off" /></label>' +
+        "<div data-avatar-results></div>" +
+        "</div>" +
+        '<div data-avatar-pane="upload" hidden>' +
+        '<div class="avatar-preview" data-avatar-upload-preview></div>' +
+        '<input type="file" accept="image/*" data-avatar-file hidden />' +
+        '<div class="manage-actions">' +
+        '<button type="button" class="secondary" data-avatar-choose>选择图片</button>' +
+        '<button type="button" data-avatar-upload-save disabled>保存这张图</button>' +
+        "</div>" +
+        '<p class="subtle">选图后会自动居中裁剪并缩放为 128×128 方图再保存，文件不超过 200 KB</p>' +
+        "</div>" +
+        '<div data-avatar-pane="link" hidden>' +
+        '<label>图片链接<input data-avatar-url type="url" inputmode="url" placeholder="https://example.com/avatar.png" autocomplete="off" /></label>' +
+        '<div class="avatar-preview" data-avatar-link-preview hidden><img alt="头像预览" /></div>' +
+        '<p class="subtle" data-avatar-link-hint>输入 http 或 https 链接，预览加载成功后才能保存</p>' +
+        '<div class="manage-actions"><button type="button" data-avatar-link-save disabled>保存链接</button></div>' +
+        "</div>" +
+        '<div class="manage-actions avatar-picker-foot">' +
+        '<button type="button" class="secondary" data-avatar-default>恢复默认</button>' +
+        '<button type="button" class="secondary" data-avatar-cancel>取消</button>' +
+        "</div>";
+      card.append(heading, body);
+      dialog.append(card);
+      document.body.append(dialog);
+
+      var ctrl = {
+        dialog: dialog,
+        close: function () {
+          if (dialog.open) dialog.close();
+        },
+      };
+      avatarDialog = ctrl;
+
+      var searchInput = body.querySelector("[data-avatar-search]");
+      var resultsBox = body.querySelector("[data-avatar-results]");
+      var errorBox = body.querySelector("[data-avatar-error]");
+      var fileInput = body.querySelector("[data-avatar-file]");
+      var uploadPreview = body.querySelector("[data-avatar-upload-preview]");
+      var uploadSaveBtn = body.querySelector("[data-avatar-upload-save]");
+      var urlInput = body.querySelector("[data-avatar-url]");
+      var linkPreview = body.querySelector("[data-avatar-link-preview]");
+      var linkPreviewImg = linkPreview.querySelector("img");
+      var linkHint = body.querySelector("[data-avatar-link-hint]");
+      var linkSaveBtn = body.querySelector("[data-avatar-link-save]");
+      var LINK_HINT_DEFAULT = "输入 http 或 https 链接，预览加载成功后才能保存";
+
+      function showAvatarError(message) {
+        if (message) {
+          errorBox.textContent = message;
+          errorBox.hidden = false;
+        } else {
+          errorBox.textContent = "";
+          errorBox.hidden = true;
+        }
+      }
+
+      function cellHtml(icon) {
+        var current =
+          target.avatar_icon === icon.id && !target.has_custom_avatar && !target.avatar_url;
+        return (
+          '<button type="button" class="avatar-cell' +
+          (current ? " is-current" : "") +
+          '" data-avatar-icon="' +
+          escapeHtml(icon.id) +
+          '" title="' +
+          escapeHtml(icon.name) +
+          '"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="/icons.svg#avatar-' +
+          escapeHtml(icon.id) +
+          '"></use></svg><span>' +
+          escapeHtml(icon.name) +
+          "</span></button>"
+        );
+      }
+
+      function renderAvatarResults() {
+        var keyword = searchInput ? searchInput.value : "";
+        var html = "";
+        if (String(keyword || "").trim()) {
+          var hits = catalog.search(keyword);
+          html = hits.length
+            ? '<div class="avatar-grid">' + hits.map(cellHtml).join("") + "</div>"
+            : '<p class="subtle">没有找到匹配的图标</p>';
+        } else {
+          var recents = avatarRecents().filter(function (id) {
+            return catalog.byId(id);
+          });
+          if (recents.length) {
+            html +=
+              '<h3 class="avatar-cat">最近使用</h3><div class="avatar-grid">' +
+              recents
+                .map(function (id) {
+                  return cellHtml(catalog.byId(id));
+                })
+                .join("") +
+              "</div>";
+          }
+          catalog.categories.forEach(function (cat) {
+            var items = catalog.icons.filter(function (icon) {
+              return icon.cat === cat.key;
+            });
+            html +=
+              '<h3 class="avatar-cat">' +
+              escapeHtml(cat.label) +
+              '</h3><div class="avatar-grid">' +
+              items.map(cellHtml).join("") +
+              "</div>";
+          });
+        }
+        resultsBox.innerHTML = html;
+      }
+
+      function showPane(name) {
+        Array.prototype.forEach.call(body.querySelectorAll("[data-avatar-tab]"), function (tab) {
+          tab.setAttribute("aria-selected", tab.getAttribute("data-avatar-tab") === name ? "true" : "false");
+        });
+        Array.prototype.forEach.call(body.querySelectorAll("[data-avatar-pane]"), function (pane) {
+          pane.hidden = pane.getAttribute("data-avatar-pane") !== name;
+        });
+      }
+
+      function finishAvatarChange(message) {
+        changed(message);
+        ctrl.close();
+        refresh().then(function () {
+          setStatus(message, false);
+        });
+      }
+
+      function applyAvatarIcon(id) {
+        if (pickerBusy) return;
+        pickerBusy = true;
+        showAvatarError("");
+        patch({ avatar_icon: id }, "已更新头像").then(function (ok) {
+          pickerBusy = false;
+          if (ok) {
+            pushAvatarRecent(id);
+            ctrl.close();
+          } else {
+            showAvatarError("没有保存成功，请重试");
+          }
+        });
+      }
+
+      function processAvatarFile(file) {
+        if (!file) return;
+        if (!/^image\//.test(file.type || "")) {
+          showAvatarError("请选择图片文件");
+          return;
+        }
+        showAvatarError("");
+        var objectUrl = URL.createObjectURL(file);
+        var img = new Image();
+        img.onload = function () {
+          var side = Math.min(img.naturalWidth, img.naturalHeight);
+          if (!side) {
+            URL.revokeObjectURL(objectUrl);
+            showAvatarError("这张图片打不开，请换一张");
+            return;
+          }
+          var canvas = document.createElement("canvas");
+          canvas.width = 128;
+          canvas.height = 128;
+          var ctx = canvas.getContext("2d");
+          ctx.drawImage(img, (img.naturalWidth - side) / 2, (img.naturalHeight - side) / 2, side, side, 0, 0, 128, 128);
+          URL.revokeObjectURL(objectUrl);
+          var wantsPng = file.type === "image/png";
+          canvas.toBlob(
+            function (blob) {
+              if (!blob) {
+                showAvatarError("图片处理失败，请换一张");
+                return;
+              }
+              if (blob.size > 200 * 1024 && wantsPng) {
+                canvas.toBlob(
+                  function (jpegBlob) {
+                    if (jpegBlob && jpegBlob.size <= 200 * 1024) acceptUploadBlob(jpegBlob);
+                    else showAvatarError("图片压缩后仍超过 200 KB，请换一张");
+                  },
+                  "image/jpeg",
+                  0.88,
+                );
+                return;
+              }
+              if (blob.size > 200 * 1024) {
+                showAvatarError("图片压缩后仍超过 200 KB，请换一张");
+                return;
+              }
+              acceptUploadBlob(blob);
+            },
+            wantsPng ? "image/png" : "image/jpeg",
+            0.92,
+          );
+        };
+        img.onerror = function () {
+          URL.revokeObjectURL(objectUrl);
+          showAvatarError("这张图片打不开，请换一张");
+        };
+        img.src = objectUrl;
+      }
+
+      function acceptUploadBlob(blob) {
+        pendingBlob = blob;
+        if (pendingPreviewUrl) URL.revokeObjectURL(pendingPreviewUrl);
+        pendingPreviewUrl = URL.createObjectURL(blob);
+        uploadPreview.innerHTML = '<img alt="头像预览" src="' + pendingPreviewUrl + '" />';
+        uploadSaveBtn.disabled = false;
+      }
+
+      function saveAvatarUpload() {
+        if (!pendingBlob || pickerBusy) return;
+        pickerBusy = true;
+        showAvatarError("");
+        fetch("/api/agents/" + encodeURIComponent(target.id) + "/avatar", {
+          method: "POST",
+          headers: { "content-type": pendingBlob.type || "application/octet-stream", accept: "application/json" },
+          body: pendingBlob,
+        })
+          .then(function (response) {
+            return response
+              .json()
+              .catch(function () {
+                return {};
+              })
+              .then(function (data) {
+                return { status: response.status, data: data || {} };
+              });
+          })
+          .then(function (result) {
+            pickerBusy = false;
+            if (result.status === 401) {
+              location.assign("/login.html");
+              return;
+            }
+            if (!result.data || result.data.ok !== true) {
+              showAvatarError((result.data && result.data.error) || "没有保存成功，请重试");
+              return;
+            }
+            finishAvatarChange("已更新头像");
+          })
+          .catch(function () {
+            pickerBusy = false;
+            showAvatarError("网络异常，请重试");
+          });
+      }
+
+      function checkLinkPreview() {
+        var value = urlInput.value.trim();
+        linkOk = false;
+        linkSaveBtn.disabled = true;
+        if (!value) {
+          linkPreview.hidden = true;
+          linkHint.textContent = LINK_HINT_DEFAULT;
+          return;
+        }
+        if (!/^https?:\/\//i.test(value)) {
+          linkPreview.hidden = true;
+          linkHint.textContent = "链接要以 http:// 或 https:// 开头";
+          return;
+        }
+        linkHint.textContent = "正在加载预览…";
+        var probe = new Image();
+        probe.onload = function () {
+          if (urlInput.value.trim() !== value) return;
+          linkOk = true;
+          linkPreviewImg.src = value;
+          linkPreview.hidden = false;
+          linkSaveBtn.disabled = false;
+          linkHint.textContent = "预览加载成功，可以保存";
+        };
+        probe.onerror = function () {
+          if (urlInput.value.trim() !== value) return;
+          linkPreview.hidden = true;
+          linkHint.textContent = "预览加载失败，请检查链接是否正确";
+        };
+        probe.src = value;
+      }
+
+      function saveAvatarLink() {
+        var value = urlInput.value.trim();
+        if (!linkOk || !value || pickerBusy) return;
+        pickerBusy = true;
+        showAvatarError("");
+        patch({ avatar_url: value }, "已更新头像").then(function (ok) {
+          pickerBusy = false;
+          if (ok) ctrl.close();
+          else showAvatarError("没有保存成功，请检查链接后重试");
+        });
+      }
+
+      function restoreDefaultAvatar() {
+        if (pickerBusy) return;
+        pickerBusy = true;
+        showAvatarError("");
+        var removeUpload = target.has_custom_avatar
+          ? fetch("/api/agents/" + encodeURIComponent(target.id) + "/avatar", {
+              method: "DELETE",
+              headers: { accept: "application/json" },
+            }).then(function (response) {
+              return response.status !== 401;
+            })
+          : Promise.resolve(true);
+        removeUpload
+          .then(function (kept) {
+            if (!kept) {
+              location.assign("/login.html");
+              return false;
+            }
+            return patch({ avatar_icon: null, avatar_url: null }, "已恢复默认头像");
+          })
+          .then(function (ok) {
+            pickerBusy = false;
+            if (ok) ctrl.close();
+            else if (ok === false) showAvatarError("没有恢复成功，请重试");
+          })
+          .catch(function () {
+            pickerBusy = false;
+            showAvatarError("网络异常，请重试");
+          });
+      }
+
+      dialog.addEventListener("click", function (event) {
+        var eventTarget = event.target;
+        if (eventTarget === dialog) {
+          ctrl.close();
+          return;
+        }
+        if (!(eventTarget instanceof Element)) return;
+        var tab = eventTarget.closest("[data-avatar-tab]");
+        if (tab) {
+          showPane(tab.getAttribute("data-avatar-tab"));
+          return;
+        }
+        var cell = eventTarget.closest("[data-avatar-icon]");
+        if (cell) {
+          applyAvatarIcon(cell.getAttribute("data-avatar-icon"));
+          return;
+        }
+        if (eventTarget.closest("[data-avatar-choose]")) {
+          fileInput.click();
+          return;
+        }
+        if (eventTarget.closest("[data-avatar-upload-save]")) {
+          saveAvatarUpload();
+          return;
+        }
+        if (eventTarget.closest("[data-avatar-link-save]")) {
+          saveAvatarLink();
+          return;
+        }
+        if (eventTarget.closest("[data-avatar-default]")) {
+          restoreDefaultAvatar();
+          return;
+        }
+        if (eventTarget.closest("[data-avatar-cancel]")) ctrl.close();
+      });
+      dialog.addEventListener("input", function (event) {
+        if (event.target === searchInput) renderAvatarResults();
+        if (event.target === urlInput) {
+          if (linkTimer) clearTimeout(linkTimer);
+          linkTimer = setTimeout(checkLinkPreview, 350);
+        }
+      });
+      dialog.addEventListener("change", function (event) {
+        if (event.target === fileInput) {
+          processAvatarFile(fileInput.files && fileInput.files[0]);
+          fileInput.value = "";
+        }
+      });
+      dialog.addEventListener("close", function () {
+        if (linkTimer) clearTimeout(linkTimer);
+        if (pendingPreviewUrl) URL.revokeObjectURL(pendingPreviewUrl);
+        if (avatarDialog === ctrl) avatarDialog = null;
+        dialog.remove();
+      });
+
+      if (target.has_custom_avatar) {
+        uploadPreview.innerHTML =
+          '<img alt="当前头像" src="/api/agents/' + encodeURIComponent(target.id) + '/avatar" />';
+      } else if (target.avatar_url) {
+        uploadPreview.innerHTML = '<img alt="当前头像" src="' + escapeHtml(target.avatar_url) + '" />';
+        urlInput.value = target.avatar_url;
+        showPane("link");
+        checkLinkPreview();
+      } else if (target.avatar_icon) {
+        uploadPreview.innerHTML =
+          '<svg class="icon" viewBox="0 0 24 24" width="96" height="96" aria-hidden="true"><use href="/icons.svg#avatar-' +
+          escapeHtml(target.avatar_icon) +
+          '"></use></svg>';
+      } else {
+        uploadPreview.innerHTML =
+          '<svg class="icon" viewBox="0 0 24 24" width="96" height="96" aria-hidden="true"><use href="/icons.svg#icon-bot"></use></svg>';
+      }
+      renderAvatarResults();
+      dialog.showModal();
+    }
+
     function doRotate() {
       guardAction().then(function (ok) {
         if (ok) openRotateConfirm();
@@ -1161,6 +1712,7 @@
       else if (act === "rotate") doRotate();
       else if (act === "disable") doDisable();
       else if (act === "enable") doEnable();
+      else if (act === "avatar") doAvatar();
     });
 
     ctrl.dialog.addEventListener("focusin", function (event) {
@@ -1644,6 +2196,7 @@
     permDomains: PERM_DOMAINS,
     metaGrid: metaGrid,
     iconSvg: iconSvg,
+    agentAvatarHtml: agentAvatarHtml,
     addBar: addBar,
     groupSelect: groupSelect,
     groupedSections: groupedSections,

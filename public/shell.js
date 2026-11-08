@@ -115,7 +115,22 @@
       var state = document.createElement("span");
       state.className = "device-state";
       state.textContent = relativeSeenText(agent.last_seen_at);
-      link.append(dot, svgIcon("icon-bot"), name, state);
+      var avatarNode;
+      if (agent.has_custom_avatar || agent.avatar_url) {
+        avatarNode = document.createElement("img");
+        avatarNode.className = "icon agent-avatar-img";
+        avatarNode.src = agent.has_custom_avatar
+          ? "/api/agents/" + encodeURIComponent(agent.id) + "/avatar"
+          : agent.avatar_url;
+        avatarNode.alt = "";
+        avatarNode.style.borderRadius = "26%";
+        avatarNode.style.objectFit = "cover";
+      } else if (agent.avatar_icon) {
+        avatarNode = svgIcon("avatar-" + agent.avatar_icon);
+      } else {
+        avatarNode = svgIcon("icon-bot");
+      }
+      link.append(dot, avatarNode, name, state);
       link.addEventListener("click", function (event) {
         event.preventDefault();
         var common = window.HiveCommon;
@@ -128,6 +143,9 @@
               status: agent.status,
               last_seen_at: agent.last_seen_at,
               pinned_at: agent.pinned ? agent.last_seen_at || 1 : null,
+              avatar_icon: agent.avatar_icon || null,
+              avatar_url: agent.avatar_url || null,
+              has_custom_avatar: !!agent.has_custom_avatar,
             },
             onChanged: function () {
               loadSidebarAgents();

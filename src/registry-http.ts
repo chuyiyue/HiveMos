@@ -198,7 +198,7 @@ async function agentAvatar(request: Request, env: Env, id: string): Promise<Resp
         headers: {
           "content-type": image.content_type,
           "content-length": String(image.data.byteLength),
-          "cache-control": "private, max-age=300",
+          "cache-control": "private, no-cache",
         },
       });
     } catch {

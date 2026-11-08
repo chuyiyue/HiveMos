@@ -83,7 +83,7 @@
     var active = agent.status === "active";
     return C.record({
       id: agent.id,
-      icon: "bot",
+      iconHtml: C.agentAvatarHtml(agent, "icon record-icon"),
       title: agent.name,
       status: active ? "enabled" : "disabled",
       corner: pinCorner(agent),
