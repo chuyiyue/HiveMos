@@ -167,8 +167,6 @@ const TOOLS = [
       additionalProperties: false,
     },
   },
-];
-
   {
     name: "machines_list",
     description: "列出云主机板块的机器（服务器、云主机、Workers），可按 kind 只看一类",
