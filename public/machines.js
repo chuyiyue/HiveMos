@@ -17,7 +17,7 @@
   var API_KIND = { server: "server", host: "cloud", worker: "worker" };
   var TITLE_FOR = { server: "服务器", host: "云主机", worker: "Worker" };
 
-  var state = { items: [], groups: [], loaded: false, loadError: "" };
+  var state = { items: [], connections: [], groups: [], loaded: false, loadError: "" };
 
   function api(method, url, body) {
     var headers = { accept: "application/json" };
@@ -177,6 +177,15 @@
         ["主机 IP", C.escapeHtml(item.ip || "未填写")],
       ]);
     }
+    if (item.connection_id) {
+      return card(uiKind, item, [
+        ["状态", C.escapeHtml(item.status === "running" ? "运行中" : "已停止")],
+        ["规格", C.escapeHtml(item.spec || "未同步")],
+        ["服务商", C.escapeHtml(item.vendor || "")],
+        ["远端名称", C.escapeHtml(item.remote_name || "")],
+        ["最近同步", C.escapeHtml(item.last_sync_at ? C.formatMinute(item.last_sync_at) || "—" : "尚未同步")],
+      ]);
+    }
     var facts = [
       ["规格", C.escapeHtml(item.spec)],
       ["绑定", C.escapeHtml(item.binding || "未绑定")],
@@ -221,6 +230,7 @@
       "</div>";
     var hostHtml =
       "<div class=\"stack\">" +
+      connectionsSection() +
       listSection("host", "云主机", "台") +
       C.section("已释放", "", C.emptyState("没有已释放的云主机", "释放后的实例会留在这里，直到记录被清掉")) +
       "</div>";
@@ -261,11 +271,13 @@
 
   function load() {
     var machinesReq = api("GET", "/api/machines");
+    var connsReq = api("GET", "/api/machines/providers").catch(function () { return { data: {} }; });
     var groupsReq = api("GET", "/api/groups?scope=machines").catch(function () { return { data: {} }; });
-    return Promise.all([machinesReq, groupsReq])
+    return Promise.all([machinesReq, connsReq, groupsReq])
       .then(function (results) {
         var res = results[0];
-        var groupsRes = results[1];
+        var connRes = results[1];
+        var groupsRes = results[2];
         state.loaded = true;
         if (res.data && res.data.ok) {
           state.items = res.data.machines || [];
@@ -273,6 +285,7 @@
         } else {
           state.loadError = (res.data && res.data.error) || "云主机数据读取失败";
         }
+        if (connRes.data && connRes.data.ok) state.connections = connRes.data.connections || [];
         if (groupsRes.data && groupsRes.data.ok) state.groups = groupsRes.data.groups || [];
         render();
         scheduleProbeRefresh();
@@ -649,6 +662,189 @@
     });
   }
 
+  // ---- 云主机：服务商连接（第二阶段） ----
+
+  function connectionsSection() {
+    if (!state.loaded || !state.connections.length) return "";
+    var cards = state.connections.map(function (conn) {
+      var id = C.escapeHtml(conn.id);
+      var facts = [
+        ["服务商", C.escapeHtml(conn.provider_label)],
+        ["凭据", conn.config_tail ? "末四位 " + C.escapeHtml(conn.config_tail) : "未保存"],
+        ["已接入设备", String(conn.device_count) + " 台"],
+        ["最近测试", conn.last_test_at ? (conn.last_test_ok ? "成功 · " : "失败 · ") + (C.formatMinute(conn.last_test_at) || "") : "尚未测试"],
+      ];
+      if (!conn.last_test_ok && conn.last_error) facts.push(["失败原因", C.escapeHtml(conn.last_error)]);
+      var actions =
+        "<button type=\"button\" class=\"secondary\" data-conn=\"test\" data-id=\"" + id + "\">测试连接</button>" +
+        "<button type=\"button\" class=\"secondary\" data-conn=\"sync\" data-id=\"" + id + "\">同步</button>" +
+        "<button type=\"button\" class=\"danger\" data-conn=\"delete\" data-id=\"" + id + "\">删除连接</button>";
+      return C.record({ id: conn.id, icon: "layout", title: conn.name, facts: facts, actions: actions });
+    });
+    return C.section("服务商连接", String(state.connections.length) + " 个", C.cardList(cards.join("")));
+  }
+
+  function connectionAction(conn, act, btn) {
+    btn.disabled = true;
+    var original = btn.textContent;
+    btn.textContent = act === "sync" ? "正在同步…" : "正在测试…";
+    api("POST", "/api/machines/providers/" + encodeURIComponent(conn.id) + "/" + act)
+      .then(function () { load(); })
+      .catch(function () { btn.disabled = false; btn.textContent = original; load(); });
+  }
+
+  function deleteConnection(conn, anchor) {
+    C.askConfirm({
+      anchor: anchor,
+      title: "删除服务商连接",
+      text: "确认删除连接「" + conn.name + "」吗？已接入的设备会保留为普通云主机条目，不会被删除",
+      confirmLabel: "删除连接",
+      danger: true,
+    }).then(function (yes) {
+      if (!yes) return;
+      api("DELETE", "/api/machines/providers/" + encodeURIComponent(conn.id)).then(function (res) {
+        if (res.data && res.data.ok) load();
+      });
+    });
+  }
+
+  function openCloudAliasDialog(item) {
+    C.openFormDialog({
+      title: "编辑本地别名",
+      bodyHtml:
+        "<label>本地名称<input name=\"name\" maxlength=\"60\" autocomplete=\"off\" value=\"" + C.escapeHtml(item.name) + "\" /></label>" +
+        "<label>备注<input name=\"note\" maxlength=\"200\" autocomplete=\"off\" value=\"" + C.escapeHtml(item.note || "") + "\" /></label>" +
+        "<label>绑定<input name=\"binding\" maxlength=\"60\" autocomplete=\"off\" value=\"" + C.escapeHtml(item.binding || "") + "\" /></label>" +
+        "<label>分组" + C.groupSelect("group_id", state.groups, item.group_id || "") + "</label>" +
+        "<p class=\"subtle\">远端名称：" + C.escapeHtml(item.remote_name || "") + "（由服务商同步，不在这里改）</p>",
+      submitLabel: "保存",
+      onSubmit: function (ctrl) {
+        var name = val(ctrl, "name");
+        if (!name) { ctrl.setError("请填写本地名称"); return; }
+        ctrl.setBusy(true);
+        api("PATCH", "/api/machines/" + encodeURIComponent(item.id), { name: name, note: val(ctrl, "note"), binding: val(ctrl, "binding"), group_id: val(ctrl, "group_id") || null })
+          .then(function (res) {
+            ctrl.setBusy(false);
+            if (!res.data || !res.data.ok) { ctrl.setError((res.data && res.data.error) || "保存失败，请重试"); return; }
+            ctrl.close();
+            load();
+          })
+          .catch(function () { ctrl.setBusy(false); ctrl.setError("网络异常，请重试"); });
+      },
+    });
+  }
+
+  // 添加云主机向导：选服务商 → 填配置 → 测试并拉设备 → 勾选 → 保存。
+  // 测试不过或改过配置（测试结果作废）时，onSubmit 会拦下不让保存。
+  function wizardConfigFields(provider) {
+    return (
+      "<label>API 密钥<input data-wiz-field=\"apiKey\" type=\"password\" maxlength=\"500\" autocomplete=\"off\" placeholder=\"InstaBox 的 API Key\" /></label>" +
+      "<details><summary>高级</summary><label>接口地址<input data-wiz-field=\"endpoint\" maxlength=\"300\" autocomplete=\"off\" placeholder=\"留空用官方地址 api.instabox.sh\" /></label></details>"
+    );
+  }
+
+  function openCloudWizard() {
+    var wiz = { provider: "instabox", tested: false, devices: [] };
+    var ctrl = C.openFormDialog({
+      title: "添加云主机",
+      wide: true,
+      bodyHtml:
+        "<div class=\"auth-type\"><span>服务商</span>" +
+        "<div class=\"page-tabs auth-tabs\" role=\"tablist\" aria-label=\"服务商\">" +
+        "<button type=\"button\" class=\"page-tab\" role=\"tab\" data-wiz-provider=\"instabox\" aria-selected=\"true\">InstaBox</button>" +
+        "<button type=\"button\" class=\"page-tab\" role=\"tab\" data-wiz-provider=\"future\" aria-selected=\"false\" disabled>更多厂商（即将支持）</button>" +
+        "</div></div>" +
+        "<div data-wiz-config>" + wizardConfigFields("huawei") + "</div>" +
+        "<label>连接名称（可留空）<input name=\"conn_name\" maxlength=\"60\" autocomplete=\"off\" placeholder=\"留空按服务商与区域自动命名\" /></label>" +
+        "<label>导入到分组" + C.groupSelect("group_id", state.groups, "") + "</label>" +
+        "<div class=\"manage-actions\"><button type=\"button\" class=\"secondary\" data-wiz-test>测试连接</button><span class=\"subtle\" data-wiz-status>尚未测试</span></div>" +
+        "<div data-wiz-devices></div>",
+      submitLabel: "保存",
+      onSubmit: function (c) {
+        if (!wiz.tested) { c.setError("请先点「测试连接」，拉到设备列表后才能保存"); return; }
+        var ids = [];
+        c.form.querySelectorAll("[data-wiz-device]:checked").forEach(function (box) { ids.push(box.getAttribute("data-wiz-device")); });
+        if (!ids.length) { c.setError("请至少勾选一台要接入的设备"); return; }
+        c.setBusy(true);
+        api("POST", "/api/machines/providers", {
+          provider: wiz.provider,
+          name: val(c, "conn_name"),
+          config: wiz.config || {},
+          device_ids: ids,
+          group_id: val(c, "group_id") || null,
+        })
+          .then(function (res) {
+            c.setBusy(false);
+            if (!res.data || !res.data.ok) { c.setError((res.data && res.data.error) || "保存失败，请重试"); return; }
+            c.close();
+            load();
+          })
+          .catch(function () { c.setBusy(false); c.setError("网络异常，请重试"); });
+      },
+    });
+    var form = ctrl.form;
+    var configBox = form.querySelector("[data-wiz-config]");
+    var statusEl = form.querySelector("[data-wiz-status]");
+    var devicesBox = form.querySelector("[data-wiz-devices]");
+    function invalidate(message) {
+      wiz.tested = false;
+      wiz.devices = [];
+      devicesBox.innerHTML = "";
+      statusEl.textContent = message || "尚未测试";
+    }
+    function readConfig() {
+      var config = {};
+      form.querySelectorAll("[data-wiz-field]").forEach(function (el) {
+        config[el.getAttribute("data-wiz-field")] = el.value.trim();
+      });
+      return config;
+    }
+    form.addEventListener("click", function (event) {
+      var tab = event.target.closest("[data-wiz-provider]");
+      if (!tab || tab.disabled) return;
+      form.querySelectorAll("[data-wiz-provider]").forEach(function (b) {
+        b.setAttribute("aria-selected", b === tab ? "true" : "false");
+      });
+      wiz.provider = tab.getAttribute("data-wiz-provider");
+      configBox.innerHTML = wizardConfigFields(wiz.provider);
+      invalidate("尚未测试");
+    });
+    form.addEventListener("input", function (event) {
+      var t = event.target;
+      if (t && t.hasAttribute("data-wiz-field") && wiz.tested) invalidate("配置已变更，请重新测试");
+    });
+    form.addEventListener("click", function (event) {
+      var btn = event.target.closest("[data-wiz-test]");
+      if (!btn) return;
+      var config = readConfig();
+      btn.disabled = true;
+      statusEl.textContent = "正在测试…";
+      devicesBox.innerHTML = "";
+      api("POST", "/api/machines/providers/test", { provider: wiz.provider, config: config })
+        .then(function (res) {
+          btn.disabled = false;
+          if (!res.data || !res.data.ok) {
+            wiz.tested = false;
+            statusEl.textContent = "测试失败：" + ((res.data && res.data.error) || "请稍后重试");
+            return;
+          }
+          wiz.tested = true;
+          wiz.config = config;
+          wiz.devices = res.data.devices || [];
+          statusEl.textContent = "测试成功，共 " + wiz.devices.length + " 台设备可接入";
+          devicesBox.innerHTML = wiz.devices.map(function (device) {
+            var meta = [device.status === "running" ? "运行中" : "已停止", device.os, device.spec, device.ip].filter(Boolean).join(" · ");
+            return "<label><input type=\"checkbox\" data-wiz-device=\"" + C.escapeHtml(device.remoteId) + "\" /> " + C.escapeHtml(device.name || device.remoteId) + (meta ? "（" + C.escapeHtml(meta) + "）" : "") + "</label>";
+          }).join("");
+        })
+        .catch(function () {
+          btn.disabled = false;
+          wiz.tested = false;
+          statusEl.textContent = "测试失败：网络异常，请重试";
+        });
+    });
+  }
+
   // 查看 SSH 密码：走 reveal 接口拿明文（服务端记审计），与保险库同口径
   function openRevealDialog(item) {
     var ctrl = C.openFormDialog({
@@ -748,13 +944,25 @@
     if (add) {
       var addKind = add.getAttribute("data-add");
       if (addKind === "server") openServerDialog(null);
-      else if (addKind === "host") openItemDialog("host", null);
+      else if (addKind === "host") openCloudWizard();
       else openItemDialog(addKind, null);
       return;
     }
     var zone = target.closest("[data-manage]");
     if (zone && !target.closest("button, a, input, select, textarea")) {
       openManage(zone.getAttribute("data-manage"));
+      return;
+    }
+    var connBtn = target.closest("[data-conn]");
+    if (connBtn) {
+      var connId = connBtn.getAttribute("data-id");
+      var connAct = connBtn.getAttribute("data-conn");
+      var conn = null;
+      state.connections.forEach(function (entry) { if (entry.id === connId) conn = entry; });
+      if (conn) {
+        if (connAct === "delete") deleteConnection(conn, connBtn);
+        else connectionAction(conn, connAct, connBtn);
+      }
       return;
     }
     var mact = target.closest("[data-mact]");
@@ -771,6 +979,7 @@
         else if (act === "group") openGroupMoveDialog(found);
         else if (act === "edit") {
           if (mkind === "server") openServerDialog(found);
+          else if (mkind === "host" && found.connection_id) openCloudAliasDialog(found);
           else openItemDialog(mkind, found);
         }
         else if (act === "delete") deleteMachine(mkind, found, mact);
