@@ -216,6 +216,7 @@ function cleanTags(value: unknown): string[] | undefined {
   return tags;
 }
 
+// 权重与置顶分开校验。置顶不是「权重最高一档」，校验结果也不会改写另一个字段。
 function cleanWeight(value: unknown): number | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== "number" || !Number.isFinite(value)) throw new MemError("权重格式不正确");
@@ -341,6 +342,10 @@ export interface ListOptions {
   since?: number | null;
 }
 
+// 面板列表与 MCP 全量读取、搜索共用：先置顶组、后普通组；组内权重降序，再更新时间降序。
+// 置顶是独立标记，不是权重的一档；权重只在组内比较。
+const MEMORY_READ_ORDER = "(pinned_at IS NULL) ASC, weight DESC, updated_at DESC";
+
 export async function listMemories(db: D1Database, options: ListOptions = {}): Promise<MemoryRow[]> {
   const where: string[] = [];
   const values: Array<string | number> = [];
@@ -356,12 +361,8 @@ export async function listMemories(db: D1Database, options: ListOptions = {}): P
     where.push("scope = ?");
     values.push(options.scope);
   }
-  // 全量读取走分级排序：置顶优先 → 权重降序 → 更新时间降序（面板与 MCP 同序）。
-  // 增量（since）保持更新时间序：游标语义只认 updated_at，不因呈现排序变化。
-  const order =
-    options.since != null
-      ? "updated_at DESC"
-      : "(pinned_at IS NULL) ASC, weight DESC, updated_at DESC";
+  // 全量读取走 MEMORY_READ_ORDER。增量（since）保持更新时间序：游标只认 updated_at，不按展示序重排。
+  const order = options.since != null ? "updated_at DESC" : MEMORY_READ_ORDER;
   const sql = "SELECT * FROM memories WHERE " + where.join(" AND ") + " ORDER BY " + order + " LIMIT 500";
   const result = await prepare(db, sql, values).all<MemoryRow>();
   return rowsOf(result);
@@ -376,7 +377,7 @@ export async function searchMemories(db: D1Database, query: string, scope?: stri
     sql += "AND scope = ? ";
     values.push(scope);
   }
-  sql += "ORDER BY (pinned_at IS NULL) ASC, weight DESC, updated_at DESC LIMIT 200";
+  sql += "ORDER BY " + MEMORY_READ_ORDER + " LIMIT 200";
   const result = await prepare(db, sql, values).all<MemoryRow>();
   return rowsOf(result);
 }
@@ -456,6 +457,7 @@ export async function createMemory(db: D1Database, input: Record<string, unknown
   const tags = cleanTags(input.tags) ?? [];
   const groupId = cleanGroupId(input.group_id) ?? null;
   await requireGroup(db, groupId);
+  // 新建只采用各自字段：权重缺省 0，置顶缺省否，不从对方推导。
   const weight = cleanWeight(input.weight) ?? 0;
   const pinned = cleanPinned(input.pinned);
   const aiState = typeof input.ai_state === "string" && input.ai_state ? input.ai_state : "none";
@@ -463,7 +465,7 @@ export async function createMemory(db: D1Database, input: Record<string, unknown
   if (existing) throw new MemError("同一作用域下已存在同名记忆，请改标题或用编辑", 409);
   return insertMemory(
     db,
-    { title, scope, content, tags, groupId, weight, pinnedAt: pinned ? now : null, aiState },
+    { title, scope, content, tags, groupId, weight, pinnedAt: pinned === true ? now : null, aiState },
     channel,
     now,
   );
@@ -477,21 +479,26 @@ async function applyUpdate(
   action: string,
   now: number,
 ): Promise<MemoryRow> {
-  await prepare(
-    db,
-    "UPDATE memories SET title = ?, scope = ?, content = ?, tags_json = ?, group_id = ?, pinned_at = ?, weight = ?, version = version + 1, updated_at = ?, deleted_at = NULL WHERE id = ?",
-    [
-      fields.title,
-      fields.scope,
-      fields.content,
-      JSON.stringify(fields.tags),
-      fields.groupId !== undefined ? fields.groupId : row.group_id,
-      fields.pinnedAt !== undefined ? fields.pinnedAt : row.pinned_at,
-      fields.weight !== undefined ? fields.weight : row.weight,
-      now,
-      row.id,
-    ],
-  ).run();
+  // 置顶与权重分列写入：请求没带的那个字段不出现在 SET 里，改一个不会连带改另一个。
+  const assignments = ["title = ?", "scope = ?", "content = ?", "tags_json = ?", "group_id = ?"];
+  const params: Array<string | number | null> = [
+    fields.title,
+    fields.scope,
+    fields.content,
+    JSON.stringify(fields.tags),
+    fields.groupId !== undefined ? fields.groupId : row.group_id,
+  ];
+  if (fields.pinnedAt !== undefined) {
+    assignments.push("pinned_at = ?");
+    params.push(fields.pinnedAt);
+  }
+  if (fields.weight !== undefined) {
+    assignments.push("weight = ?");
+    params.push(fields.weight);
+  }
+  assignments.push("version = version + 1", "updated_at = ?", "deleted_at = NULL");
+  params.push(now, row.id);
+  await prepare(db, "UPDATE memories SET " + assignments.join(", ") + " WHERE id = ?", params).run();
   const updated = await getMemoryRow(db, row.id);
   if (!updated) throw new MemError("写入后读取失败", 500);
   await audit(db, { memoryId: row.id, actor: channel.actor, action, diff: { title: updated.title, scope: updated.scope, version: updated.version } }, now);
@@ -523,7 +530,7 @@ export async function upsertMemory(db: D1Database, input: Record<string, unknown
         tags: tags ?? [],
         groupId: groupId ?? null,
         weight: weight ?? 0,
-        pinnedAt: pinned ? now : null,
+        pinnedAt: pinned === true ? now : null,
       },
       channel,
       now,
@@ -544,8 +551,8 @@ export async function upsertMemory(db: D1Database, input: Record<string, unknown
       content,
       tags: tags ?? parseTags(target.tags_json),
       groupId: groupId !== undefined ? groupId : target.group_id,
-      weight: weight !== undefined ? weight : target.weight,
-      pinnedAt: pinned === undefined ? target.pinned_at : pinned ? now : null,
+      weight,
+      pinnedAt: pinned === undefined ? undefined : pinned ? now : null,
     },
     channel,
     target.deleted_at != null ? "upsert_revive" : "upsert",
@@ -577,8 +584,8 @@ export async function updateMemory(db: D1Database, id: string, input: Record<str
       content,
       tags,
       groupId: groupId !== undefined ? groupId : row.group_id,
-      weight: weight !== undefined ? weight : row.weight,
-      pinnedAt: pinned === undefined ? row.pinned_at : pinned ? now : null,
+      weight,
+      pinnedAt: pinned === undefined ? undefined : pinned ? now : null,
     },
     channel,
     "update",

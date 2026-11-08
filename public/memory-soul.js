@@ -118,18 +118,23 @@
         "<dl class=\"kv\">" +
         "<div><dt>作用域</dt><dd>" + C.escapeHtml(item.scope || "未注明") + "</dd></div>" +
         "<div><dt>来源</dt><dd>" + C.escapeHtml(item.source || "未注明") + "</dd></div>" +
+        "<div><dt>置顶</dt><dd>" + (item.pinned ? "已置顶" : "未置顶") + "</dd></div>" +
         "<div><dt>更新时间</dt><dd>" + C.escapeHtml(C.formatMinute(item.updated_at) || "未知") + "</dd></div>" +
         "</dl>" +
         "<h3 class=\"manage-subhead\">内容</h3>" +
         "<p>" + C.escapeHtml(excerptOf(item.content)) + "</p>" +
-        "<h3 class=\"manage-subhead\">分级设置</h3>" +
-        "<label>权重（0–100，读取时高权重排前面）<input name=\"mem-weight\" type=\"number\" min=\"0\" max=\"100\" step=\"1\" value=\"" + (item.weight || 0) + "\" /></label>" +
+        "<h3 class=\"manage-subhead\">权重</h3>" +
+        "<label>权重（0–100，组内高权重排前面，不改变置顶）<input name=\"mem-weight\" type=\"number\" min=\"0\" max=\"100\" step=\"1\" value=\"" + (item.weight || 0) + "\" /></label>" +
         "<div class=\"manage-actions\">" +
-        "<button type=\"button\" class=\"secondary\" data-card-act=\"tier\" data-kind=\"memory\" data-id=\"" + id + "\">保存分级设置</button>" +
+        "<button type=\"button\" class=\"secondary\" data-card-act=\"weight\" data-kind=\"memory\" data-id=\"" + id + "\">保存权重</button>" +
+        "</div>" +
+        "<h3 class=\"manage-subhead\">置顶</h3>" +
+        "<p class=\"subtle\">只切换置顶标记，不修改权重。置顶的记忆优先读取。</p>" +
+        "<div class=\"manage-actions\">" +
         "<button type=\"button\" class=\"secondary\" data-card-act=\"pin\" data-kind=\"memory\" data-id=\"" + id + "\">" + (item.pinned ? "取消置顶" : "置顶") + "</button>" +
-        "<button type=\"button\" class=\"secondary\" data-card-act=\"ai-tag\" data-kind=\"memory\" data-id=\"" + id + "\">AI 打标签</button>" +
         "</div>" +
         "<div class=\"manage-actions\">" +
+        "<button type=\"button\" class=\"secondary\" data-card-act=\"ai-tag\" data-kind=\"memory\" data-id=\"" + id + "\">AI 打标签</button>" +
         "<button type=\"button\" class=\"secondary\" data-card-act=\"edit\" data-kind=\"memory\" data-id=\"" + id + "\">编辑</button>" +
         "<button type=\"button\" class=\"danger\" data-confirm-delete data-card-act=\"delete\" data-kind=\"memory\" data-id=\"" + id + "\">删除</button>" +
         "</div>",
@@ -163,7 +168,7 @@
       "\" aria-pressed=\"" +
       (pinned ? "true" : "false") +
       "\" title=\"" +
-      (pinned ? "取消置顶" : "置顶") +
+      (pinned ? "取消置顶，不改权重" : "置顶，不改权重") +
       "\" aria-label=\"" +
       (pinned ? "取消置顶" : "置顶") +
       "\"><svg class=\"icon\" viewBox=\"0 0 24 24\" aria-hidden=\"true\"><use href=\"/icons.svg#icon-pin\"/></svg></button>"
@@ -240,9 +245,8 @@
     );
   }
 
-  // 置顶优先，其次权重降序，再按更新时间降序。与列表接口同一口径。
-  function compareMemories(a, b) {
-    if (!!a.pinned !== !!b.pinned) return a.pinned ? -1 : 1;
+  // 组内顺序，与列表接口同一口径：权重降序，再更新时间降序。置顶不参与这条比较。
+  function compareWithinGroup(a, b) {
     var byWeight = (Number(b.weight) || 0) - (Number(a.weight) || 0);
     if (byWeight) return byWeight;
     return (Number(b.updated_at) || 0) - (Number(a.updated_at) || 0);
@@ -265,7 +269,7 @@
     return n;
   }
 
-  // 置顶和普通记忆各一张卡，上下排列，置顶在上。
+  // 置顶和普通记忆各一张卡，上下排列，置顶在上。组内按权重降序，再按更新时间降序。
   // 条数只数这张卡里列出的记忆，标签筛选同时收窄两边，不再并回同一张卡。
   // 没有可列的置顶时不渲染置顶卡。加载、失败、全空、筛选无命中仍只留记忆卡和原来的空态。
   function memorySectionsHtml() {
@@ -277,13 +281,14 @@
       return true;
     });
     if (!rows.length) return C.section("记忆", countHint(0), C.emptyState("没有符合筛选的记忆", "换个标签看看"));
-    rows.sort(compareMemories);
     var pinned = [];
     var rest = [];
     rows.forEach(function (item) {
       if (item.pinned) pinned.push(item);
       else rest.push(item);
     });
+    pinned.sort(compareWithinGroup);
+    rest.sort(compareWithinGroup);
     var html = "";
     if (pinned.length) html += C.section("置顶", countHint(pinned.length), memoryCardsHtml(pinned));
     var restBody;
@@ -449,7 +454,7 @@
       "<label>标题<input name=\"title\" maxlength=\"80\" autocomplete=\"off\" value=\"" + C.escapeHtml(v.title) + "\" /></label>" +
       "<label>作用域<input name=\"scope\" maxlength=\"40\" autocomplete=\"off\" placeholder=\"例如 全局、工作区或某个 Agent\" value=\"" + C.escapeHtml(v.scope) + "\" /></label>" +
       "<label>内容<textarea name=\"content\" rows=\"4\" maxlength=\"2000\">" + C.escapeHtml(v.content) + "</textarea></label>" +
-      "<label>权重（0–100）<input name=\"weight\" type=\"number\" min=\"0\" max=\"100\" step=\"1\" value=\"" + (v.weight || 0) + "\" /></label>" +
+      "<label>权重（0–100，不改变置顶）<input name=\"weight\" type=\"number\" min=\"0\" max=\"100\" step=\"1\" value=\"" + (v.weight || 0) + "\" /></label>" +
       tagFieldHtml(v.tags || [])
     );
   }
@@ -637,7 +642,7 @@
     patchMemory(item, { pinned: !item.pinned }, item.pinned ? "已取消置顶" : "已置顶");
   }
 
-  function saveMemTier(item, srcEl) {
+  function saveMemWeight(item, srcEl) {
     var dlg = srcEl && srcEl.closest ? srcEl.closest("[data-manage-dialog]") : null;
     var wEl = dlg ? dlg.querySelector("[name=\"mem-weight\"]") : null;
     var weight = wEl ? Number(wEl.value) : item.weight || 0;
@@ -650,7 +655,7 @@
     var payload = {
       weight: Math.floor(weight),
     };
-    patchMemory(item, payload, "分级设置已保存").then(function () {
+    patchMemory(item, payload, "权重已保存").then(function () {
       C.closeCurrentOverlay();
     });
   }
@@ -868,7 +873,7 @@
         else if (act === "history") openSoulHistory(afound);
         else if (act === "delete") { if (akind === "memory") removeMemory(afound, cardAct); else deleteSoul(afound); }
         else if (akind === "memory" && act === "pin") { C.closeCurrentOverlay(); toggleMemPin(afound); }
-        else if (akind === "memory" && act === "tier") saveMemTier(afound, cardAct);
+        else if (akind === "memory" && act === "weight") saveMemWeight(afound, cardAct);
         else if (akind === "memory" && act === "ai-tag") tagMemory(afound, cardAct);
       }
     }
