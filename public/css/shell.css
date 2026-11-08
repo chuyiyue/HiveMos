@@ -48,8 +48,8 @@
 .brand-name { font-size: var(--fs-lg); }
 
 .mark {
-  width: 28px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
   display: grid;
   place-items: center;
   border-radius: var(--r-sm);
@@ -685,10 +685,6 @@ button.account-logout:hover { background: var(--sidebar-bg-hover); color: var(--
   align-items: center;
   justify-content: center;
   transition: opacity var(--dur-base) var(--ease);
-}
-:root[data-sidebar="collapsed"] .brand .mark {
-  width: 32px;
-  height: 32px;
 }
 :root[data-sidebar="collapsed"] .sidebar-collapse {
   position: absolute;
