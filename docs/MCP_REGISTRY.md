@@ -6,7 +6,7 @@
 
 - 不做实时代理。三个工具是 `mcp_search`、`mcp_list`、`mcp_get`。端点和配置只从 `mcp_get` 返回。
 - 调用记录只靠取配置审计。`mcp_get` 成功返回前先写 `mcp_fetch_audit`（agent、条目、时间）。没有自报回执工具。
-- 工具快照只用于搜索和面板展示，不出现在调用路径上。刷新来源有三处：Cron 每 6 小时、登记时探一次、面板上的刷新按钮。探活失败保留旧的 `snapshot_json`，只更新 `snapshot_status` 和 `snapshot_at`。
+- 工具快照只用于搜索和面板展示，不出现在调用路径上。刷新来源有三处：Cron 按设置页「功能设置」里的定时任务频率（默认每 6 小时）、登记时探一次、面板上的刷新按钮。探活失败保留旧的 `snapshot_json`，只更新 `snapshot_status` 和 `snapshot_at`。
 - 每个 Agent 一把 Bearer 令牌，库里只存 SHA-256。配置带 `version` 和 `ttl_seconds`。`config_json` 里的密钥一律写 `{{vault://…}}` 占位，不要写真实令牌。
 
 ## 2. 数据表
@@ -169,7 +169,7 @@ stdio 的探活返回 400「stdio 条目不能自动探活，请手填工具快�
 
 探活对 `endpoint_url` 发两次 JSON-RPC POST：`initialize`，然后 `tools/list`。若响应带 `mcp-session-id`，第二次会带上。成功时保存精简工具列表，`snapshot_status = ok`。失败只改状态和时间。
 
-`wrangler.jsonc` 的 Cron 是 `0 */6 * * *`。`scheduled()` 遍历 `status = active` 且 `transport` 不是 `stdio` 的条目，调用和手动刷新同一个函数。一个端点失败不影响后面的条目。
+`wrangler.jsonc` 的 Cron 是 `0 * * * *`，每小时检查一次；实际执行间隔取设置页「功能设置」里的定时任务频率（默认每 6 小时）。`scheduled()` 遍历 `status = active` 且 `transport` 不是 `stdio` 的条目，调用和手动刷新同一个函数。一个端点失败不影响后面的条目。
 
 快照里的工具名和描述参与 `mcp_search`，不参与 `mcp_get` 的返回。
 
