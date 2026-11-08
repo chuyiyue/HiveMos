@@ -450,31 +450,90 @@
     );
   }
 
+  function mcpEndpoint() {
+    return location.origin + "/mcp";
+  }
+
+  function manageInfoHead(o) {
+    return (
+      "<div class=\"manage-info-head\"><span class=\"manage-info-icon\"><svg class=\"icon\" viewBox=\"0 0 24 24\" aria-hidden=\"true\"><use href=\"/icons.svg#icon-" +
+      escapeHtml(o.icon || "bot") +
+      "\"></use></svg></span>" +
+      "<div class=\"manage-info-titles\"><h3 class=\"manage-info-name\">" +
+      escapeHtml(o.title || "") +
+      "</h3>" +
+      (o.sub ? "<p class=\"manage-info-sub\">" + escapeHtml(o.sub) + "</p>" : "") +
+      "</div></div>"
+    );
+  }
+
+  function wireManageTabs(ctrl) {
+    ctrl.dialog.addEventListener("click", function (event) {
+      var target = event.target;
+      if (!(target instanceof Element)) return;
+      var tab = target.closest("[data-mtab]");
+      if (!tab) return;
+      var name = tab.getAttribute("data-mtab");
+      Array.prototype.forEach.call(ctrl.bodyEl.querySelectorAll("[data-mtab]"), function (btn) {
+        btn.setAttribute("aria-selected", btn.getAttribute("data-mtab") === name ? "true" : "false");
+      });
+      Array.prototype.forEach.call(ctrl.bodyEl.querySelectorAll("[data-mpanel]"), function (panel) {
+        panel.hidden = panel.getAttribute("data-mpanel") !== name;
+      });
+    });
+  }
+
   function agentManageBody(agent, groupName, opts) {
     var partial = !!(opts && opts.partial);
     var active = agent.status === "active";
-    var actions =
+    var endpoint = mcpEndpoint();
+    var advanced =
+      "<div class=\"manage-actions\">" +
       "<button type=\"button\" class=\"secondary\" data-agent-act=\"rename\">改名</button>" +
-      "<button type=\"button\" class=\"secondary\" data-agent-act=\"move\">移动分组</button>" +
-      "<button type=\"button\" class=\"secondary\" data-agent-act=\"pin\">" +
-      (agent.pinned_at ? "取消固定" : "固定到侧边栏") +
-      "</button>";
-    if (active) {
-      actions +=
-        "<button type=\"button\" class=\"secondary\" data-agent-act=\"rotate\">轮换令牌</button>" +
-        "<button type=\"button\" class=\"danger\" data-agent-act=\"disable\">停用</button>";
-    }
+      "<button type=\"button\" class=\"secondary\" data-agent-act=\"move\">设置分组</button>" +
+      (active ? "<button type=\"button\" class=\"secondary\" data-agent-act=\"rotate\">轮换令牌</button>" : "") +
+      "</div>" +
+      (active
+        ? "<div class=\"manage-danger-zone\"><p class=\"subtle\">删除后该 Agent 会被停用，令牌立即失效</p>" +
+          "<button type=\"button\" class=\"danger\" data-agent-act=\"disable\">删除</button></div>"
+        : "<p class=\"subtle\">这个 Agent 已停用</p>");
     var permSection = partial
       ? '<p class="subtle" data-perm-pending>权限读取中</p>'
       : permPickerHtml(agent);
     return (
       "<p class=\"manage-status\" data-manage-status role=\"status\"></p>" +
-      "<dl class=\"kv\">" +
-      "<div><dt>标识</dt><dd><span class=\"mono\">" +
-      escapeHtml(agent.id) +
-      "</span></dd></div>" +
+      manageInfoHead({
+        icon: "bot",
+        title: agent.name,
+        sub: (active ? "已启用" : "已停用") + " · Agent · " + (partial ? "读取中" : groupName || "未分组"),
+      }) +
+      "<div class=\"manage-info-card\"><dl class=\"kv\">" +
       "<div><dt>状态</dt><dd>" +
       statusPill(active ? "enabled" : "disabled") +
+      "</dd></div>" +
+      "<div><dt>标识</dt><dd><span class=\"mono\">" +
+      escapeHtml(agent.id) +
+      "</span> <button type=\"button\" class=\"copy-btn\" data-copy=\"" +
+      escapeHtml(agent.id) +
+      "\" data-label=\"复制\">复制</button></dd></div>" +
+      "<div><dt>接入地址</dt><dd><span class=\"mono\">" +
+      escapeHtml(endpoint) +
+      "</span> <button type=\"button\" class=\"copy-btn\" data-copy=\"" +
+      escapeHtml(endpoint) +
+      "\" data-label=\"复制\">复制</button></dd></div>" +
+      "</dl></div>" +
+      "<div class=\"page-tabs manage-tabs\" role=\"tablist\" aria-label=\"Agent 管理\">" +
+      "<button type=\"button\" class=\"page-tab\" role=\"tab\" data-mtab=\"overview\" aria-selected=\"true\">概览</button>" +
+      "<button type=\"button\" class=\"page-tab\" role=\"tab\" data-mtab=\"perms\" aria-selected=\"false\">权限<span class=\"perm-dirty-dot\" data-perm-dirty hidden title=\"有未保存改动\"></span></button>" +
+      "<button type=\"button\" class=\"page-tab\" role=\"tab\" data-mtab=\"advanced\" aria-selected=\"false\">高级设置</button>" +
+      "</div>" +
+      "<div data-mpanel=\"overview\">" +
+      "<dl class=\"kv\">" +
+      "<div><dt>名称</dt><dd>" +
+      escapeHtml(agent.name) +
+      "</dd></div>" +
+      "<div><dt>状态</dt><dd>" +
+      (active ? "已启用" : "已停用") +
       "</dd></div>" +
       "<div><dt>分组</dt><dd>" +
       (partial ? "读取中" : escapeHtml(groupName || "未分组")) +
@@ -482,19 +541,29 @@
       "<div><dt>权限</dt><dd><span data-perm-summary>" +
       (partial ? "读取中" : escapeHtml(permTextOf(agent))) +
       "</span></dd></div>" +
-      "<div><dt>最近调用</dt><dd>" +
+      "<div><dt>上次调用</dt><dd>" +
       escapeHtml(formatMinute(agent.last_seen_at) || "还没有调用") +
       "</dd></div>" +
-      "<div><dt>创建</dt><dd>" +
+      "<div><dt>创建时间</dt><dd>" +
       (partial ? "读取中" : escapeHtml(formatMinute(agent.created_at) || "未知")) +
       "</dd></div>" +
       "</dl>" +
       "<div class=\"manage-actions\">" +
-      actions +
+      "<button type=\"button\" class=\"secondary\" data-copy=\"" +
+      escapeHtml(agent.id) +
+      "\" data-label=\"复制标识\">复制标识</button>" +
+      "<button type=\"button\" class=\"secondary\" data-copy=\"" +
+      escapeHtml(endpoint) +
+      "\" data-label=\"复制接入地址\">复制接入地址</button>" +
       "</div>" +
-      "<h3 class=\"manage-subhead\">系统功能权限<span class=\"perm-dirty-dot\" data-perm-dirty hidden title=\"有未保存改动\"></span></h3>" +
+      "</div>" +
+      "<div data-mpanel=\"perms\" hidden>" +
       "<p class=\"subtle manage-note\">这个 Agent 通过面板 MCP 能访问的系统功能，在下方点选后点保存权限统一生效</p>" +
-      permSection
+      permSection +
+      "</div>" +
+      "<div data-mpanel=\"advanced\" hidden>" +
+      advanced +
+      "</div>"
     );
   }
 
@@ -967,9 +1036,9 @@
     function openDisableConfirm() {
       askConfirm({
         anchor: ctrl.confirmSlot,
-        title: "停用设备",
-        text: "确认停用「" + agent.name + "」吗？停用后该令牌不能再调用注册表",
-        confirmLabel: "停用",
+        title: "删除 Agent",
+        text: "确认删除「" + agent.name + "」吗？删除后会被停用，该令牌不能再调用注册表",
+        confirmLabel: "删除",
         danger: true,
       }).then(function (yes) {
         if (!yes || busy) return;
@@ -982,11 +1051,11 @@
               return;
             }
             if (!result.data || result.data.ok !== true) {
-              setStatus((result.data && result.data.error) || "没有停用，请重试", true);
+              setStatus((result.data && result.data.error) || "没有删除成功，请重试", true);
               return;
             }
             ctrl.forceClose();
-            changed("已停用");
+            changed("已删除");
           })
           .catch(function () {
             busy = false;
@@ -1021,10 +1090,6 @@
       interacted = true;
       if (act === "rename") doRename();
       else if (act === "move") doMove();
-      else if (act === "pin")
-        guardAction().then(function (ok) {
-          if (ok) patch({ pinned: !agent.pinned_at }, agent.pinned_at ? "已取消固定" : "已固定到侧边栏");
-        });
       else if (act === "rotate") doRotate();
       else if (act === "disable") doDisable();
     });
@@ -1070,6 +1135,7 @@
       }
     });
 
+    wireManageTabs(ctrl);
     syncPermUI();
     var initialRefresh = refresh(seed ? { silent: true } : undefined);
     return ctrl;
@@ -1495,6 +1561,9 @@
     closeCurrentOverlay: closeCurrentOverlay,
     openSidePanel: openSidePanel,
     openAgentManage: openAgentManage,
+    manageInfoHead: manageInfoHead,
+    wireManageTabs: wireManageTabs,
+    mcpEndpoint: mcpEndpoint,
     permDomains: PERM_DOMAINS,
     metaGrid: metaGrid,
     iconSvg: iconSvg,

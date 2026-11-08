@@ -96,7 +96,10 @@
       actions:
         "<button type=\"button\" class=\"secondary\" data-copy=\"" +
         C.escapeHtml(agent.id) +
-        "\" data-label=\"复制标识\">复制标识</button>",
+        "\" data-label=\"复制标识\">复制标识</button>" +
+        "<button type=\"button\" class=\"secondary\" data-copy=\"" +
+        C.escapeHtml(C.mcpEndpoint()) +
+        "\" data-label=\"复制接入地址\">复制接入地址</button>",
       manage: "agent:" + agent.id,
     });
   }

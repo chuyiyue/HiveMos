@@ -103,6 +103,7 @@
     var ctrl = C.openManageDialog({
       title: item.title,
       bodyHtml:
+        C.manageInfoHead({ icon: "memory", title: item.title, sub: (item.scope || "未注明作用域") + " · 记忆" }) +
         "<dl class=\"kv\">" +
         "<div><dt>作用域</dt><dd>" + C.escapeHtml(item.scope || "未注明") + "</dd></div>" +
         "<div><dt>来源</dt><dd>" + C.escapeHtml(item.source || "未注明") + "</dd></div>" +
@@ -123,13 +124,13 @@
     var ctrl = C.openManageDialog({
       title: item.agent_name,
       bodyHtml:
+        C.manageInfoHead({ icon: "soul", title: item.agent_name, sub: "v" + String(item.version) + " · Soul" }) +
         "<dl class=\"kv\">" +
         "<div><dt>版本</dt><dd>v" + C.escapeHtml(String(item.version)) + "</dd></div>" +
         "<div><dt>更新时间</dt><dd>" + C.escapeHtml(C.formatMinute(item.updated_at) || "未知") + "</dd></div>" +
         "</dl>" +
         "<div class=\"manage-actions\">" +
         "<button type=\"button\" class=\"secondary\" data-card-act=\"edit\" data-kind=\"soul\" data-id=\"" + id + "\">编辑</button>" +
-        "<button type=\"button\" class=\"secondary\" data-card-act=\"history\" data-kind=\"soul\" data-id=\"" + id + "\">历史版本</button>" +
         "<button type=\"button\" class=\"danger\" data-card-act=\"delete\" data-kind=\"soul\" data-id=\"" + id + "\">删除</button>" +
         "</div>" +
         "<div class=\"confirm-slot\" data-confirm-soul=\"" + id + "\"></div>",
@@ -335,56 +336,68 @@
   }
 
   function openSoulHistory(item) {
+    var currentHtml = C.list(
+      C.record({
+        title: "v" + item.version,
+        lede: excerptOf(item.content),
+        facts: [["更新时间", C.escapeHtml(C.formatMinute(item.updated_at) || "—")]],
+        extra: '<span class="subtle">当前版本</span>',
+      })
+    );
     var ctrl = C.openFormDialog({
       title: item.agent_name + " 的历史版本",
       wide: true,
-      bodyHtml: C.emptyState("正在加载历史版本", "马上就好"),
+      bodyHtml: currentHtml + '<p class="subtle">其余历史版本读取中</p>',
       submitLabel: "关闭",
       onSubmit: function (c) {
         c.close();
       },
     });
-    soulApi("GET", "/api/soul/" + encodeURIComponent(item.id) + "/versions").then(function (res) {
-      var versions = (res.data && res.data.versions) || [];
-      var cards = versions
-        .map(function (v) {
-          var sourceLabel = v.source === "mcp" ? "Agent 写入" : v.source === "rollback" ? "回滚生成" : "面板编辑";
-          var excerpt = String(v.content || "").slice(0, 120);
-          var action =
-            v.version === item.version
-              ? "<span class=\"subtle\">当前版本</span>"
-              : "<div class=\"row-actions\"><button type=\"button\" class=\"secondary\" data-rollback=\"" + v.version + "\">回滚到此版</button></div>";
-          return C.record({
-            title: "v" + v.version,
-            lede: excerpt,
-            facts: [
-              ["来源", sourceLabel],
-              ["时间", C.escapeHtml(C.formatMinute(v.created_at) || "—")],
-            ],
-            extra: action,
-          });
-        })
-        .join("");
-      ctrl.showResult(cards ? C.list(cards) : C.emptyState("没有历史版本", ""), "关闭");
-      Array.prototype.forEach.call(ctrl.form.querySelectorAll("[data-rollback]"), function (btn) {
-        btn.addEventListener("click", function () {
-          var target = Number(btn.getAttribute("data-rollback"));
-          btn.disabled = true;
-          soulApi("POST", "/api/soul/" + encodeURIComponent(item.id) + "/rollback", { version: target })
-            .then(function (r) {
-              if (r.status === 200 && r.data.soul) {
-                ctrl.close();
-                loadSouls();
-              } else {
-                btn.disabled = false;
-              }
-            })
-            .catch(function () {
-              btn.disabled = false;
+    soulApi("GET", "/api/soul/" + encodeURIComponent(item.id) + "/versions")
+      .then(function (res) {
+        var versions = (res.data && res.data.versions) || [];
+        var cards = versions
+          .map(function (v) {
+            var sourceLabel = v.source === "mcp" ? "Agent 写入" : v.source === "rollback" ? "回滚生成" : "面板编辑";
+            var excerpt = String(v.content || "").slice(0, 120);
+            var action =
+              v.version === item.version
+                ? "<span class=\"subtle\">当前版本</span>"
+                : "<div class=\"row-actions\"><button type=\"button\" class=\"secondary\" data-rollback=\"" + v.version + "\">回滚到此版</button></div>";
+            return C.record({
+              title: "v" + v.version,
+              lede: excerpt,
+              facts: [
+                ["来源", sourceLabel],
+                ["时间", C.escapeHtml(C.formatMinute(v.created_at) || "—")],
+              ],
+              extra: action,
             });
+          })
+          .join("");
+        ctrl.showResult(cards ? C.list(cards) : C.emptyState("没有历史版本", ""), "关闭");
+        Array.prototype.forEach.call(ctrl.form.querySelectorAll("[data-rollback]"), function (btn) {
+          btn.addEventListener("click", function () {
+            var target = Number(btn.getAttribute("data-rollback"));
+            btn.disabled = true;
+            soulApi("POST", "/api/soul/" + encodeURIComponent(item.id) + "/rollback", { version: target })
+              .then(function (r) {
+                if (r.status === 200 && r.data.soul) {
+                  ctrl.close();
+                  loadSouls();
+                } else {
+                  btn.disabled = false;
+                }
+              })
+              .catch(function () {
+                btn.disabled = false;
+              });
+          });
         });
+      })
+      .catch(function () {
+        ctrl.showResult(currentHtml + C.emptyState("历史版本读取失败", "网络异常，请稍后重试"), "关闭");
       });
-    });
   }
 
   function deleteSoul(item) {

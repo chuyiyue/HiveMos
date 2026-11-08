@@ -214,18 +214,77 @@
 
   function openServerManage(server) {
     var id = C.escapeHtml(server.id);
+    var meta = snapshotMeta(server);
+    var aiMap = { pending: "打标中", done: "已打标", failed: "打标失败", skipped: "未打标" };
+    var tools = server.snapshot && server.snapshot.tools ? server.snapshot.tools : [];
+    var toolList = tools.length
+      ? '<ul class="tool-list">' +
+        tools
+          .map(function (tool) {
+            return "<li><p class=\"mono tool-name\">" + C.escapeHtml(tool.name) + "</p></li>";
+          })
+          .join("") +
+        "</ul>"
+      : C.emptyState("还没有工具快照", "http 与 sse 可以用卡片上的刷新快照探活，stdio 请用手填快照");
     var ctrl = C.openManageDialog({
       title: server.title,
       bodyHtml:
+        C.manageInfoHead({
+          icon: "plug",
+          title: server.title,
+          sub: (server.status === "active" ? "已启用" : "已停用") + " · " + (server.transport || "") + " · MCP",
+        }) +
+        "<div class=\"manage-info-card\"><dl class=\"kv\">" +
+        kv(
+          "端点",
+          "<span class=\"mono\">" +
+            C.escapeHtml(server.endpoint_url || "") +
+            "</span> <button type=\"button\" class=\"copy-btn\" data-copy=\"" +
+            C.escapeHtml(server.endpoint_url || "") +
+            "\" data-label=\"复制\">复制</button>"
+        ) +
+        kv("状态", pill(server.status === "active" ? "ok" : "idle", server.status === "active" ? "已启用" : "已停用")) +
+        "</dl></div>" +
+        "<div class=\"page-tabs manage-tabs\" role=\"tablist\" aria-label=\"MCP 管理\">" +
+        "<button type=\"button\" class=\"page-tab\" role=\"tab\" data-mtab=\"overview\" aria-selected=\"true\">概览</button>" +
+        "<button type=\"button\" class=\"page-tab\" role=\"tab\" data-mtab=\"snapshot\" aria-selected=\"false\">快照</button>" +
+        "<button type=\"button\" class=\"page-tab\" role=\"tab\" data-mtab=\"settings\" aria-selected=\"false\">设置</button>" +
+        "</div>" +
+        "<div data-mpanel=\"overview\">" +
+        "<dl class=\"kv\">" +
+        kv("传输", C.escapeHtml(server.transport)) +
+        kv("鉴权", C.escapeHtml(server.auth_type)) +
+        kv("分类", C.escapeHtml(server.category || "未分类")) +
+        kv("快照", meta[1] + " · " + (C.formatMinute(server.snapshot_at) || "尚无")) +
+        kv("AI 打标", aiMap[server.ai_status] || "未打标") +
+        "</dl>" +
         "<div class=\"manage-actions\">" +
-        "<button type=\"button\" class=\"secondary\" data-action=\"open\" data-id=\"" + id + "\">查看详情</button>" +
-        "<button type=\"button\" class=\"secondary\" data-action=\"edit\" data-id=\"" + id + "\">编辑条目</button>" +
-        "<button type=\"button\" class=\"secondary\" data-action=\"refresh\" data-id=\"" + id + "\">刷新快照</button>" +
+        "<button type=\"button\" class=\"secondary\" data-copy=\"" +
+        C.escapeHtml(server.endpoint_url || "") +
+        "\" data-label=\"复制地址\">复制地址</button>" +
+        "</div>" +
+        "</div>" +
+        "<div data-mpanel=\"snapshot\" hidden>" +
+        "<dl class=\"kv\">" +
+        kv("快照状态", meta[1]) +
+        kv("快照时间", C.formatMinute(server.snapshot_at) || "尚无") +
+        kv("工具数量", String(tools.length) + " 个") +
+        "</dl>" +
+        toolList +
+        "<div class=\"manage-actions\">" +
         "<button type=\"button\" class=\"secondary\" data-action=\"snapshot\" data-id=\"" + id + "\">手填快照</button>" +
+        "<button type=\"button\" class=\"secondary\" data-action=\"open\" data-id=\"" + id + "\">查看详情</button>" +
+        "</div>" +
+        "</div>" +
+        "<div data-mpanel=\"settings\" hidden>" +
+        "<div class=\"manage-actions\">" +
+        "<button type=\"button\" class=\"secondary\" data-action=\"edit\" data-id=\"" + id + "\">编辑条目</button>" +
         "<button type=\"button\" class=\"danger\" data-action=\"delete\" data-id=\"" + id + "\">删除条目</button>" +
+        "</div>" +
         "</div>",
     });
     wireDialog(ctrl);
+    C.wireManageTabs(ctrl);
   }
 
   function detailHtml(server) {
@@ -396,6 +455,11 @@
     var ctrl = C.openManageDialog({
       title: item.name,
       bodyHtml:
+        C.manageInfoHead({
+          icon: scope === "skills" ? "puzzle" : "gateway",
+          title: item.name,
+          sub: scope === "skills" ? (item.source || "未注明来源") + " · 技能" : (item.auth || "") + " · API",
+        }) +
         "<dl class=\"kv\">" + facts + "</dl>" +
         "<div class=\"manage-actions\">" +
         "<button type=\"button\" class=\"secondary\" data-action=\"local-edit\" data-scope=\"" + scope + "\" data-id=\"" + id + "\">编辑</button>" +

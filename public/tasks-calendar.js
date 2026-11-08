@@ -179,7 +179,14 @@
   }
 
   function openTaskManage(item) {
-    wireManage(C.openManageDialog({ title: item.title, bodyHtml: taskManageBody(item) }));
+    wireManage(
+      C.openManageDialog({
+        title: item.title,
+        bodyHtml:
+          C.manageInfoHead({ icon: "tasks", title: item.title, sub: taskStatusText(item) + " · 任务" }) +
+          taskManageBody(item),
+      })
+    );
   }
 
   function openCalendarManage(item) {
@@ -203,14 +210,24 @@
   }
 
 
+  function taskStatusText(item) {
+    return item.status === "done" ? "已完成" : item.status === "active" ? "进行中" : "待处理";
+  }
+
   function taskManageBody(item) {
     var id = C.escapeHtml(item.id);
     var btns =
-      "<button type=\"button\" class=\"secondary\" data-action=\"task-edit\" data-id=\"" + id + "\">编辑</button>";
-    if (item.status !== "done")
-      btns += "<button type=\"button\" class=\"secondary\" data-action=\"task-complete\" data-id=\"" + id + "\">标记完成</button>";
-    btns += "<button type=\"button\" class=\"danger\" data-action=\"task-delete\" data-id=\"" + id + "\">删除</button>";
-    return "<div class=\"manage-actions\">" + btns + "</div>";
+      "<button type=\"button\" class=\"secondary\" data-action=\"task-edit\" data-id=\"" + id + "\">编辑</button>" +
+      "<button type=\"button\" class=\"danger\" data-action=\"task-delete\" data-id=\"" + id + "\">删除</button>";
+    return (
+      "<dl class=\"kv\">" +
+      "<div><dt>状态</dt><dd>" + taskStatusText(item) + "</dd></div>" +
+      "<div><dt>从</dt><dd>" + C.escapeHtml(item.from || "管理员") + "</dd></div>" +
+      "<div><dt>到</dt><dd>" + C.escapeHtml(item.assignee || "未指派") + "</dd></div>" +
+      (item.note ? "<div><dt>备注</dt><dd>" + C.escapeHtml(item.note) + "</dd></div>" : "") +
+      "</dl>" +
+      "<div class=\"manage-actions\">" + btns + "</div>"
+    );
   }
 
   function calendarManageBody(item) {
