@@ -379,6 +379,17 @@
     var draft = state.draft;
     var current = state.mode === "edit" ? selected() : null;
     var aiHint = current && current.summary_source === "ai" && current.summary ? "当前 AI 简介：" + current.summary : "留空时由 AI 补一句，已有人工简介不会被覆盖";
+    // 登记只留常用字段，其余在编辑里补全。
+    if (state.mode !== "edit") {
+      return (
+        field("名称", input("name", draft.name, 'maxlength="64" spellcheck="false" autocomplete="off"'), "小写字母、数字、下划线或连字符") +
+        field("端点", input("endpoint_url", draft.endpoint_url, 'spellcheck="false" autocomplete="off"'), "http 与 sse 填 URL，stdio 填启动命令") +
+        field("传输", choices("transport", draft.transport, [["http", "http"], ["sse", "sse"], ["stdio", "stdio"]])) +
+        field("鉴权", choices("auth_type", draft.auth_type, [["none", "无"], ["bearer", "Bearer"], ["oauth", "OAuth"]])) +
+        field("配置 JSON", area("config_json", draft.config_json, 5), "密钥写成 {{vault://路径}} 占位，不要粘贴真实令牌") +
+        field("分组", C.groupSelect("group_id", state.groups, draft.group_id))
+      );
+    }
     return (
       field("名称", input("name", draft.name, 'maxlength="64" spellcheck="false" autocomplete="off"'), "小写字母、数字、下划线或连字符") +
       field("标题", input("title", draft.title, 'maxlength="120"')) +
@@ -697,7 +708,7 @@
       title: creating ? "登记条目" : "编辑条目",
       bodyHtml: formFieldsHtml(),
       submitLabel: creating ? "登记条目" : "保存修改",
-      size: "lg",
+      size: creating ? "md" : "lg",
       onSubmit: function (c) {
         saveServer(c);
       },
@@ -850,7 +861,10 @@
     ctrl.setBusy(true);
     var creating = state.mode !== "edit" || !state.selectedId;
     var url = creating ? "/api/mcp-servers" : "/api/mcp-servers/" + encodeURIComponent(state.selectedId);
-    api(creating ? "POST" : "PUT", url, payload())
+    var body = payload();
+    // 登记弹窗不再问标题，后端又要求标题非空，用名称兜底。
+    if (creating && !body.title) body.title = body.name;
+    api(creating ? "POST" : "PUT", url, body)
       .then(function (result) {
         state.busy = false;
         var ok = showResult(result, creating ? "已登记" : "已保存");
