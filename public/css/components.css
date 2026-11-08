@@ -380,3 +380,7 @@ dialog.action-menu::backdrop { background: var(--overlay); }
 .expand-note { margin: 0 0 10px; }
 .expand-subhead { margin: 14px 0 4px; font-size: var(--fs-sm); font-weight: 600; color: var(--text-2); }
 .expand-subhead:first-child { margin-top: 0; }
+
+/* 保险库条目行：展开切换在行尾（行本身不是 .record 网格） */
+.session-row .expand-toggle { width: auto; border-top: 0; padding: 6px 8px; }
+.entry-row > .expand-panel { margin-top: 2px; }

@@ -32,10 +32,6 @@
   }
 
   // 网关/邮箱卡片沿用 record 的 extra 里放「高级」按钮；条目是列表行，按钮直接放行尾
-  function manageBtn(kind, id) {
-    return '<div class="row-actions"><button type="button" class="secondary" data-manage="' + kind + '" data-id="' + C.escapeHtml(id) + '">高级</button></div>';
-  }
-
   function loadEntries() {
     return api("GET", "/api/vault/entries").then(function (result) {
       if (result.data && result.data.ok && Array.isArray(result.data.entries)) {
@@ -105,13 +101,37 @@
 
   // 账号密码是列表行：一行只呈现名称与行尾「高级」按钮，
   // 其余字段只在编辑弹窗与查看密码弹窗里出现。行样式复用设置页的 session-row
-  function entryRow(item) {
+  function vaultFact(label, value) {
+    return "<div><dt>" + C.escapeHtml(label) + "</dt><dd>" + C.escapeHtml(value) + "</dd></div>";
+  }
+
+  function entryExpandBody(item) {
+    var id = C.escapeHtml(item.id);
     return (
-      '<article class="session-row"><div class="session-main"><div class="session-title"><h3>' +
+      '<dl class="kv">' +
+      vaultFact("网址", item.url || "未填写") +
+      vaultFact("账号", item.username || "未填写") +
+      vaultFact("密码", item.tail ? "末四位 " + item.tail : "已保存") +
+      vaultFact("备注", item.note || "无") +
+      "</dl>" +
+      C.expandActions(
+        '<button type="button" class="secondary" data-vact="edit" data-kind="secret" data-id="' + id + '">编辑</button>' +
+          '<button type="button" class="secondary" data-vact="reveal" data-kind="secret" data-id="' + id + '">查看密码</button>' +
+          '<button type="button" class="danger" data-vact="delete" data-kind="secret" data-id="' + id + '">删除</button>',
+      )
+    );
+  }
+
+  function entryRow(item) {
+    var key = "vault-entry:" + item.id;
+    return (
+      '<div class="entry-row"><article class="session-row"><div class="session-main"><div class="session-title"><h3>' +
       C.escapeHtml(item.name) +
-      '</h3></div></div><button type="button" class="secondary" data-manage="secret" data-id="' +
-      C.escapeHtml(item.id) +
-      '">高级</button></article>'
+      "</h3></div></div>" +
+      C.expandToggle(key) +
+      "</article>" +
+      C.expandPanel(key, entryExpandBody(item)) +
+      "</div>"
     );
   }
 
@@ -132,7 +152,6 @@
     });
     var vaultHtml =
       "<div class=\"stack\">" +
-      "<button type=\"button\" class=\"add-button\" data-add=\"secret\">添加条目</button>" +
       C.section("条目", ENTRIES ? String(ENTRIES.length) + " 条" : "", entriesBody) +
       C.section("访问记录", ACCESS ? String(ACCESS.length) + " 条" : "", accessBody) +
       C.section("回收站", "", C.emptyState("回收站是空的", "删除的条目会在这里停留，方便核对末四位")) +
@@ -144,13 +163,12 @@
           title: item.name,
           status: item.status,
           facts: [["协议", C.escapeHtml(item.proto || "未填写")], ["地址", C.escapeHtml(item.base_url || "未填写")], ["模型", C.escapeHtml(item.models || "0 个模型")], ["密钥末四位", C.escapeHtml(item.tail)]],
-          extra: manageBtn("gateway", item.id),
+          expandKey: "gateway:" + item.id, expandBody: C.expandActions('<button type="button" class="secondary" data-vact="edit" data-kind="gateway" data-id="' + C.escapeHtml(item.id) + '">编辑</button><button type="button" class="secondary" data-vact="reveal" data-kind="gateway" data-id="' + C.escapeHtml(item.id) + '">查看密钥</button><button type="button" class="danger" data-vact="delete" data-kind="gateway" data-id="' + C.escapeHtml(item.id) + '">删除</button>'),
         });
       }).join("");
     });
     var gatewayHtml =
       "<div class=\"stack\">" +
-      "<button type=\"button\" class=\"add-button\" data-add=\"gateway\">添加网关</button>" +
       C.section("网关", GATEWAYS ? String(GATEWAYS.length) + " 个" : "", gatewayBody) +
       C.section("模型路由", "", C.emptyState("还没有路由规则", "逻辑模型名映射到哪个网关的哪个模型，会列在这里")) +
       C.section("用量", "", C.emptyState("还没有用量数据", "各网关的请求数与 token 用量会汇总到这里")) +
@@ -159,22 +177,36 @@
       return items.map(function (item) {
         var facts = [["用途", C.escapeHtml(item.purpose || "未标注")], ["入口", C.escapeHtml(item.portal || "未填写")]];
         if (item.note) facts.push(["备注", C.escapeHtml(item.note)]);
-        return C.record({ id: item.id, title: item.address, facts: facts, extra: manageBtn("email", item.id) });
+        return C.record({ id: item.id, title: item.address, facts: facts, expandKey: "email:" + item.id, expandBody: C.expandActions('<button type="button" class="secondary" data-vact="edit" data-kind="email" data-id="' + C.escapeHtml(item.id) + '">编辑</button><button type="button" class="danger" data-vact="delete" data-kind="email" data-id="' + C.escapeHtml(item.id) + '">删除</button>') });
       }).join("");
     });
     var emailHtml =
       "<div class=\"stack\">" +
-      "<button type=\"button\" class=\"add-button\" data-add=\"email\">添加邮箱</button>" +
       C.section("邮箱", EMAILS ? String(EMAILS.length) + " 个" : "", emailBody) +
       "</div>";
+    var head =
+      '<div class="page-head"><div class="page-tabs" role="tablist">' +
+      '<button class="page-tab" type="button" role="tab" data-tab="vault" aria-selected="' +
+      (activeTab === "vault" ? "true" : "false") +
+      '">账号密码</button>' +
+      '<button class="page-tab" type="button" role="tab" data-tab="gateway" aria-selected="' +
+      (activeTab === "gateway" ? "true" : "false") +
+      '">模型网关</button>' +
+      '<button class="page-tab" type="button" role="tab" data-tab="email" aria-selected="' +
+      (activeTab === "email" ? "true" : "false") +
+      '">邮箱</button>' +
+      "</div>" +
+      '<div class="page-head-actions">' +
+      (activeTab === "vault"
+        ? '<button type="button" class="add-button" data-add="secret">添加条目</button>'
+        : activeTab === "gateway"
+          ? '<button type="button" class="add-button" data-add="gateway">添加网关</button>'
+          : '<button type="button" class="add-button" data-add="email">添加邮箱</button>') +
+      "</div></div>";
     C.mount(
       C.layout(
         "",
-        "<div class=\"page-tabs\" role=\"tablist\">" +
-          "<button class=\"page-tab\" type=\"button\" role=\"tab\" data-tab=\"vault\" aria-selected=\"" + (activeTab === "vault" ? "true" : "false") + "\">账号密码</button>" +
-          "<button class=\"page-tab\" type=\"button\" role=\"tab\" data-tab=\"gateway\" aria-selected=\"" + (activeTab === "gateway" ? "true" : "false") + "\">模型网关</button>" +
-          "<button class=\"page-tab\" type=\"button\" role=\"tab\" data-tab=\"email\" aria-selected=\"" + (activeTab === "email" ? "true" : "false") + "\">邮箱</button>" +
-          "</div>" +
+        head +
           "<div data-panel=\"vault\"" + (activeTab === "vault" ? "" : " hidden") + ">" + vaultHtml + "</div>" +
           "<div data-panel=\"gateway\"" + (activeTab === "gateway" ? "" : " hidden") + ">" + gatewayHtml + "</div>" +
           "<div data-panel=\"email\"" + (activeTab === "email" ? "" : " hidden") + ">" + emailHtml + "</div>" +
@@ -343,34 +375,6 @@
     });
   }
 
-  function openManageMenu(kind, item) {
-    var items = [
-      {
-        label: "编辑",
-        onSelect: function () {
-          if (kind === "secret") openSecretDialog(item);
-          else if (kind === "gateway") openGatewayDialog(item);
-          else openEmailDialog(item);
-        },
-      },
-    ];
-    if (kind === "secret" || kind === "gateway") {
-      items.push({
-        label: kind === "secret" ? "查看密码" : "查看密钥",
-        onSelect: function () { openReveal(kind, item); },
-      });
-    }
-    items.push({
-      label: "删除",
-      danger: true,
-      onSelect: function () { confirmDelete(kind, item); },
-    });
-    C.openActionMenu({
-      title: kind === "email" ? item.address : item.name,
-      items: items,
-    });
-  }
-
   var page = document.getElementById("page");
   page.addEventListener("click", function (event) {
     var target = event.target;
@@ -390,14 +394,22 @@
       else openEmailDialog(null);
       return;
     }
-    var manage = target.closest("[data-manage]");
-    if (manage) {
-      var mkind = manage.getAttribute("data-manage");
-      var mid = manage.getAttribute("data-id");
-      var pool = mkind === "secret" ? ENTRIES : mkind === "gateway" ? GATEWAYS : EMAILS;
-      var found = null;
-      (pool || []).forEach(function (entry) { if (entry.id === mid) found = entry; });
-      if (found) openManageMenu(mkind, found);
+    var vact = target.closest("[data-vact]");
+    if (vact) {
+      var vkind = vact.getAttribute("data-kind");
+      var vid = vact.getAttribute("data-id");
+      var vpool = vkind === "secret" ? ENTRIES : vkind === "gateway" ? GATEWAYS : EMAILS;
+      var vfound = null;
+      (vpool || []).forEach(function (entry) { if (entry.id === vid) vfound = entry; });
+      if (vfound) {
+        var act = vact.getAttribute("data-vact");
+        if (act === "edit") {
+          if (vkind === "secret") openSecretDialog(vfound);
+          else if (vkind === "gateway") openGatewayDialog(vfound);
+          else openEmailDialog(vfound);
+        } else if (act === "reveal") openReveal(vkind, vfound);
+        else if (act === "delete") confirmDelete(vkind, vfound);
+      }
     }
   });
   render();
