@@ -388,7 +388,7 @@
   function openWorkersDialog(item) {
     var ctrl = C.openFormDialog({
       title: item.name + " 名下的 Workers",
-      wide: true,
+      size: "md",
       bodyHtml: C.emptyState("正在读取", "马上就好"),
       submitLabel: "关闭",
       onSubmit: function (c) { c.close(); },

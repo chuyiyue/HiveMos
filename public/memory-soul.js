@@ -535,7 +535,7 @@
     var editing = !!item;
     C.openFormDialog({
       title: editing ? "编辑 Soul" : "添加 Soul",
-      wide: true,
+      size: "md",
       bodyHtml: soulFields(item),
       submitLabel: editing ? "保存" : "添加",
       onSubmit: function (ctrl) {
@@ -659,6 +659,7 @@
 
   function openGroupManager() {
     var ctrl = C.openManageDialog({
+      size: "sm",
       title: "管理分组",
       bodyHtml:
         "<label>新分组名<input name=\"new-group\" maxlength=\"40\" autocomplete=\"off\" placeholder=\"例如 饮食偏好\" /></label>" +
@@ -758,7 +759,7 @@
     );
     var ctrl = C.openFormDialog({
       title: item.agent_name + " 的历史版本",
-      wide: true,
+      size: "md",
       bodyHtml: currentHtml + '<p class="subtle">其余历史版本读取中</p>',
       submitLabel: "关闭",
       onSubmit: function (c) {

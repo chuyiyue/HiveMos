@@ -193,6 +193,7 @@
   function openFeedManage(feed) {
     wireManage(
       C.openManageDialog({
+        size: "sm",
         title: feed.name,
         bodyHtml:
           "<div class=\"manage-actions\"><button type=\"button\" class=\"danger\" data-action=\"feed-revoke\" data-id=\"" +
@@ -744,6 +745,7 @@
   function openAddEvent() {
     if (!writableCalendars().length) { setNotice("还没有可写的日历，先添加一个日历", true); render(); return; }
     C.openFormDialog({
+      size: "md",
       title: "添加日程",
       bodyHtml: eventFormHtml(null, writableCalendars()),
       submitLabel: "添加",
@@ -786,6 +788,7 @@
       }
       var readOnly = owner && owner.kind === "mirror";
       C.openFormDialog({
+        size: "md",
         title: inst.title,
         bodyHtml: C.facts(facts) + auditHtml,
         submitLabel: readOnly ? "关闭" : "编辑",
@@ -800,6 +803,7 @@
 
   function openEditEvent(inst, ev) {
     C.openFormDialog({
+      size: "md",
       title: "编辑日程",
       bodyHtml: eventFormHtml(ev || inst, writableCalendars()),
       submitLabel: "保存",
