@@ -40,7 +40,7 @@ h3 { font-size: var(--fs-md); margin: 0; }
 
 p { margin: 0 0 12px; }
 
-button, input, textarea { font: inherit; color: inherit; }
+button, input, textarea, select { font: inherit; color: inherit; }
 
 button, .button, a.button {
   display: inline-flex;

@@ -120,7 +120,7 @@
     groups.forEach(function (group) {
       var members = buckets[group.id];
       var body = members.length
-        ? list(members.map(options.renderItem).join(""))
+        ? (options.cardGrid ? cardList : list)(members.map(options.renderItem).join(""))
         : emptyState("还没有成员", options.emptyGroupText || "添加时选择这个分组即可归入");
       html += section(
         group.name,
@@ -131,7 +131,7 @@
     });
     if (loose.length || !groups.length) {
       var looseBody = loose.length
-        ? list(loose.map(options.renderItem).join(""))
+        ? (options.cardGrid ? cardList : list)(loose.map(options.renderItem).join(""))
         : emptyState(options.emptyTitle || "暂无内容", options.emptyText || "");
       html += section(options.ungroupedTitle || "未分组", loose.length ? loose.length + " 个" : "", looseBody);
     }
@@ -660,8 +660,15 @@
     return ctrl;
   }
 
-  function list(html) {
-    return '<div class="list">' + html + "</div>";
+  function list(html, extraClass) {
+    return '<div class="list' + (extraClass ? " " + extraClass : "") + '">' + html + "</div>";
+  }
+
+  // Card lists render as a responsive grid (two columns on desktop, one
+  // on mobile); row lists keep the plain .list. See .card-grid in
+  // components.css for the breakpoints.
+  function cardList(html) {
+    return list(html, "card-grid");
   }
 
   function stat(label, value, hint) {
@@ -1065,6 +1072,7 @@
     facts: facts,
     record: record,
     list: list,
+    cardList: cardList,
     stat: stat,
     copyLine: copyLine,
     layout: layout,

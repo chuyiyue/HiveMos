@@ -150,7 +150,7 @@
         return card(uiKind, item, facts);
       });
     }
-    return C.section(title, String(items.length) + " " + unit, C.list(cards.join("")));
+    return C.section(title, String(items.length) + " " + unit, C.cardList(cards.join("")));
   }
 
   function render() {

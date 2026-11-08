@@ -96,7 +96,7 @@
     if (loadErrors[kind]) return C.emptyState("加载失败", loadErrors[kind]);
     if (!items) return C.emptyState("正在加载", "马上就好");
     if (!items.length) return C.emptyState(emptyTitle, emptyText);
-    return C.list(renderItems(items));
+    return kind === "gateways" || kind === "emails" ? C.cardList(renderItems(items)) : C.list(renderItems(items));
   }
 
   // 账号密码是列表行：一行只呈现名称与「查看密码」，点行打开管理弹窗，
