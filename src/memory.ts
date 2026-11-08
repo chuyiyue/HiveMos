@@ -69,6 +69,80 @@ export function parseTags(tagsJson: string | null): string[] {
   }
 }
 
+// 标签等价的判定口径：trim + 折叠空白 + 大小写不敏感。打标复用、
+// 存量近义合并、normalize 都走这一个 key。
+export function normalizeTagKey(tag: string): string {
+  return tag.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+export interface MemoryTagStat {
+  name: string;
+  count: number;
+}
+
+// 未删除记忆的标签汇总：按归一 key 去重、累计条数；写法取最近更新过的
+// 那条记忆里的样子，排序按使用次数降序（同频按名称），方便提示词优先
+// 复用高频标签。读取不加 LIMIT，标签库与合并都看全量。
+export async function listMemoryTagStats(db: D1Database): Promise<MemoryTagStat[]> {
+  const result = await prepare(
+    db,
+    "SELECT tags_json FROM memories WHERE deleted_at IS NULL ORDER BY updated_at DESC",
+  ).all<{ tags_json: string | null }>();
+  const rows = rowsOf(result);
+  const byKey = new Map<string, MemoryTagStat>();
+  for (const row of rows) {
+    const seenInRow = new Set<string>();
+    for (const tag of parseTags(row.tags_json)) {
+      const key = normalizeTagKey(tag);
+      if (!key || seenInRow.has(key)) continue;
+      seenInRow.add(key);
+      const found = byKey.get(key);
+      if (found) found.count++;
+      else byKey.set(key, { name: tag.trim().replace(/\s+/g, " "), count: 1 });
+    }
+  }
+  return Array.from(byKey.values()).sort((a, b) =>
+    b.count !== a.count ? b.count - a.count : a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
+  );
+}
+
+export async function listMemoryTags(db: D1Database): Promise<string[]> {
+  return (await listMemoryTagStats(db)).map((stat) => stat.name);
+}
+
+// 合并写入前的全量读取：不能走 listMemories 的 500 条上限。
+export async function listAllActiveMemories(db: D1Database): Promise<MemoryRow[]> {
+  const result = await prepare(
+    db,
+    "SELECT * FROM memories WHERE deleted_at IS NULL ORDER BY updated_at DESC",
+  ).all<MemoryRow>();
+  return rowsOf(result);
+}
+
+// 合并映射算完后的统一落库：只改 tags_json / version / updated_at，
+// 不裁标签数量，也不动 ai_state 与内容。分批 batch，避免单次语句过多。
+export async function rewriteMemoryTags(
+  db: D1Database,
+  updates: Array<{ id: string; tags: string[] }>,
+  now: number,
+): Promise<number> {
+  let written = 0;
+  for (let offset = 0; offset < updates.length; offset += 50) {
+    const chunk = updates.slice(offset, offset + 50);
+    await db.batch(
+      chunk.map((entry) =>
+        prepare(db, "UPDATE memories SET tags_json = ?, version = version + 1, updated_at = ? WHERE id = ?", [
+          JSON.stringify(entry.tags),
+          now,
+          entry.id,
+        ]),
+      ),
+    );
+    written += chunk.length;
+  }
+  return written;
+}
+
 export function memoryPublic(row: MemoryRow): Record<string, unknown> {
   const view: Record<string, unknown> = {
     id: row.id,

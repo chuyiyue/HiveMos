@@ -13,8 +13,14 @@ import {
   applyAiTags,
   createMemory,
   getMemoryRow,
+  listAllActiveMemories,
+  listMemoryTagStats,
+  listMemoryTags,
+  normalizeTagKey,
   parseTags,
+  rewriteMemoryTags,
   type MemoryRow,
+  type MemoryTagStat,
 } from "./memory";
 
 // gemma-4 是推理模型：先吐 reasoning 再给正文，max_tokens 给小了正文为空、
@@ -23,6 +29,10 @@ const SPLIT_MAX_TOKENS = 4096;
 const SPLIT_TIMEOUT_MS = 60000;
 const TAG_MAX_TOKENS = 2048;
 const TAG_TIMEOUT_MS = 45000;
+const MERGE_MAX_TOKENS = 2048;
+const MERGE_TIMEOUT_MS = 45000;
+const TAG_LIMIT = 3;
+const MERGE_TAG_LIMIT = 60;
 const INGEST_TEXT_MAX = 20000;
 const POINT_CONTENT_MAX = 2000;
 const MAX_POINTS = 50;
@@ -76,20 +86,28 @@ async function runAi(
   }
 }
 
-// 标签清洗与注册表 AI 打标同口径：折叠空白、单个不超过 32 字、
-// 大小写不敏感去重、上限截断。
-function cleanAiTags(value: unknown, limit: number): string[] {
+// AI 返回标签的唯一 normalize 入口（拆分、单条补标、批量补标共用）：
+// trim + 折叠空白；与已有标签库按大小写/空格归一匹配，等价的直接换成
+// 库里现有写法；同 key 去重；最后截断到 3 个。超过 32 字的新词丢弃
+// （已有标签本身较长时仍按库里的写法保留）。
+export function normalizeAiTags(value: unknown, existing: string[], limit = TAG_LIMIT): string[] {
   if (!Array.isArray(value)) return [];
+  const library = new Map<string, string>();
+  for (const tag of existing) {
+    const key = normalizeTagKey(tag);
+    if (key && !library.has(key)) library.set(key, tag.trim().replace(/\s+/g, " "));
+  }
   const tags: string[] = [];
   const seen = new Set<string>();
   for (const item of value) {
     if (typeof item !== "string") continue;
-    const tag = item.trim().replace(/\s+/g, " ");
-    if (!tag || tag.length > 32) continue;
-    const key = tag.toLowerCase();
-    if (seen.has(key)) continue;
+    const raw = item.trim().replace(/\s+/g, " ");
+    if (!raw) continue;
+    const key = normalizeTagKey(raw);
+    const canonical = library.get(key) ?? (raw.length <= 32 ? raw : "");
+    if (!canonical || seen.has(key)) continue;
     seen.add(key);
-    tags.push(tag);
+    tags.push(canonical);
     if (tags.length >= limit) break;
   }
   return tags;
@@ -112,7 +130,7 @@ export interface SplitPoint {
 
 // 解析拆分结果：容错去围栏、截取 JSON 数组；元素不合规就跳过，
 // 全部不可用返回 null（调用方据此退化整段保存）。
-export function parseSplitPayload(text: string | null): SplitPoint[] | null {
+export function parseSplitPayload(text: string | null, existing: string[] = []): SplitPoint[] | null {
   if (!text) return null;
   const slice = stripFenceAndSlice(text, "[", "]");
   if (!slice) return null;
@@ -132,14 +150,14 @@ export function parseSplitPayload(text: string | null): SplitPoint[] | null {
     if (!content) continue;
     points.push({
       content: content.slice(0, POINT_CONTENT_MAX),
-      tags: cleanAiTags((item as { tags?: unknown }).tags, 6),
+      tags: normalizeAiTags((item as { tags?: unknown }).tags, existing, TAG_LIMIT),
     });
     if (points.length >= MAX_POINTS) break;
   }
   return points.length > 0 ? points : null;
 }
 
-export function parseTagsPayload(text: string | null): string[] | null {
+export function parseTagsPayload(text: string | null, existing: string[] = []): string[] | null {
   if (!text) return null;
   const slice = stripFenceAndSlice(text, "{", "}");
   if (!slice) return null;
@@ -149,28 +167,41 @@ export function parseTagsPayload(text: string | null): string[] | null {
   } catch {
     return null;
   }
-  const tags = cleanAiTags(parsed.tags, 6);
+  const tags = normalizeAiTags(parsed.tags, existing, TAG_LIMIT);
   return tags.length > 0 ? tags : null;
 }
 
 const SPLIT_SYSTEM =
-  "你负责把用户的一段话拆成独立的记忆点，并给每个记忆点打标签。你只输出一个 JSON 数组，不要输出其他文字。数组元素格式为 {\"content\":\"一个记忆点\",\"tags\":[\"标签\"]}。拆分规则：一个独立事实或偏好算一个记忆点，content 用一句简洁陈述完整转述这个事实，保留原意，不要增删或推测原文没有的信息，不要合并多个事实；tags 给每个记忆点 1 到 4 个中文短标签";
+  "你负责把用户的一段话拆成独立的记忆点，并给每个记忆点打标签。你只输出一个 JSON 数组，不要输出其他文字。数组元素格式为 {\"content\":\"一个记忆点\",\"tags\":[\"标签\"]}。拆分规则：一个独立事实或偏好算一个记忆点，content 用一句简洁陈述完整转述这个事实，保留原意，不要增删或推测原文没有的信息，不要合并多个事实；tags 给每个记忆点 1 到 3 个中文短标签";
 
 const TAG_SYSTEM =
-  "你负责给一条记忆打标签。你只输出一个 JSON 对象，不要输出其他文字。格式为 {\"tags\":[\"标签\"]}，给 1 到 4 个中文短标签，概括这条记忆的主题";
+  "你负责给一条记忆打标签。你只输出一个 JSON 对象，不要输出其他文字。格式为 {\"tags\":[\"标签\"]}，给 1 到 3 个中文短标签，概括这条记忆的主题";
 
-export async function splitAndTag(env: Env, text: string): Promise<SplitPoint[] | null> {
+const TAG_RULES =
+  "标签规则：优先复用已有标签库里的标签；意思相近时必须用已有标签，禁止创造同义新词；每条记忆最多 3 个标签（1 到 3 个）；标签是简短的类目词，不要把一次性的内容词（具体令牌、人名、产品名）当标签。";
+
+// 三条打标路径共用的提示词组装：规则写死，标签库按全量去重清单注入；
+// 新系统没有标签时只给规则，不留空库占位。
+function tagSystem(base: string, existing: string[]): string {
+  const library = existing.length
+    ? "已有标签库（优先复用）：" + existing.join("、")
+    : "已有标签库：暂无（新系统，没有可复用的标签，按规则直接给出类目标签）。";
+  return base + "\n" + TAG_RULES + "\n" + library;
+}
+
+export async function splitAndTag(env: Env, text: string, existing: string[]): Promise<SplitPoint[] | null> {
   // 输入太长时截断喂给 AI 的部分（落库退化路径仍存全文）
   const feed = text.length > 8000 ? text.slice(0, 8000) : text;
-  const raw = await runAi(env, SPLIT_SYSTEM, feed, SPLIT_MAX_TOKENS, SPLIT_TIMEOUT_MS);
-  return parseSplitPayload(raw);
+  const raw = await runAi(env, tagSystem(SPLIT_SYSTEM, existing), feed, SPLIT_MAX_TOKENS, SPLIT_TIMEOUT_MS);
+  return parseSplitPayload(raw, existing);
 }
 
-export async function suggestTags(env: Env, title: string, content: string): Promise<string[] | null> {
+export async function suggestTags(env: Env, title: string, content: string, existing: string[]): Promise<string[] | null> {
   const user = "标题：" + title + "\n内容：" + (content || "").slice(0, 1200);
-  const raw = await runAi(env, TAG_SYSTEM, user, TAG_MAX_TOKENS, TAG_TIMEOUT_MS);
-  return parseTagsPayload(raw);
+  const raw = await runAi(env, tagSystem(TAG_SYSTEM, existing), user, TAG_MAX_TOKENS, TAG_TIMEOUT_MS);
+  return parseTagsPayload(raw, existing);
 }
+
 
 function deriveTitle(text: string): string {
   const flat = text.replace(/\s+/g, " ").trim();
@@ -201,6 +232,20 @@ async function insertPoint(
   throw new MemError("同名记忆过多，请改短内容后重试", 409);
 }
 
+// 拆分点标签 + 面板手填标签：只按归一 key 去重。手填是人工意图，不因
+// 自动打标被砍掉——「最多 3 个」约束的是 AI 自己给的那一份。
+function mergeWithUserTags(aiTags: string[], userTags: string[]): string[] {
+  const tags: string[] = [];
+  const seen = new Set<string>();
+  for (const tag of [...aiTags, ...userTags]) {
+    const key = normalizeTagKey(tag);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    tags.push(tag);
+  }
+  return tags;
+}
+
 export interface IngestResult {
   split: boolean;
   memories: MemoryRow[];
@@ -221,14 +266,16 @@ export async function ingestMemories(
   const userTags: string[] = Array.isArray(input.tags)
     ? Array.from(new Set(input.tags.filter((x): x is string => typeof x === "string").map((x) => x.trim()).filter(Boolean)))
     : [];
-  const points = await splitAndTag(env, text);
+  // 已有标签库：一次查询，提示词注入与 normalize 复用同一份清单。
+  const existing = await listMemoryTags(env.DB);
+  const points = await splitAndTag(env, text, existing);
   if (points && points.length > 0) {
     const rows: MemoryRow[] = [];
     for (const point of points) {
       rows.push(
         await insertPoint(
           env.DB,
-          { ...base, title: deriveTitle(point.content), content: point.content, tags: [...point.tags, ...userTags], ai_state: "split" },
+          { ...base, title: deriveTitle(point.content), content: point.content, tags: mergeWithUserTags(point.tags, userTags), ai_state: "split" },
           channel,
           now,
         ),
@@ -245,7 +292,12 @@ export async function ingestMemories(
   return { split: false, memories: [row] };
 }
 
-export type SuggestTagsFn = (env: Env, title: string, content: string) => Promise<string[] | null>;
+export type SuggestTagsFn = (
+  env: Env,
+  title: string,
+  content: string,
+  existing?: string[],
+) => Promise<string[] | null>;
 
 export interface TagOneResult {
   memory: MemoryRow;
@@ -279,8 +331,11 @@ export async function tagOneMemory(
   const row = await getMemoryRow(env.DB, id);
   if (!row) throw new MemError("记忆不存在或已删除", 404);
   if (!isUntagged(row)) return { memory: row, skipped: true };
-  const tags = await suggest(env, row.title, row.content);
-  if (!tags) throw new MemError("AI 暂不可用，未能打标签", 502);
+  const existing = await listMemoryTags(env.DB);
+  const suggested = await suggest(env, row.title, row.content, existing);
+  // 注入的 suggest 也走同一道 normalize，保证三条路径落库口径一致。
+  const tags = normalizeAiTags(suggested, existing);
+  if (!tags.length) throw new MemError("AI 暂不可用，未能打标签", 502);
   return { memory: await applyAiTags(env.DB, id, tags, channel, now), skipped: false };
 }
 
@@ -305,16 +360,20 @@ export async function tagUntaggedMemories(
   const all = (Array.isArray(result) ? result : (result.results ?? [])) as MemoryRow[];
   const untagged = all.filter(isUntagged);
   const rows = untagged.slice(0, limit);
+  // 标签库整批只查一次；本批新打上的标签并进清单，后续条目也能复用。
+  const existing = await listMemoryTags(env.DB);
   let tagged = 0;
   let failed = 0;
   for (const row of rows) {
-    const tags = await suggest(env, row.title, row.content);
-    if (!tags) {
+    const suggested = await suggest(env, row.title, row.content, existing);
+    const tags = normalizeAiTags(suggested, existing);
+    if (!tags.length) {
       failed++;
       continue;
     }
     try {
       await applyAiTags(env.DB, row.id, tags, channel, Date.now());
+      for (const tag of tags) if (!existing.some((item) => normalizeTagKey(item) === normalizeTagKey(tag))) existing.push(tag);
       tagged++;
     } catch {
       failed++;
@@ -322,4 +381,166 @@ export async function tagUntaggedMemories(
   }
   void now;
   return { scanned: rows.length, tagged, failed, remaining: untagged.length - tagged };
+}
+
+// ---- 存量近义标签合并 ----
+// 标签总数不多才做聚类：清单太长时 AI 分组会失真，先人工整理更可靠。
+const MERGE_SYSTEM =
+  "你负责整理记忆的标签库：把意思相近、重复的标签分到同一组，并给每组选一个保留标签。你只输出一个 JSON 对象，不要输出其他文字。对象格式为 {\"要改的标签\":\"保留的标签\"}：键是会被替换掉的标签，值是该组保留的标签。规则：只能用清单里已有的标签原文，禁止新造标签；每组的保留标签必须是这一组里使用条数最多的那个已有标签；意思不同的标签不要硬合并；没有可合并的标签就输出空对象 {}。";
+
+export type MergeMappingFn = (env: Env, stats: MemoryTagStat[]) => Promise<Record<string, string> | null>;
+
+export function parseMergePayload(text: string | null): Record<string, string> | null {
+  if (!text) return null;
+  const slice = stripFenceAndSlice(text, "{", "}");
+  if (!slice) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(slice);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const mapping: Record<string, string> = {};
+  for (const [from, to] of Object.entries(parsed as Record<string, unknown>)) {
+    if (typeof to === "string" && from.trim() && to.trim()) mapping[from.trim()] = to.trim();
+  }
+  return mapping;
+}
+
+export async function askMergeMapping(env: Env, stats: MemoryTagStat[]): Promise<Record<string, string> | null> {
+  const user = "标签清单（括号内是使用条数）：\n" + stats.map((stat) => stat.name + "（" + stat.count + " 条）").join("\n");
+  const raw = await runAi(env, MERGE_SYSTEM, user, MERGE_MAX_TOKENS, MERGE_TIMEOUT_MS);
+  return parseMergePayload(raw);
+}
+
+// 映射的代码侧校验（不只靠提示词）：
+//   - 键和值都必须命中已有标签（按归一 key 匹配，且改回库里的原文写法）；
+//   - 自映射丢掉；
+//   - 同一条映射链的标签归为一组（AI 逐对给出，连成组才是真正的组）；
+//   - 每组的保留标签强制取组内条数最多的那个（并列时优先 AI 指的那个）；
+//   - 最终只留「要改 → 保留」且两边不同的项。不合法的条目直接丢弃，
+//     一条都不改的任务交给调用方（plan 为空时调用方报错）。
+export function planTagMerge(mapping: Record<string, string>, stats: MemoryTagStat[]): Record<string, string> {
+  const byKey = new Map<string, MemoryTagStat>();
+  for (const stat of stats) byKey.set(normalizeTagKey(stat.name), stat);
+  const parent = new Map<string, string>();
+  function find(key: string): string {
+    let root = key;
+    while (parent.get(root) !== undefined && parent.get(root) !== root) root = parent.get(root) as string;
+    let cursor = key;
+    while (parent.get(cursor) !== undefined && parent.get(cursor) !== cursor) {
+      const next = parent.get(cursor) as string;
+      parent.set(cursor, root);
+      cursor = next;
+    }
+    return root;
+  }
+  function union(a: string, b: string): void {
+    if (!parent.has(a)) parent.set(a, a);
+    if (!parent.has(b)) parent.set(b, b);
+    const rootA = find(a);
+    const rootB = find(b);
+    if (rootA !== rootB) parent.set(rootA, rootB);
+  }
+  const valueHits = new Map<string, number>();
+  for (const [rawFrom, rawTo] of Object.entries(mapping)) {
+    if (typeof rawTo !== "string") continue;
+    const from = normalizeTagKey(rawFrom);
+    const to = normalizeTagKey(rawTo);
+    if (!from || !to || from === to) continue;
+    if (!byKey.has(from) || !byKey.has(to)) continue;
+    union(from, to);
+    valueHits.set(to, (valueHits.get(to) ?? 0) + 1);
+  }
+  const groups = new Map<string, string[]>();
+  for (const key of parent.keys()) {
+    const root = find(key);
+    const members = groups.get(root) ?? [];
+    members.push(key);
+    groups.set(root, members);
+  }
+  const plan: Record<string, string> = {};
+  for (const members of groups.values()) {
+    if (members.length < 2) continue;
+    // 保留标签 = 条数最多；并列时取被 AI 当成值的次数更多、再按名称定序。
+    let keep = members[0] as string;
+    for (const member of members) {
+      const stat = byKey.get(member);
+      const keepStat = byKey.get(keep);
+      const count = stat?.count ?? 0;
+      const keepCount = keepStat?.count ?? 0;
+      if (count > keepCount) {
+        keep = member;
+        continue;
+      }
+      if (count < keepCount) continue;
+      const hits = valueHits.get(member) ?? 0;
+      const keepHits = valueHits.get(keep) ?? 0;
+      if (hits > keepHits || (hits === keepHits && member < keep)) keep = member;
+    }
+    const keepTag = byKey.get(keep);
+    if (!keepTag) continue;
+    for (const member of members) {
+      if (member === keep) continue;
+      const stat = byKey.get(member);
+      if (stat) plan[stat.name] = keepTag.name;
+    }
+  }
+  return plan;
+}
+
+// 映射落到记忆上：按归一键替换，同一组撞出的重复自然去掉。
+// 合并只减少同义项，不因为这个动作再砍标签数量（不截断）。
+function mapMemoryTags(tags: string[], replace: Map<string, string>): string[] {
+  const next: string[] = [];
+  const seen = new Set<string>();
+  for (const tag of tags) {
+    const target = replace.get(normalizeTagKey(tag));
+    const value = target ?? tag.trim().replace(/\s+/g, " ");
+    const key = normalizeTagKey(value);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    next.push(value);
+  }
+  return next;
+}
+
+export interface MergeTagsResult {
+  mapping: Record<string, string>;
+  updated: number;
+}
+
+// 存量近义合并：先算全量映射（含代码侧校验），再一次性落库。
+// AI 不可用或映射不可用 → 抛错，一条都不改。
+export async function mergeSimilarTags(
+  env: Env,
+  channel: Channel,
+  now: number,
+  ask: MergeMappingFn = askMergeMapping,
+): Promise<MergeTagsResult> {
+  void channel;
+  const stats = await listMemoryTagStats(env.DB);
+  if (stats.length < 2) return { mapping: {}, updated: 0 };
+  if (stats.length > MERGE_TAG_LIMIT) {
+    throw new MemError("当前有 " + stats.length + " 个标签，超过 " + MERGE_TAG_LIMIT + " 个上限，请先手动整理再合并", 400);
+  }
+  const mapping = await ask(env, stats);
+  if (!mapping) throw new MemError("AI 暂不可用，标签没有做任何改动", 502);
+  const plan = planTagMerge(mapping, stats);
+  if (Object.keys(plan).length === 0) {
+    if (Object.keys(mapping).length > 0) throw new MemError("AI 返回的标签合并结果不合法，标签没有做任何改动", 502);
+    return { mapping: {}, updated: 0 };
+  }
+  const replace = new Map<string, string>();
+  for (const [from, to] of Object.entries(plan)) replace.set(normalizeTagKey(from), to);
+  const updates: Array<{ id: string; tags: string[] }> = [];
+  for (const row of await listAllActiveMemories(env.DB)) {
+    const tags = parseTags(row.tags_json);
+    const next = mapMemoryTags(tags, replace);
+    if (next.length === tags.length && next.every((tag, index) => tag === tags[index])) continue;
+    updates.push({ id: row.id, tags: next });
+  }
+  const updated = updates.length ? await rewriteMemoryTags(env.DB, updates, now) : 0;
+  return { mapping: plan, updated };
 }
