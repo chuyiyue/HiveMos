@@ -1377,6 +1377,7 @@
       var pendingBlob = null;
       var pendingPreviewUrl = "";
       var linkOk = false;
+      var currentPane = "icons";
       var linkTimer = null;
 
       var dialog = document.createElement("dialog");
@@ -1405,7 +1406,6 @@
         '<input type="file" accept="image/*" data-avatar-file hidden />' +
         '<div class="manage-actions">' +
         '<button type="button" class="secondary" data-avatar-choose>选择图片</button>' +
-        '<button type="button" data-avatar-upload-save disabled>保存这张图</button>' +
         "</div>" +
         '<p class="subtle">选图后会自动居中裁剪并缩放为 128×128 方图再保存，文件不超过 200 KB</p>' +
         "</div>" +
@@ -1413,11 +1413,13 @@
         '<label>图片链接<input data-avatar-url type="url" inputmode="url" placeholder="https://example.com/avatar.png" autocomplete="off" /></label>' +
         '<div class="avatar-preview" data-avatar-link-preview hidden><img alt="头像预览" /></div>' +
         '<p class="subtle" data-avatar-link-hint>输入 http 或 https 链接，预览加载成功后才能保存</p>' +
-        '<div class="manage-actions"><button type="button" data-avatar-link-save disabled>保存链接</button></div>' +
         "</div>" +
         '<div class="manage-actions avatar-picker-foot">' +
         '<button type="button" class="secondary" data-avatar-default>恢复默认</button>' +
+        '<span class="avatar-picker-right">' +
         '<button type="button" class="secondary" data-avatar-cancel>取消</button>' +
+        '<button type="button" data-avatar-save disabled hidden>保存</button>' +
+        "</span>" +
         "</div>";
       card.append(heading, body);
       dialog.append(card);
@@ -1436,12 +1438,11 @@
       var errorBox = body.querySelector("[data-avatar-error]");
       var fileInput = body.querySelector("[data-avatar-file]");
       var uploadPreview = body.querySelector("[data-avatar-upload-preview]");
-      var uploadSaveBtn = body.querySelector("[data-avatar-upload-save]");
       var urlInput = body.querySelector("[data-avatar-url]");
       var linkPreview = body.querySelector("[data-avatar-link-preview]");
       var linkPreviewImg = linkPreview.querySelector("img");
       var linkHint = body.querySelector("[data-avatar-link-hint]");
-      var linkSaveBtn = body.querySelector("[data-avatar-link-save]");
+      var saveBtn = body.querySelector("[data-avatar-save]");
       var LINK_HINT_DEFAULT = "输入 http 或 https 链接，预览加载成功后才能保存";
 
       function showAvatarError(message) {
@@ -1509,6 +1510,20 @@
         resultsBox.innerHTML = html;
       }
 
+      // One save button in the footer serves the upload and link panes;
+      // the icon library applies instantly and never shows it.
+      function syncAvatarSave() {
+        if (currentPane === "upload") {
+          saveBtn.hidden = false;
+          saveBtn.disabled = !pendingBlob;
+        } else if (currentPane === "link") {
+          saveBtn.hidden = false;
+          saveBtn.disabled = !linkOk;
+        } else {
+          saveBtn.hidden = true;
+        }
+      }
+
       function showPane(name) {
         Array.prototype.forEach.call(body.querySelectorAll("[data-avatar-tab]"), function (tab) {
           tab.setAttribute("aria-selected", tab.getAttribute("data-avatar-tab") === name ? "true" : "false");
@@ -1516,6 +1531,8 @@
         Array.prototype.forEach.call(body.querySelectorAll("[data-avatar-pane]"), function (pane) {
           pane.hidden = pane.getAttribute("data-avatar-pane") !== name;
         });
+        currentPane = name;
+        syncAvatarSave();
       }
 
       function finishAvatarChange(message) {
@@ -1603,7 +1620,7 @@
         if (pendingPreviewUrl) URL.revokeObjectURL(pendingPreviewUrl);
         pendingPreviewUrl = URL.createObjectURL(blob);
         uploadPreview.innerHTML = '<img alt="头像预览" src="' + pendingPreviewUrl + '" />';
-        uploadSaveBtn.disabled = false;
+        syncAvatarSave();
       }
 
       function saveAvatarUpload() {
@@ -1646,7 +1663,7 @@
       function checkLinkPreview() {
         var value = urlInput.value.trim();
         linkOk = false;
-        linkSaveBtn.disabled = true;
+        syncAvatarSave();
         if (!value) {
           linkPreview.hidden = true;
           linkHint.textContent = LINK_HINT_DEFAULT;
@@ -1664,7 +1681,7 @@
           linkOk = true;
           linkPreviewImg.src = value;
           linkPreview.hidden = false;
-          linkSaveBtn.disabled = false;
+          syncAvatarSave();
           linkHint.textContent = "预览加载成功，可以保存";
         };
         probe.onerror = function () {
@@ -1739,12 +1756,9 @@
           fileInput.click();
           return;
         }
-        if (eventTarget.closest("[data-avatar-upload-save]")) {
-          saveAvatarUpload();
-          return;
-        }
-        if (eventTarget.closest("[data-avatar-link-save]")) {
-          saveAvatarLink();
+        if (eventTarget.closest("[data-avatar-save]")) {
+          if (currentPane === "upload") saveAvatarUpload();
+          else if (currentPane === "link") saveAvatarLink();
           return;
         }
         if (eventTarget.closest("[data-avatar-default]")) {
@@ -2446,6 +2460,165 @@
     );
   });
 
+
+  // ---- Custom select enhancer ------------------------------------------------
+  // Native <select> elements stay in the DOM as the data source: every
+  // existing .value read, FormData harvest and change listener keeps
+  // working. Each select gets a styled button + popover list next to it.
+  // Skip a select with data-cs-skip; call C.refreshSelects(root) after
+  // refilling options from code so the button label re-syncs.
+  var csOpenWrap = null;
+
+  function csLabelOf(select) {
+    var opt = select.options[select.selectedIndex];
+    return opt ? opt.textContent : "";
+  }
+
+  function csSyncWrap(wrap) {
+    var select = wrap.querySelector("select.cs-native");
+    if (!select) return;
+    var label = wrap.querySelector(".cs-label");
+    if (label) label.textContent = csLabelOf(select);
+    var btn = wrap.querySelector(".cs-btn");
+    if (btn) btn.disabled = !!select.disabled;
+  }
+
+  function csBuildList(wrap) {
+    var select = wrap.querySelector("select.cs-native");
+    var list = wrap.querySelector(".cs-list");
+    if (!select || !list) return;
+    if (!select.options.length) {
+      list.innerHTML = '<div class="cs-empty">无可选项</div>';
+      return;
+    }
+    var html = "";
+    Array.prototype.forEach.call(select.options, function (opt, idx) {
+      var selected = idx === select.selectedIndex;
+      html +=
+        '<button type="button" class="cs-opt' +
+        (selected ? " is-selected" : "") +
+        '" role="option" data-cs-index="' +
+        idx +
+        '" aria-selected="' +
+        (selected ? "true" : "false") +
+        '"' +
+        (opt.disabled ? " disabled" : "") +
+        '><span class="cs-opt-text">' +
+        escapeHtml(opt.textContent) +
+        "</span>" +
+        (selected
+          ? '<svg class="icon cs-check" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12.5l5 5L20 6.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+          : "") +
+        "</button>";
+    });
+    list.innerHTML = html;
+  }
+
+  function csCloseList() {
+    if (!csOpenWrap) return;
+    var list = csOpenWrap.querySelector(".cs-list");
+    if (list) list.hidden = true;
+    var btn = csOpenWrap.querySelector(".cs-btn");
+    if (btn) btn.setAttribute("aria-expanded", "false");
+    csOpenWrap = null;
+  }
+
+  function csOpenList(wrap) {
+    if (csOpenWrap === wrap) return;
+    csCloseList();
+    csBuildList(wrap);
+    var list = wrap.querySelector(".cs-list");
+    var btn = wrap.querySelector(".cs-btn");
+    if (list) list.hidden = false;
+    if (btn) btn.setAttribute("aria-expanded", "true");
+    csOpenWrap = wrap;
+  }
+
+  function enhanceSelect(select) {
+    if (!select || select.dataset.csEnhanced) return;
+    if (select.hasAttribute("data-cs-skip") || select.multiple || select.size > 1) return;
+    if (!select.parentNode) return;
+    select.dataset.csEnhanced = "1";
+    var wrap = document.createElement("span");
+    wrap.className = "cs-wrap";
+    select.parentNode.insertBefore(wrap, select);
+    wrap.appendChild(select);
+    select.classList.add("cs-native");
+    var btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "cs-btn";
+    btn.setAttribute("aria-haspopup", "listbox");
+    btn.setAttribute("aria-expanded", "false");
+    btn.innerHTML =
+      '<span class="cs-label"></span>' +
+      '<svg class="icon cs-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    var list = document.createElement("div");
+    list.className = "cs-list";
+    list.setAttribute("role", "listbox");
+    list.hidden = true;
+    wrap.append(btn, list);
+    csSyncWrap(wrap);
+    btn.addEventListener("click", function () {
+      if (btn.disabled) return;
+      if (csOpenWrap === wrap) csCloseList();
+      else csOpenList(wrap);
+    });
+    list.addEventListener("click", function (event) {
+      var target = event.target instanceof Element ? event.target.closest("[data-cs-index]") : null;
+      if (!target || target.disabled) return;
+      var idx = Number(target.getAttribute("data-cs-index"));
+      if (select.selectedIndex !== idx) {
+        select.selectedIndex = idx;
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+      csSyncWrap(wrap);
+      csCloseList();
+      btn.focus();
+    });
+    select.addEventListener("change", function () {
+      csSyncWrap(wrap);
+    });
+  }
+
+  function refreshSelects(root) {
+    var scope = root && root.querySelectorAll ? root : document;
+    if (root && root.tagName === "SELECT") enhanceSelect(root);
+    Array.prototype.forEach.call(scope.querySelectorAll("select"), enhanceSelect);
+    Array.prototype.forEach.call(scope.querySelectorAll(".cs-wrap"), function (wrap) {
+      csSyncWrap(wrap);
+      if (csOpenWrap === wrap) csBuildList(wrap);
+    });
+  }
+
+  function initCustomSelects() {
+    if (!document.body) return;
+    refreshSelects(document);
+    document.addEventListener("click", function (event) {
+      if (csOpenWrap && !csOpenWrap.contains(event.target)) csCloseList();
+    });
+    document.addEventListener("keydown", function (event) {
+      if (event.key === "Escape") csCloseList();
+    });
+    var observer = new MutationObserver(function (mutations) {
+      mutations.forEach(function (mutation) {
+        Array.prototype.forEach.call(mutation.addedNodes, function (node) {
+          if (!(node instanceof Element)) return;
+          if (node.tagName === "SELECT") enhanceSelect(node);
+          else if (node.querySelectorAll) {
+            Array.prototype.forEach.call(node.querySelectorAll("select"), enhanceSelect);
+          }
+        });
+      });
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", initCustomSelects);
+  } else {
+    initCustomSelects();
+  }
+
   window.HiveCommon = {
     escapeHtml: escapeHtml,
     maskTail: maskTail,
@@ -2487,5 +2660,6 @@
     groupSelect: groupSelect,
     toast: toast,
     groupedSections: groupedSections,
+    refreshSelects: refreshSelects,
   };
 })();
