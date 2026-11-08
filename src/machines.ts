@@ -62,6 +62,10 @@ export interface MachineRow {
   probe_at: number | null;
   probe_error: string;
   host_fingerprint: string;
+  connection_id: string;
+  remote_id: string;
+  remote_name: string;
+  last_sync_at: number | null;
   ai_summary: string | null;
   ai_tags: string | null;
   created_at: number;
@@ -97,12 +101,16 @@ export interface PublicMachine {
   access_note: string;
   cf_account_id: string;
   api_token_tail: string;
+  connection_id: string;
+  remote_id: string;
+  remote_name: string;
+  last_sync_at: number | null;
   created_at: number;
   updated_at: number;
 }
 
 const COLUMNS =
-  "id, kind, name, region, spec, description, version, status, binding, last_heartbeat_at, note, hostname, os, ip, ssh_host, ssh_port, ssh_user, auth_type, ssh_secret_enc, ssh_tail, kernel, arch, probe_status, probe_at, probe_error, host_fingerprint, vendor, access_note, cf_account_id, api_token_enc, api_token_tail, ai_summary, ai_tags, created_at, updated_at";
+  "id, kind, name, region, spec, description, version, status, binding, last_heartbeat_at, note, hostname, os, ip, ssh_host, ssh_port, ssh_user, auth_type, ssh_secret_enc, ssh_tail, kernel, arch, probe_status, probe_at, probe_error, host_fingerprint, vendor, access_note, cf_account_id, api_token_enc, api_token_tail, connection_id, remote_id, remote_name, last_sync_at, ai_summary, ai_tags, created_at, updated_at";
 
 const ID_PREFIX: Record<string, string> = { server: "sv_", cloud: "pc_", worker: "wk_" };
 
@@ -142,6 +150,10 @@ export function machinePublic(row: MachineRow): PublicMachine {
     access_note: row.access_note,
     cf_account_id: row.cf_account_id,
     api_token_tail: row.api_token_tail,
+    connection_id: row.connection_id,
+    remote_id: row.remote_id,
+    remote_name: row.remote_name,
+    last_sync_at: row.last_sync_at,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -188,7 +200,7 @@ export function vaultKeyOf(env: unknown): ContentKey {
   return resolveContentKey(typeof raw === "string" ? raw : undefined);
 }
 
-async function sealMachineSecret(key: ContentKey, plaintext: string): Promise<string> {
+export async function sealMachineSecret(key: ContentKey, plaintext: string): Promise<string> {
   if (key.state === "invalid") throw new MachineError(503, "保险库密钥配置不正确，暂时不能保存机密");
   if (key.state !== "on") throw new MachineError(503, "保险库密钥未配置，暂时不能保存机密");
   const sealed = await sealString(key, plaintext);
@@ -196,7 +208,7 @@ async function sealMachineSecret(key: ContentKey, plaintext: string): Promise<st
   return sealed;
 }
 
-async function openMachineSecret(key: ContentKey, stored: string): Promise<string> {
+export async function openMachineSecret(key: ContentKey, stored: string): Promise<string> {
   if (!stored) return "";
   if (key.state === "invalid") throw new MachineError(503, "保险库密钥配置不正确，无法查看");
   if (key.state !== "on") throw new MachineError(503, "保险库密钥未配置，无法查看");
