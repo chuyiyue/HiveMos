@@ -214,6 +214,18 @@ button.copy-btn:hover { background: var(--surface-hover); }
 
 /* 选主机网格：左右各一条小条 */
 .wiz-devices { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+
+/* 总览：最近动态与告警同行各半 */
+.overview-split { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+.overview-split > * { min-width: 0; }
+@media (max-width: 860px) {
+  .overview-split { grid-template-columns: 1fr; }
+}
+
+/* 系统日志：筛选项与日志行放宽间距 */
+[data-panel="oplog"] .tag-row { gap: 8px; margin: 4px 0 10px; }
+[data-panel="oplog"] .tag { padding: 6px 13px; }
+[data-panel="oplog"] .feed { gap: 14px; margin-top: 12px; }
 .wiz-devices .wiz-device { margin-top: 0; padding: 8px 10px; }
 @media (max-width: 639px) {
   .wiz-devices { grid-template-columns: 1fr; }

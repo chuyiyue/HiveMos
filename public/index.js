@@ -124,8 +124,10 @@
       var alerts = Array.isArray(data.alerts) ? data.alerts : [];
       var html =
         "<div class=\"stack\">" +
-        C.section("最近动态", "", activity.length ? feedList(activity) : C.emptyState("还没有动态", "各模块的操作会汇总到这里")) +
+        '<div class="overview-split">' +
+        C.section("最近动态", "", activity.length ? feedList(activity.slice(0, 10)) : C.emptyState("还没有动态", "各模块的操作会汇总到这里")) +
         C.section("告警", "", alerts.length ? alertList(alerts) : C.emptyState("还没有告警", "运行中的异常会列在这里")) +
+        "</div>" +
         statCards(data.stats) +
         "</div>";
       renderOverview(html);
