@@ -51,11 +51,13 @@ import {
 } from "./tasks";
 
 import {
+  getMachineAccessForAgent,
   getMachineForAgent,
   listMachines,
   MachineError,
   machinePublic,
   reportMachine,
+  vaultKeyOf,
 } from "./machines";
 
 const MAX_BODY_BYTES = 64 * 1024;
@@ -379,6 +381,18 @@ const TOOLS = [
       additionalProperties: false,
     },
   },
+  {
+    name: "machines_get_access",
+    description: "取一台机器的接入凭据（调用先记一条取用审计）：服务器回 SSH 地址、端口、用户名与密码或私钥明文，Workers 回 Cloudflare 账号 ID 与 API 令牌明文，云主机回厂商与接入备注",
+    inputSchema: {
+      type: "object",
+      properties: {
+        machine_id: { type: "string", description: "机器 id" },
+        name: { type: "string", description: "机器名称" },
+      },
+      additionalProperties: false,
+    },
+  },
 ];
 
 // Every panel tool belongs to a permission domain (see PERMISSION_DOMAINS
@@ -410,6 +424,7 @@ const TOOL_DOMAINS: Record<string, string> = {
   machines_list: "machines",
   machines_get: "machines",
   machines_report: "machines",
+  machines_get_access: "machines",
 };
 
 function domainOfTool(name: string): string | null {
@@ -742,6 +757,14 @@ async function callMachinesTool(env: Env, id: unknown, name: string, args: Recor
   if (name === "machines_report") {
     const updated = await reportMachine(env.DB, args, agentId, now);
     return toolResult(id, { machine: machinePublic(updated) });
+  }
+  if (name === "machines_get_access") {
+    const machineId = argString(args, "machine_id") ?? "";
+    const machineName = argString(args, "name") ?? "";
+    if (!machineId.trim() && !machineName.trim()) return toolResult(id, "请提供 machine_id 或 name", true);
+    const access = await getMachineAccessForAgent(env.DB, machineId.trim(), machineName.trim(), agentId, vaultKeyOf(env), now);
+    if (!access) return toolResult(id, "机器不存在", true);
+    return toolResult(id, access);
   }
   return toolResult(id, "未知工具", true);
 }
