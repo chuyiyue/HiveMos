@@ -1,7 +1,7 @@
 // Admin REST for the registry. The caller has already checked the session.
 
 import { isCrossSite, json } from "./http";
-import { getSidebarPinLimit } from "./accounts";
+import { getSidebarPinLimit } from "./settings";
 import type { Env, WaitCtx } from "./env";
 import {
   clearAgentAvatar,

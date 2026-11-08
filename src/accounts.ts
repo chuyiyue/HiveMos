@@ -176,43 +176,6 @@ export async function setProfileUsername(db: D1Database, username: string): Prom
     .run();
 }
 
-// Sidebar pin limit: how many agents the rail shows in total (pinned ones
-// are never dropped; the limit caps the auto-filled remainder). Anything
-// outside 1-20 or unparsable falls back to the default, on read and write.
-export const SIDEBAR_PIN_LIMIT_DEFAULT = 5;
-const SIDEBAR_PIN_LIMIT_KEY = "sidebar_pin_limit";
-
-export function normalizeSidebarPinLimit(value: unknown): number {
-  const parsed = typeof value === "string" ? Number(value) : value;
-  if (typeof parsed === "number" && Number.isInteger(parsed) && parsed >= 1 && parsed <= 20) return parsed;
-  return SIDEBAR_PIN_LIMIT_DEFAULT;
-}
-
-export async function getSidebarPinLimit(db: D1Database): Promise<number> {
-  try {
-    const row = await db
-      .prepare("SELECT value FROM schema_meta WHERE key = ?")
-      .bind(SIDEBAR_PIN_LIMIT_KEY)
-      .first<{ value: string }>();
-    if (!row) return SIDEBAR_PIN_LIMIT_DEFAULT;
-    return normalizeSidebarPinLimit(row.value);
-  } catch (error) {
-    if (isMissingSchemaMeta(error)) return SIDEBAR_PIN_LIMIT_DEFAULT;
-    throw error;
-  }
-}
-
-export async function setSidebarPinLimit(db: D1Database, value: unknown): Promise<number> {
-  const limit = normalizeSidebarPinLimit(value);
-  await db
-    .prepare(
-      "INSERT INTO schema_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-    )
-    .bind(SIDEBAR_PIN_LIMIT_KEY, String(limit))
-    .run();
-  return limit;
-}
-
 export async function setUserRole(db: D1Database, userId: string, role: "admin" | "member"): Promise<void> {
   await db.prepare("UPDATE users SET role = ? WHERE id = ?").bind(role, userId).run();
 }

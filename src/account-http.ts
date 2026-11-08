@@ -10,12 +10,10 @@ import {
   deleteUserTotpTickets,
   findUserRecordById,
   getProfileUsername,
-  getSidebarPinLimit,
   listUserSessions,
   loginRetryAfterSeconds,
   recordAccountPasswordFailure,
   setProfileUsername,
-  setSidebarPinLimit,
   updatePasswordHash,
 } from "./accounts";
 import type { UserRecord } from "./accounts";
@@ -36,7 +34,6 @@ type PasswordCheck = "ok" | "bad" | "limited" | "missing";
 
 export async function handleAccountRequest(request: Request, env: Env, path: string): Promise<Response | null> {
   if (path === "/api/account/profile") return profile(request, env);
-  if (path === "/api/account/preferences") return preferences(request, env);
   if (path === "/api/account/password") return password(request, env);
   if (path === "/api/account/sessions") return sessions(request, env);
   if (path === "/api/account/sessions/revoke-others") return revokeOtherSessions(request, env);
@@ -50,37 +47,6 @@ async function profile(request: Request, env: Env): Promise<Response> {
   if (method === "GET") return readProfile(request, env);
   if (method === "POST") return updateProfile(request, env);
   return methodNotAllowed("GET, POST");
-}
-
-async function preferences(request: Request, env: Env): Promise<Response> {
-  const method = request.method.toUpperCase();
-  if (method === "GET") return readPreferences(request, env);
-  if (method === "PATCH") return updatePreferences(request, env);
-  return methodNotAllowed("GET, PATCH");
-}
-
-async function readPreferences(request: Request, env: Env): Promise<Response> {
-  const user = await requireAdminUser(request, env);
-  if (user instanceof Response) return user;
-  return json({ ok: true, preferences: { sidebar_pin_limit: await getSidebarPinLimit(env.DB) } });
-}
-
-async function updatePreferences(request: Request, env: Env): Promise<Response> {
-  const user = await requireSensitiveUser(request, env);
-  if (user instanceof Response) return user;
-  const body = await readJson(request);
-  if (!body.ok) return body.response;
-  if (!body.value || typeof body.value !== "object") return json({ ok: false, error: "请求格式不正确" }, 400);
-  const limit = await setSidebarPinLimit(env.DB, (body.value as { sidebar_pin_limit?: unknown }).sidebar_pin_limit);
-  await logOp(env.DB, {
-    actor: user.username,
-    module: "设置",
-    action: "修改",
-    targetId: user.id,
-    targetName: user.username,
-    text: `把侧边栏固定上限改为 ${limit}`,
-  });
-  return json({ ok: true, preferences: { sidebar_pin_limit: limit } });
 }
 
 async function password(request: Request, env: Env): Promise<Response> {
