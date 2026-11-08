@@ -793,7 +793,7 @@ export async function syncOneMachine(db: D1Database, key: ContentKey, machineId:
   }
   const remote = devices.find((device) => device.remoteId === machine.remote_id);
   if (!remote) {
-    await prepare(db, "UPDATE machines SET last_sync_at = ?, updated_at = ? WHERE id = ?", [now, now, machineId]);
+    await prepare(db, "UPDATE machines SET last_sync_at = ?, updated_at = ? WHERE id = ?", [now, now, machineId]).run();
     return { missing: true };
   }
   await prepare(db, "UPDATE machines SET name = ?, os = ?, spec = ?, ip = ?, status = ?, remote_name = ?, remote_state = ?, region = ?, last_sync_at = ?, updated_at = ? WHERE id = ?", [
@@ -808,7 +808,7 @@ export async function syncOneMachine(db: D1Database, key: ContentKey, machineId:
     now,
     now,
     machineId,
-  ]);
+  ]).run();
   return { missing: false };
 }
 
