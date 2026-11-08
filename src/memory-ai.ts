@@ -1,5 +1,6 @@
 // 记忆的 Workers AI 入口：面板自然语言保存时一次调用完成拆分 + 打标；
-// 已落库的条目（面板直存或 MCP 写入）事后补打标。AI 是地基不是门槛：
+// 已落库的条目（面板直存或 MCP 写入）事后补打标，且只给「标签为空」的
+// 记忆自动打标，已有标签的永不覆盖或补充。AI 是地基不是门槛：
 // 拆分不可用/超时/不可解析时，保存退化为整段一条（ai_state=failed），
 // 绝不因 AI 失败丢掉用户要存的内容。模型口径与注册表打标一致：
 // AI_MODEL 变量可配，缺省 gemma-4-26b-a4b-it，只输出 JSON、解析容错。
@@ -244,38 +245,70 @@ export async function ingestMemories(
   return { split: false, memories: [row] };
 }
 
-// 单条补打标：成功才落库；AI 不可用抛 502 让面板明确提示，状态不动。
-export async function tagOneMemory(env: Env, id: string, channel: Channel, now: number): Promise<MemoryRow> {
-  const row = await getMemoryRow(env.DB, id);
-  if (!row) throw new MemError("记忆不存在或已删除", 404);
-  const tags = await suggestTags(env, row.title, row.content);
-  if (!tags) throw new MemError("AI 暂不可用，未能打标签", 502);
-  return applyAiTags(env.DB, id, tags, channel, now);
+export type SuggestTagsFn = (env: Env, title: string, content: string) => Promise<string[] | null>;
+
+export interface TagOneResult {
+  memory: MemoryRow;
+  skipped: boolean;
 }
 
-// 批量补标：只处理未打标签且未经 AI 成功处理的条目（none / failed），
-// 逐条调用、逐条计数，单条失败不影响其余。
+export interface TagUntaggedResult {
+  scanned: number;
+  tagged: number;
+  failed: number;
+  remaining: number;
+}
+
+// 未打标只看实际标签内容：解析后为空数组 / null / '[]'（及非数组 JSON）
+// 才算未打标。不看 ai_state：用户手动加过标签或拆分落库时已有标签的，
+// 一律不自动覆盖或补充。
+function isUntagged(row: MemoryRow): boolean {
+  return parseTags(row.tags_json).length === 0;
+}
+
+// 单条补打标：已有 ≥1 个标签则跳过，不调 AI、不改数据。
+// 未打标时成功才落库；AI 不可用抛 502 让面板明确提示，状态不动。
+// suggest 可注入，便于本地验收证明跳过发生在 suggestTags 之前。
+export async function tagOneMemory(
+  env: Env,
+  id: string,
+  channel: Channel,
+  now: number,
+  suggest: SuggestTagsFn = suggestTags,
+): Promise<TagOneResult> {
+  const row = await getMemoryRow(env.DB, id);
+  if (!row) throw new MemError("记忆不存在或已删除", 404);
+  if (!isUntagged(row)) return { memory: row, skipped: true };
+  const tags = await suggest(env, row.title, row.content);
+  if (!tags) throw new MemError("AI 暂不可用，未能打标签", 502);
+  return { memory: await applyAiTags(env.DB, id, tags, channel, now), skipped: false };
+}
+
+// 批量补标：只选标签为空的记忆，已打标的一律不选、不调 AI。
+// 不看 ai_state。逐条调用、逐条计数，单条失败不影响其余。
+// 响应保留 scanned/tagged/failed，并带 remaining（剩余未打标数）。
 export async function tagUntaggedMemories(
   env: Env,
   limitInput: unknown,
   channel: Channel,
   now: number,
-): Promise<{ scanned: number; tagged: number; failed: number }> {
+  suggest: SuggestTagsFn = suggestTags,
+): Promise<TagUntaggedResult> {
   let limit = 20;
   if (typeof limitInput === "number" && Number.isFinite(limitInput)) {
     limit = Math.min(50, Math.max(1, Math.floor(limitInput)));
   }
   const result = await prepare(
     env.DB,
-    "SELECT * FROM memories WHERE deleted_at IS NULL AND ai_state IN ('none', 'failed') AND (tags_json IS NULL OR tags_json = '' OR tags_json = '[]') ORDER BY updated_at DESC LIMIT ?",
-    [limit],
+    "SELECT * FROM memories WHERE deleted_at IS NULL ORDER BY updated_at DESC",
   ).all<MemoryRow>();
-  const rows = Array.isArray(result) ? result : (result.results ?? []);
+  const all = (Array.isArray(result) ? result : (result.results ?? [])) as MemoryRow[];
+  const untagged = all.filter(isUntagged);
+  const rows = untagged.slice(0, limit);
   let tagged = 0;
   let failed = 0;
-  for (const row of rows as MemoryRow[]) {
-    if (parseTags(row.tags_json).length > 0) continue;
-    const tags = await suggestTags(env, row.title, row.content);
+  for (const row of rows) {
+    const tags = await suggest(env, row.title, row.content);
     if (!tags) {
       failed++;
       continue;
@@ -288,5 +321,5 @@ export async function tagUntaggedMemories(
     }
   }
   void now;
-  return { scanned: (rows as MemoryRow[]).length, tagged, failed };
+  return { scanned: rows.length, tagged, failed, remaining: untagged.length - tagged };
 }
