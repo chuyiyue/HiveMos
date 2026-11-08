@@ -1427,16 +1427,25 @@ export async function updateAgent(db: D1Database, id: string, value: unknown): P
 
 export interface AgentAvatarImage {
   content_type: string;
-  data: ArrayBuffer;
+  data: Uint8Array;
+}
+
+// D1 hands BLOB values back as an ArrayBuffer in production but as a
+// plain number array through the local dev binding; normalize all forms.
+function blobToBytes(raw: unknown): Uint8Array {
+  if (raw instanceof ArrayBuffer) return new Uint8Array(raw);
+  if (ArrayBuffer.isView(raw)) return new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength);
+  if (Array.isArray(raw)) return Uint8Array.from(raw as number[]);
+  return new Uint8Array(0);
 }
 
 export async function getAgentAvatar(db: D1Database, id: string): Promise<AgentAvatarImage | null> {
   const row = await prepare(db, "SELECT content_type, data FROM agent_avatars WHERE agent_id = ?", [id]).first<{
     content_type: string;
-    data: ArrayBuffer;
+    data: ArrayBuffer | Uint8Array | number[];
   }>();
   if (!row) return null;
-  return { content_type: row.content_type, data: row.data };
+  return { content_type: row.content_type, data: blobToBytes(row.data) };
 }
 
 // Storing an upload makes it the single avatar source: the library icon
