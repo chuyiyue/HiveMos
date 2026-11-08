@@ -374,22 +374,25 @@
   }
 
   function openCalendarMenu(item, anchor) {
-    var items = [{ label: "编辑", hint: "改名、颜色、时区", value: "edit" }];
-    if (!item.is_default) items.push({ label: "设为默认", hint: "Agent 不指定日历时落到这里", value: "default" });
-    if (item.kind === "mirror") items.push({ label: "立即刷新", hint: "马上拉一次订阅源", value: "refresh" });
-    items.push({ label: "删除日历", hint: "里面的日程会一起删掉", value: "delete", danger: true });
-    C.openActionMenu({
-      title: item.name,
-      items: items,
-      onSelect: function (value) {
-        if (value === "edit") openEditCalendar(item);
-        else if (value === "default") {
+    var items = [
+      { label: "编辑", hint: "改名、颜色、时区", onSelect: function () { openEditCalendar(item); } },
+    ];
+    if (!item.is_default) {
+      items.push({
+        label: "设为默认", hint: "Agent 不指定日历时落到这里",
+        onSelect: function () {
           api("PATCH", "/api/calendar/calendars/" + encodeURIComponent(item.id), { is_default: true }).then(function (res) {
             setNotice(res.data.ok ? "已设为默认日历" : (res.data.error || "设置失败"), !res.data.ok);
             cal.loaded = false;
             loadCalendar();
           });
-        } else if (value === "refresh") {
+        },
+      });
+    }
+    if (item.kind === "mirror") {
+      items.push({
+        label: "立即刷新", hint: "马上拉一次订阅源",
+        onSelect: function () {
           setNotice("正在刷新订阅…", false);
           render();
           api("POST", "/api/calendar/calendars/" + encodeURIComponent(item.id) + "/refresh").then(function (res) {
@@ -398,24 +401,29 @@
             cal.loaded = false;
             loadCalendar();
           });
-        } else if (value === "delete") {
-          C.askConfirm({
-            anchor: anchor,
-            title: "删除日历",
-            text: "确认删除日历「" + item.name + "」吗？里面的日程会一起被删除",
-            confirmLabel: "删除",
-            danger: true,
-          }).then(function (yes) {
-            if (!yes) return;
-            api("DELETE", "/api/calendar/calendars/" + encodeURIComponent(item.id)).then(function (res) {
-              setNotice(res.data.ok ? "日历已删除" : (res.data.error || "删除失败"), !res.data.ok);
-              cal.loaded = false;
-              loadCalendar();
-            });
+        },
+      });
+    }
+    items.push({
+      label: "删除日历", hint: "里面的日程会一起删掉", danger: true,
+      onSelect: function () {
+        C.askConfirm({
+          anchor: anchor,
+          title: "删除日历",
+          text: "确认删除日历「" + item.name + "」吗？里面的日程会一起被删除",
+          confirmLabel: "删除",
+          danger: true,
+        }).then(function (yes) {
+          if (!yes) return;
+          api("DELETE", "/api/calendar/calendars/" + encodeURIComponent(item.id)).then(function (res) {
+            setNotice(res.data.ok ? "日历已删除" : (res.data.error || "删除失败"), !res.data.ok);
+            cal.loaded = false;
+            loadCalendar();
           });
-        }
+        });
       },
     });
+    C.openActionMenu({ title: item.name, items: items });
   }
 
   function openEditCalendar(item) {
@@ -610,56 +618,53 @@
     inst.scope = undefined;
     var owner = calById(inst.calendar_id);
     var readOnly = owner && owner.kind === "mirror";
-    var items = [{ label: "查看详情", value: "detail" }];
+    var doDelete = function (scope) {
+      var url = "/api/calendar/events/" + encodeURIComponent(inst.is_exception && scope === "instance" ? inst.event_id : inst.master_id);
+      if (scope === "instance" && !inst.is_exception) url += "?scope=instance&instance_start=" + encodeURIComponent(inst.start);
+      api("DELETE", url).then(function (res) {
+        setNotice(res.data.ok ? "日程已删除" : (res.data.error || "删除失败"), !res.data.ok);
+        cal.loaded = false;
+        loadCalendar();
+      });
+    };
+    var items = [
+      { label: "查看详情", onSelect: function () { openEventDetail(inst); } },
+    ];
     if (!readOnly) {
-      items.push({ label: "编辑", value: "edit" });
-      items.push({ label: "删除", value: "delete", danger: true });
-    }
-    C.openActionMenu({
-      title: inst.title,
-      items: items,
-      onSelect: function (value) {
-        if (value === "detail") { openEventDetail(inst); return; }
-        if (value === "edit") {
+      items.push({
+        label: "编辑",
+        onSelect: function () {
           if (inst.recurring) {
             C.openActionMenu({
               title: "编辑重复日程",
               items: [
-                { label: "只改这一次", value: "instance" },
-                { label: "改整个系列", value: "series" },
+                { label: "只改这一次", onSelect: function () { pickScope("instance"); } },
+                { label: "改整个系列", onSelect: function () { pickScope("series"); } },
               ],
-              onSelect: function (scope) {
-                inst.scope = scope;
-                api("GET", "/api/calendar/events/" + encodeURIComponent(inst.master_id)).then(function (res) {
-                  openEditEvent(inst, res.data.ok ? res.data.event : null);
-                });
-              },
             });
           } else {
             api("GET", "/api/calendar/events/" + encodeURIComponent(inst.event_id)).then(function (res) {
               openEditEvent(inst, res.data.ok ? res.data.event : null);
             });
           }
-          return;
-        }
-        if (value === "delete") {
-          var doDelete = function (scope) {
-            var url = "/api/calendar/events/" + encodeURIComponent(inst.is_exception && scope === "instance" ? inst.event_id : inst.master_id);
-            if (scope === "instance" && !inst.is_exception) url += "?scope=instance&instance_start=" + encodeURIComponent(inst.start);
-            api("DELETE", url).then(function (res) {
-              setNotice(res.data.ok ? "日程已删除" : (res.data.error || "删除失败"), !res.data.ok);
-              cal.loaded = false;
-              loadCalendar();
+          function pickScope(scope) {
+            inst.scope = scope;
+            api("GET", "/api/calendar/events/" + encodeURIComponent(inst.master_id)).then(function (res) {
+              openEditEvent(inst, res.data.ok ? res.data.event : null);
             });
-          };
+          }
+        },
+      });
+      items.push({
+        label: "删除", danger: true,
+        onSelect: function () {
           if (inst.recurring) {
             C.openActionMenu({
               title: "删除重复日程",
               items: [
-                { label: "只删这一次", value: "instance" },
-                { label: "删整个系列", value: "series", danger: true },
+                { label: "只删这一次", onSelect: function () { doDelete("instance"); } },
+                { label: "删整个系列", danger: true, onSelect: function () { doDelete("series"); } },
               ],
-              onSelect: doDelete,
             });
           } else {
             C.askConfirm({
@@ -670,9 +675,10 @@
               danger: true,
             }).then(function (yes) { if (yes) doDelete("series"); });
           }
-        }
-      },
-    });
+        },
+      });
+    }
+    C.openActionMenu({ title: inst.title, items: items });
   }
 
   function openAddFeed() {
