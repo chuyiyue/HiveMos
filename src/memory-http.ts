@@ -95,8 +95,8 @@ async function tagOne(request: Request, env: Env, id: string): Promise<Response>
   if (request.method.toUpperCase() !== "POST") {
     return json({ ok: false, error: "方法不允许" }, 405, { allow: "POST" });
   }
-  const updated = await tagOneMemory(env, id, CHANNEL, Date.now());
-  return json({ ok: true, memory: memoryPublic(updated) });
+  const result = await tagOneMemory(env, id, CHANNEL, Date.now());
+  return json({ ok: true, memory: memoryPublic(result.memory), skipped: result.skipped });
 }
 
 async function groups(request: Request, env: Env): Promise<Response> {
