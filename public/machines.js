@@ -86,6 +86,11 @@
   function displayName(item) {
     return item && item.note ? item.note : item ? item.name : "";
   }
+  // Card title rule for devices: the note wins, then the fetched
+  // hostname, then the stored name, then the IP.
+  function deviceTitle(item) {
+    return item.note || item.hostname || item.name || item.ip || "未命名设备";
+  }
   function findMachine(id) {
     var found = null;
     state.items.forEach(function (entry) { if (entry.id === id) found = entry; });
@@ -158,11 +163,11 @@
     btns += "<button type=\"button\" class=\"danger\" data-confirm-delete data-mact=\"delete\" data-kind=\"" + kind + "\" data-id=\"" + id + "\">删除</button>";
     var kindLabel = kind === "server" ? "服务器" : kind === "worker" ? "Worker" : "云主机";
     var ctrl = C.openManageDialog({
-      title: kind === "host" ? displayName(item) : item.name,
+      title: kind === "worker" ? item.name : deviceTitle(item),
       bodyHtml:
         C.manageInfoHead({
           icon: kind === "worker" ? "layout" : "monitor",
-          title: item.name,
+          title: kind === "worker" ? item.name : deviceTitle(item),
           sub: kindLabel + (item.region && kind !== "worker" ? " · " + item.region : ""),
         }) +
         "<div class=\"manage-info-card\"><dl class=\"kv\">" +
@@ -203,9 +208,9 @@
     return C.record({
       id: item.id,
       icon: kind === "worker" ? "layout" : "monitor",
-      title: kind === "host" ? displayName(item) : item.name,
+      title: kind === "worker" ? item.name : deviceTitle(item),
       pill: kind === "host" ? connName(item) || undefined : undefined,
-      status: item.connection_id ? remoteStateOf(item) : item.status,
+      corner: C.statusPill(item.connection_id ? remoteStateOf(item) : item.status),
       lede: lede || "",
       facts: facts,
       actions: actions,
@@ -225,19 +230,19 @@
     }
     if (uiKind === "server") {
       return card("server", item, [
-        ["备注", C.escapeHtml(item.note || "无")],
         ["主机名", C.escapeHtml(item.hostname || "尚未探活")],
-        ["系统", C.escapeHtml(item.os || "尚未探活")],
         ["主机 IP", item.ip ? "<span class=\"copy-text\" data-copy=\"" + C.escapeHtml(item.ip) + "\" data-label=\"" + C.escapeHtml(item.ip) + "\" title=\"点击复制\">" + C.escapeHtml(item.ip) + "</span>" : "未填写"],
+        ["规格", C.escapeHtml(item.spec || "—")],
+        ["系统", C.escapeHtml(item.os || "尚未探活")],
       ]);
     }
     if (item.connection_id) {
       var connFacts = [
-        ["状态", C.escapeHtml(remoteStateLabel(item))],
+        ["主机名", C.escapeHtml(item.name || "—")],
+        ["主机 IP", C.escapeHtml(item.ip || "—")],
         ["规格", C.escapeHtml(item.spec || "未同步")],
-        ["最近同步", C.escapeHtml(item.last_sync_at ? C.formatMinute(item.last_sync_at) || "—" : "尚未同步")],
+        ["系统", C.escapeHtml(item.os || "—")],
       ];
-      if (item.remote_name && item.remote_name !== item.name) connFacts.push(["远端名称", C.escapeHtml(item.remote_name)]);
       var pw = powerFor(item);
       var pid = C.escapeHtml(item.id);
       var quick =
@@ -250,13 +255,11 @@
       return card(uiKind, item, connFacts, quick);
     }
     var facts = [
-      ["规格", C.escapeHtml(item.spec)],
-      ["绑定", C.escapeHtml(item.binding || "未绑定")],
-      ["最近心跳", C.escapeHtml(heartbeatText(item))],
+      ["主机名", C.escapeHtml(item.name || "—")],
+      ["主机 IP", C.escapeHtml(item.ip || "—")],
+      ["规格", C.escapeHtml(item.spec || "—")],
+      ["系统", C.escapeHtml(item.os || "—")],
     ];
-    if (item.note) facts.push(["备注", C.escapeHtml(item.note)]);
-    if (item.vendor) facts.push(["厂商", C.escapeHtml(item.vendor)]);
-    if (item.access_note) facts.push(["接入备注", C.escapeHtml(item.access_note)]);
     return card(uiKind, item, facts);
   }
 
