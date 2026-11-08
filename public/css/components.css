@@ -967,3 +967,8 @@ article.record .card-actions { margin-top: auto; }
 }
 
 .section .tag-row { margin-bottom: 12px; }
+
+@media (max-width: 639px) {
+  .wp-tabs { width: 100%; flex-wrap: nowrap; }
+  .wp-tab { flex: 1 1 0; min-width: 0; white-space: nowrap; padding-left: 6px; padding-right: 6px; text-align: center; }
+}

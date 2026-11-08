@@ -617,3 +617,9 @@ img, svg, video, canvas { max-width: 100%; }
 
 .form-grid .form-cols-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 @media (max-width: 480px) { .form-grid .form-cols-2 { grid-template-columns: 1fr; } }
+
+/* Mobile: tab tracks fill the width, tabs share equally, labels never wrap. */
+@media (max-width: 639px) {
+  .page-tabs { width: 100%; flex-wrap: nowrap; }
+  .page-tab { flex: 1 1 0; min-width: 0; white-space: nowrap; padding-left: 6px; padding-right: 6px; text-align: center; }
+}
