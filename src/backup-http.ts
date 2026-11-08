@@ -21,8 +21,10 @@ import {
   readPublicTargets,
   runBackup,
   saveGithubTarget,
+  saveWebdavTarget,
   targetLabel,
   testGithubTarget,
+  testWebdavTarget,
   writeBackupSchedule,
 } from "./backup";
 import type { BackupRunResult, TargetId } from "./backup";
@@ -153,11 +155,11 @@ async function testTarget(request: Request, env: Env): Promise<Response> {
   if (body instanceof Response) return body;
   try {
     const target = readTarget(body["target"]);
-    if (target === "github") {
-      const result = await testGithubTarget(env, body, Date.now());
-      return json({ ok: true, target, result });
-    }
-    return json({ ok: false, error: "WebDAV 目标的测试还没有接入" }, 400);
+    const result =
+      target === "github"
+        ? await testGithubTarget(env, body, Date.now())
+        : await testWebdavTarget(env, body, Date.now());
+    return json({ ok: true, target, result });
   } catch (error) {
     return fail(error);
   }
@@ -184,7 +186,17 @@ async function saveTarget(request: Request, env: Env, id: string): Promise<Respo
       const targets = await readPublicTargets(env.DB);
       return json({ ok: true, target: targets.github });
     }
-    return json({ ok: false, error: "WebDAV 目标的保存还没有接入" }, 400);
+    const row = await saveWebdavTarget(env, body, now);
+    await logOp(env.DB, {
+      actor: await panelActor(request, env),
+      module: "设置",
+      action: "修改",
+      targetId: "backup",
+      targetName: "同步与备份",
+      text: `保存 WebDAV 备份目标 ${row.base_url}（${row.remote_dir || "/"}）`,
+    });
+    const targets = await readPublicTargets(env.DB);
+    return json({ ok: true, target: targets.webdav });
   } catch (error) {
     return fail(error);
   }

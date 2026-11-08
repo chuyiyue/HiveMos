@@ -13,6 +13,15 @@ import type { D1Database, Env } from "./env";
 import { buildBackupPackage, backupSummary, BACKUP_FORMAT_VERSION } from "./backup-export";
 import { BackupError, formatBytes, tailOf } from "./backup-net";
 import { ghProbe, ghProbeDetail, ghUpload } from "./backup-github";
+import {
+  backupFileName,
+  wdProbe,
+  wdProbeDetail,
+  wdUpload,
+  wdUploadDetail,
+} from "./backup-webdav";
+import type { WebdavConfig } from "./backup-webdav";
+import { zipStore } from "./backup-zip";
 import { logOp } from "./oplog";
 import { cronIntervalMs, getCronIntervalHours } from "./settings";
 
@@ -235,6 +244,62 @@ export async function githubConfigOf(env: Env, input: GithubInput): Promise<{
   return { owner: input.owner, repo: input.repo, branch: input.branch, pathPrefix: input.path_prefix, token };
 }
 
+// ---- WebDAV 输入 -----------------------------------------------------------
+
+// 密码与令牌不做 trim：前后空格也可能是密码的一部分，只在全空时当作“没填”。
+function secretText(body: Record<string, unknown>, key: string, max: number, label: string): string | undefined {
+  const value = body[key];
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "string") throw new BackupError(label + "格式不正确", 400);
+  if (Array.from(value).length > max) throw new BackupError(label + "太长了", 400);
+  return value === "" ? undefined : value;
+}
+
+export interface WebdavInput {
+  base_url: string;
+  username: string;
+  remote_dir: string;
+  password?: string;
+}
+
+export function readWebdavInput(body: Record<string, unknown>): WebdavInput {
+  let baseUrl = optText(body, "base_url", 400, "WebDAV 地址", true);
+  let parsed: URL;
+  try {
+    parsed = new URL(baseUrl);
+  } catch {
+    throw new BackupError("WebDAV 地址格式不正确", 400);
+  }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+    throw new BackupError("WebDAV 地址必须以 http:// 或 https:// 开头", 400);
+  }
+  if (parsed.username || parsed.password) {
+    throw new BackupError("账号密码请分开填写，不要写进地址", 400);
+  }
+  baseUrl = parsed.toString();
+  const username = optText(body, "username", 200, "用户名");
+  const remoteDir = optText(body, "remote_dir", 300, "远程目录");
+  if (remoteDir.includes("..")) throw new BackupError("远程目录格式不正确", 400);
+  const password = secretText(body, "password", 1000, "密码");
+  return { base_url: baseUrl, username, remote_dir: remoteDir, password };
+}
+
+export async function webdavConfigOf(
+  env: Env,
+  input: WebdavInput,
+  row?: TargetRow | null,
+): Promise<WebdavConfig> {
+  const existing = row === undefined ? await getTargetRow(env.DB, "webdav") : row;
+  const password = input.password ?? (existing ? await openTargetSecret(env, existing.password_enc) : "");
+  if (input.username && !password) throw new BackupError("请填写密码", 400);
+  return {
+    baseUrl: input.base_url,
+    username: input.username,
+    password,
+    remoteDir: input.remote_dir,
+  };
+}
+
 // ---- 测试 -----------------------------------------------------------------
 
 export interface TargetTestResult {
@@ -266,6 +331,28 @@ export async function testGithubTarget(env: Env, body: Record<string, unknown>, 
   } catch (error) {
     if (error instanceof BackupError) {
       await recordTest(env.DB, "github", false, "", error.message, now).catch(() => undefined);
+      return { ok: false, detail: "", error: error.message };
+    }
+    throw error;
+  }
+}
+
+export async function testWebdavTarget(
+  env: Env,
+  body: Record<string, unknown>,
+  now: number,
+): Promise<TargetTestResult> {
+  try {
+    const input = readWebdavInput(body);
+    const config = await webdavConfigOf(env, input);
+    const probe = await wdProbe(config);
+    const detail = wdProbeDetail(probe);
+    await recordTest(env.DB, "webdav", true, detail, "", now);
+    const where = probe.created ? `已新建目录 ${probe.path}` : `目录 ${probe.path} 可写`;
+    return { ok: true, detail: `服务器可达，${where}`, error: "" };
+  } catch (error) {
+    if (error instanceof BackupError) {
+      await recordTest(env.DB, "webdav", false, "", error.message, now).catch(() => undefined);
       return { ok: false, detail: "", error: error.message };
     }
     throw error;
@@ -345,6 +432,30 @@ function blankTarget(id: TargetId, now: number): TargetRow {
     created_at: now,
     updated_at: now,
   };
+}
+
+// 保存前先测活：测试不过直接抛错，库里保持原样（旧配置不被半成品覆盖）。
+export async function saveWebdavTarget(env: Env, body: Record<string, unknown>, now: number): Promise<TargetRow> {
+  const input = readWebdavInput(body);
+  const existing = await getTargetRow(env.DB, "webdav");
+  const config = await webdavConfigOf(env, input, existing);
+  const probe = await wdProbe(config);
+  const sealed = config.password ? await sealTargetSecret(env, config.password) : "";
+  const row: TargetRow = existing ? { ...existing, updated_at: now } : blankTarget("webdav", now);
+  row.enabled = 1;
+  row.base_url = config.baseUrl;
+  row.username = config.username;
+  row.remote_dir = config.remoteDir;
+  if (sealed) {
+    row.password_enc = sealed;
+    row.password_tail = tailOf(config.password);
+  }
+  row.last_test_at = now;
+  row.last_test_ok = 1;
+  row.last_test_detail = wdProbeDetail(probe);
+  row.last_error = "";
+  await upsertTarget(env.DB, row);
+  return row;
 }
 
 // 保存前先测活：测试不过直接抛错，库里保持原样（旧配置不被半成品覆盖）。
@@ -563,7 +674,21 @@ export async function runBackup(
       bytes = sourceBytes;
       base.detail = `提交 ${uploaded.commit.slice(0, 7)}`;
     } else {
-      throw new BackupError("WebDAV 目标暂不可用", 400);
+      const password = await openTargetSecret(env, row.password_enc);
+      if (row.username && !password) {
+        throw new BackupError("这个目标没有可用的密码，请重新保存配置", 400);
+      }
+      const config: WebdavConfig = {
+        baseUrl: row.base_url,
+        username: row.username,
+        password,
+        remoteDir: row.remote_dir,
+      };
+      const zip = zipStore(pkg.files, new Date(now));
+      const filename = backupFileName(now);
+      const uploaded = await wdUpload(config, zip, filename);
+      bytes = uploaded.bytes;
+      base.detail = wdUploadDetail(uploaded);
     }
 
     base.ok = true;
