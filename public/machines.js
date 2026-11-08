@@ -44,12 +44,36 @@
   }
 
   // 与其它板块同一套卡片菜单入口：record 的 extra 里放「高级」按钮
-  function manageBtn(kind, id) {
-    return '<div class="row-actions"><button type="button" class="secondary" data-manage="' + kind + '" data-id="' + C.escapeHtml(id) + '">高级</button></div>';
+  function machineExpandBody(kind, item) {
+    var id = C.escapeHtml(item.id);
+    var btns = "";
+    if (kind === "server")
+      btns += '<button type="button" class="secondary" data-mact="reveal" data-kind="server" data-id="' + id + '">查看 SSH 密码</button>';
+    if (kind === "worker")
+      btns += '<button type="button" class="secondary" data-mact="workers" data-kind="worker" data-id="' + id + '">查看 Workers</button>';
+    btns += '<button type="button" class="secondary" data-mact="edit" data-kind="' + kind + '" data-id="' + id + '">编辑</button>';
+    btns += '<button type="button" class="danger" data-mact="delete" data-kind="' + kind + '" data-id="' + id + '">删除</button>';
+    return C.expandActions(btns);
   }
+
+  function deleteMachine(kind, item, anchor) {
+    C.askConfirm({
+      anchor: anchor,
+      title: "删除" + TITLE_FOR[kind],
+      text: "确认删除「" + item.name + "」吗？删除后无法恢复",
+      confirmLabel: "删除",
+      danger: true,
+    }).then(function (yes) {
+      if (!yes) return;
+      api("DELETE", "/api/machines/" + encodeURIComponent(item.id)).then(function (res) {
+        if (res.data && res.data.ok) load();
+      });
+    });
+  }
+
   function card(kind, item, facts) {
     var lede = kind === "worker" ? item.description : item.region;
-    return C.record({ id: item.id, title: item.name, status: item.status, lede: lede || "", facts: facts, extra: manageBtn(kind, item.id) });
+    return C.record({ id: item.id, title: item.name, status: item.status, lede: lede || "", facts: facts, expandKey: "machine:" + kind + ":" + item.id, expandBody: machineExpandBody(kind, item) });
   }
 
   function listSection(uiKind, title, unit) {
@@ -92,28 +116,40 @@
   function render() {
     var serverHtml =
       "<div class=\"stack\">" +
-      "<button type=\"button\" class=\"add-button\" data-add=\"server\">添加服务器</button>" +
       listSection("server", "服务器", "台") +
       "</div>";
     var hostHtml =
       "<div class=\"stack\">" +
-      "<button type=\"button\" class=\"add-button\" data-add=\"host\">添加云主机</button>" +
       listSection("host", "云主机", "台") +
       C.section("已释放", "", C.emptyState("没有已释放的云主机", "释放后的实例会留在这里，直到记录被清掉")) +
       "</div>";
     var workerHtml =
       "<div class=\"stack\">" +
-      "<button type=\"button\" class=\"add-button\" data-add=\"worker\">添加 Worker</button>" +
       listSection("worker", "Workers", "个") +
       "</div>";
+    var head =
+      '<div class="page-head"><div class="page-tabs" role="tablist">' +
+      '<button class="page-tab" type="button" role="tab" data-tab="servers" aria-selected="' +
+      (activeTab === "servers" ? "true" : "false") +
+      '">服务器</button>' +
+      '<button class="page-tab" type="button" role="tab" data-tab="hosts" aria-selected="' +
+      (activeTab === "hosts" ? "true" : "false") +
+      '">云主机</button>' +
+      '<button class="page-tab" type="button" role="tab" data-tab="workers" aria-selected="' +
+      (activeTab === "workers" ? "true" : "false") +
+      '">Workers</button>' +
+      "</div>" +
+      '<div class="page-head-actions">' +
+      (activeTab === "servers"
+        ? '<button type="button" class="add-button" data-add="server">添加服务器</button>'
+        : activeTab === "hosts"
+          ? '<button type="button" class="add-button" data-add="host">添加云主机</button>'
+          : '<button type="button" class="add-button" data-add="worker">添加 Worker</button>') +
+      "</div></div>";
     C.mount(
       C.layout(
         "",
-        "<div class=\"page-tabs\" role=\"tablist\">" +
-          "<button class=\"page-tab\" type=\"button\" role=\"tab\" data-tab=\"servers\" aria-selected=\"" + (activeTab === "servers" ? "true" : "false") + "\">服务器</button>" +
-          "<button class=\"page-tab\" type=\"button\" role=\"tab\" data-tab=\"hosts\" aria-selected=\"" + (activeTab === "hosts" ? "true" : "false") + "\">云主机</button>" +
-          "<button class=\"page-tab\" type=\"button\" role=\"tab\" data-tab=\"workers\" aria-selected=\"" + (activeTab === "workers" ? "true" : "false") + "\">Workers</button>" +
-          "</div>" +
+        head +
           "<div data-panel=\"servers\"" + (activeTab === "servers" ? "" : " hidden") + ">" + serverHtml + "</div>" +
           "<div data-panel=\"hosts\"" + (activeTab === "hosts" ? "" : " hidden") + ">" + hostHtml + "</div>" +
           "<div data-panel=\"workers\"" + (activeTab === "workers" ? "" : " hidden") + ">" + workerHtml + "</div>"
@@ -315,49 +351,6 @@
       });
   }
 
-  function openManageMenu(kind, item, anchor) {
-    var items = [];
-    if (kind === "server") {
-      items.push({
-        label: "查看 SSH 密码",
-        onSelect: function () { openRevealDialog(item); },
-      });
-    }
-    if (kind === "worker") {
-      items.push({
-        label: "查看 Workers",
-        onSelect: function () { openWorkersDialog(item); },
-      });
-    }
-    items.push({
-      label: "编辑",
-      onSelect: function () { openItemDialog(kind, item); },
-    });
-    items.push({
-      label: "删除",
-      hint: "删除后记录不再保留",
-      danger: true,
-      onSelect: function () {
-        C.askConfirm({
-          anchor: anchor,
-          title: "删除" + TITLE_FOR[kind],
-          text: "确认删除「" + item.name + "」吗？删除后无法恢复",
-          confirmLabel: "删除",
-          danger: true,
-        }).then(function (yes) {
-          if (!yes) return;
-          api("DELETE", "/api/machines/" + encodeURIComponent(item.id)).then(function (res) {
-            if (res.data && res.data.ok) load();
-          });
-        });
-      },
-    });
-    C.openActionMenu({
-      title: item.name,
-      items: items,
-    });
-  }
-
   var page = document.getElementById("page");
   page.addEventListener("click", function (event) {
     var target = event.target;
@@ -374,13 +367,19 @@
       openItemDialog(add.getAttribute("data-add"), null);
       return;
     }
-    var manage = target.closest("[data-manage]");
-    if (manage) {
-      var mkind = manage.getAttribute("data-manage");
-      var mid = manage.getAttribute("data-id");
+    var mact = target.closest("[data-mact]");
+    if (mact) {
+      var mkind = mact.getAttribute("data-kind");
+      var mid = mact.getAttribute("data-id");
       var found = null;
       state.items.forEach(function (entry) { if (entry.id === mid) found = entry; });
-      if (found) openManageMenu(mkind, found, manage);
+      if (found) {
+        var act = mact.getAttribute("data-mact");
+        if (act === "reveal") openRevealDialog(found);
+        else if (act === "workers") openWorkersDialog(found);
+        else if (act === "edit") openItemDialog(mkind, found);
+        else if (act === "delete") deleteMachine(mkind, found, mact);
+      }
     }
   });
   render();
