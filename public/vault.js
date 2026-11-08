@@ -1,7 +1,7 @@
 /* mock: 保险库与模型网关合并板块。条目只保留末四位（接入后 GET /api/vault 只返回 tail）；访问记录、网关均为占位。添加先在页内生效 */
 (function () {
   var C = window.HiveCommon;
-  var activeTab = location.hash === "#gateway" ? "gateway" : "vault";
+  var activeTab = location.hash === "#gateway" ? "gateway" : location.hash === "#email" ? "email" : "vault";
   function now() {
     var d = new Date();
     function p(n) { return (n < 10 ? "0" : "") + n; }
@@ -25,6 +25,16 @@
     { id: "gw_cf", name: "Workers AI 网关", proto: "OpenAI 兼容", base: "gateway.ai.cloudflare.com", models: "12 个模型", tail: "91f2", status: "active" },
     { id: "gw_grok", name: "grok2api", proto: "OpenAI 兼容", base: "grok2api 部署地址", models: "3 个模型", tail: "77ab", status: "active" },
     { id: "gw_local", name: "本地中转", proto: "Anthropic 兼容", base: "云主机内网地址", models: "5 个模型", tail: "c041", status: "paused" },
+  ];
+
+  var EMAILS = [
+    { id: "em_main", address: "royecc@outlook.com", use: "主邮箱", portal: "Outlook", note: "微软账号与订阅都在这个邮箱" },
+    { id: "em_chuyiyue", address: "chuyiyue@outtw.com", use: "注册优先", portal: "mail.outtw.com", note: "注册类事务优先用它，验证码可直接读取" },
+    { id: "em_admin", address: "admin@outtw.com", use: "邮局管理员", portal: "mail.outtw.com", note: "自建邮局管理员，可切换到各子邮箱" },
+    { id: "em_ling", address: "ling@outtw.com", use: "申诉与纠纷", portal: "mail.outtw.com", note: "giffgaff 与 Ombudsman 案件用邮箱" },
+    { id: "em_mail", address: "mail@outtw.com", use: "子邮箱", portal: "mail.outtw.com", note: "" },
+    { id: "em_i", address: "i@outtw.com", use: "子邮箱", portal: "mail.outtw.com", note: "" },
+    { id: "em_2026", address: "20260613@outtw.com", use: "子邮箱", portal: "mail.outtw.com", note: "" },
   ];
 
   function render() {
@@ -51,15 +61,27 @@
       C.section("模型路由", "", C.emptyState("还没有路由规则", "逻辑模型名映射到哪个网关的哪个模型，会列在这里")) +
       C.section("用量", "", C.emptyState("还没有用量数据", "各网关的请求数与 token 用量会汇总到这里")) +
       "</div>";
+    var emailCards = EMAILS.map(function (item) {
+      var facts = [["用途", C.escapeHtml(item.use)], ["入口", C.escapeHtml(item.portal)]];
+      if (item.note) facts.push(["备注", C.escapeHtml(item.note)]);
+      return C.record({ id: item.id, title: item.address, facts: facts });
+    }).join("");
+    var emailHtml =
+      "<div class=\"stack\">" +
+      "<button type=\"button\" class=\"add-button\" data-add=\"email\">添加邮箱</button>" +
+      C.section("邮箱", String(EMAILS.length) + " 个", C.list(emailCards)) +
+      "</div>";
     C.mount(
       C.layout(
         "",
         "<div class=\"page-tabs\" role=\"tablist\">" +
           "<button class=\"page-tab\" type=\"button\" role=\"tab\" data-tab=\"vault\" aria-selected=\"" + (activeTab === "vault" ? "true" : "false") + "\">保险库</button>" +
           "<button class=\"page-tab\" type=\"button\" role=\"tab\" data-tab=\"gateway\" aria-selected=\"" + (activeTab === "gateway" ? "true" : "false") + "\">模型网关</button>" +
+          "<button class=\"page-tab\" type=\"button\" role=\"tab\" data-tab=\"email\" aria-selected=\"" + (activeTab === "email" ? "true" : "false") + "\">邮箱</button>" +
           "</div>" +
           "<div data-panel=\"vault\"" + (activeTab === "vault" ? "" : " hidden") + ">" + vaultHtml + "</div>" +
-          "<div data-panel=\"gateway\"" + (activeTab === "gateway" ? "" : " hidden") + ">" + gatewayHtml + "</div>"
+          "<div data-panel=\"gateway\"" + (activeTab === "gateway" ? "" : " hidden") + ">" + gatewayHtml + "</div>" +
+          "<div data-panel=\"email\"" + (activeTab === "email" ? "" : " hidden") + ">" + emailHtml + "</div>"
       )
     );
   }
@@ -104,6 +126,25 @@
     });
   }
 
+  function openAddEmail() {
+    C.openFormDialog({
+      title: "添加邮箱",
+      bodyHtml:
+        "<label>邮箱地址<input name=\"address\" maxlength=\"120\" autocomplete=\"off\" placeholder=\"name@example.com\" /></label>" +
+        "<label>用途<input name=\"use\" maxlength=\"40\" autocomplete=\"off\" placeholder=\"例如 主邮箱、注册优先\" /></label>" +
+        "<label>入口<input name=\"portal\" maxlength=\"80\" autocomplete=\"off\" placeholder=\"例如 mail.outtw.com\" /></label>" +
+        "<label>备注<textarea name=\"note\" rows=\"3\" maxlength=\"300\"></textarea></label>",
+      submitLabel: "添加",
+      onSubmit: function (ctrl) {
+        var address = val(ctrl, "address");
+        if (!address) { ctrl.setError("请填写邮箱地址"); return; }
+        EMAILS.push({ id: "em_" + Date.now(), address: address, use: val(ctrl, "use") || "未标注", portal: val(ctrl, "portal") || "未填写", note: val(ctrl, "note") });
+        ctrl.close();
+        render();
+      },
+    });
+  }
+
   var page = document.getElementById("page");
   page.addEventListener("click", function (event) {
     var target = event.target;
@@ -117,8 +158,10 @@
     }
     var add = target.closest("[data-add]");
     if (add) {
-      if (add.getAttribute("data-add") === "secret") openAddSecret();
-      else openAddGateway();
+      var kind = add.getAttribute("data-add");
+      if (kind === "secret") openAddSecret();
+      else if (kind === "gateway") openAddGateway();
+      else openAddEmail();
     }
   });
   render();
