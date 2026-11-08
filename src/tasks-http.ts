@@ -13,6 +13,7 @@ import {
   taskPublic,
   updateTask,
 } from "./tasks";
+import { logOp, panelActor } from "./oplog";
 
 const MAX_BODY_BYTES = 64 * 1024;
 const ACTOR = "user";
@@ -66,6 +67,14 @@ async function collection(request: Request, env: Env): Promise<Response> {
     if (!body.ok) return body.response;
     return wrap(async () => {
       const created = await createTask(env.DB, body.value, ACTOR, "panel", Date.now());
+      await logOp(env.DB, {
+        actor: await panelActor(request, env),
+        module: "任务",
+        action: "添加",
+        targetId: created.id,
+        targetName: created.title,
+        text: `添加了任务「${created.title}」`,
+      });
       return json({ ok: true, task: taskPublic(created) }, 201);
     });
   }
@@ -79,12 +88,30 @@ async function taskOne(request: Request, env: Env, id: string): Promise<Response
     if (!body.ok) return body.response;
     return wrap(async () => {
       const updated = await updateTask(env.DB, id, body.value, ACTOR, Date.now());
+      await logOp(env.DB, {
+        actor: await panelActor(request, env),
+        module: "任务",
+        action: "修改",
+        targetId: id,
+        targetName: updated.title,
+        text: `修改了任务「${updated.title}」`,
+      });
       return json({ ok: true, task: taskPublic(updated) });
     });
   }
   if (method === "DELETE") {
     return wrap(async () => {
+      const before = (await listTasks(env.DB, { status: null, assignee: null })).find((task) => task.id === id);
       await deleteTask(env.DB, id, ACTOR, Date.now());
+      const name = before?.title ?? id;
+      await logOp(env.DB, {
+        actor: await panelActor(request, env),
+        module: "任务",
+        action: "删除",
+        targetId: id,
+        targetName: name,
+        text: `删除了任务「${name}」`,
+      });
       return json({ ok: true });
     });
   }
@@ -95,6 +122,14 @@ async function completeOne(request: Request, env: Env, id: string): Promise<Resp
   if (request.method.toUpperCase() !== "POST") return methodNotAllowed("POST");
   return wrap(async () => {
     const completed = await completeTask(env.DB, id, ACTOR, Date.now());
+    await logOp(env.DB, {
+      actor: await panelActor(request, env),
+      module: "任务",
+      action: "完成",
+      targetId: id,
+      targetName: completed.title,
+      text: `完成了任务「${completed.title}」`,
+    });
     return json({ ok: true, task: taskPublic(completed) });
   });
 }

@@ -20,6 +20,7 @@ import {
   updateApp,
   updateSkill,
 } from "./extras";
+import { logOp, panelActor } from "./oplog";
 
 const MAX_BODY_BYTES = 64 * 1024;
 
@@ -80,7 +81,18 @@ async function appsCollection(request: Request, env: Env): Promise<Response> {
     if (gate) return gate;
     const body = await readBody(request);
     if (!body.ok) return body.response;
-    return wrap(async () => json({ ok: true, app: await createApp(env.DB, body.value, Date.now()) }, 201));
+    return wrap(async () => {
+      const created = await createApp(env.DB, body.value, Date.now());
+      await logOp(env.DB, {
+        actor: await panelActor(request, env),
+        module: "应用",
+        action: "添加",
+        targetId: created.id,
+        targetName: created.name,
+        text: `添加了应用「${created.name}」`,
+      });
+      return json({ ok: true, app: created }, 201);
+    });
   }
   return methodNotAllowed("GET, POST");
 }
@@ -92,13 +104,34 @@ async function appOne(request: Request, env: Env, id: string): Promise<Response>
     if (gate) return gate;
     const body = await readBody(request);
     if (!body.ok) return body.response;
-    return wrap(async () => json({ ok: true, app: await updateApp(env.DB, id, body.value, Date.now()) }));
+    return wrap(async () => {
+      const updated = await updateApp(env.DB, id, body.value, Date.now());
+      await logOp(env.DB, {
+        actor: await panelActor(request, env),
+        module: "应用",
+        action: "修改",
+        targetId: id,
+        targetName: updated.name,
+        text: `修改了应用「${updated.name}」`,
+      });
+      return json({ ok: true, app: updated });
+    });
   }
   if (method === "DELETE") {
     const gate = await mutationGate(request);
     if (gate) return gate;
     return wrap(async () => {
+      const before = (await listApps(env.DB)).find((row) => row.id === id);
       await deleteApp(env.DB, id);
+      const name = before?.name ?? id;
+      await logOp(env.DB, {
+        actor: await panelActor(request, env),
+        module: "应用",
+        action: "删除",
+        targetId: id,
+        targetName: name,
+        text: `删除了应用「${name}」`,
+      });
       return json({ ok: true });
     });
   }
@@ -119,7 +152,18 @@ async function skillsCollection(request: Request, env: Env): Promise<Response> {
     if (gate) return gate;
     const body = await readBody(request);
     if (!body.ok) return body.response;
-    return wrap(async () => json({ ok: true, skill: await createSkill(env.DB, body.value, Date.now()) }, 201));
+    return wrap(async () => {
+      const created = await createSkill(env.DB, body.value, Date.now());
+      await logOp(env.DB, {
+        actor: await panelActor(request, env),
+        module: "Skills",
+        action: "添加",
+        targetId: created.id,
+        targetName: created.name,
+        text: `添加了Skills「${created.name}」`,
+      });
+      return json({ ok: true, skill: created }, 201);
+    });
   }
   return methodNotAllowed("GET, POST");
 }
@@ -131,13 +175,34 @@ async function skillOne(request: Request, env: Env, id: string): Promise<Respons
     if (gate) return gate;
     const body = await readBody(request);
     if (!body.ok) return body.response;
-    return wrap(async () => json({ ok: true, skill: await updateSkill(env.DB, id, body.value, Date.now()) }));
+    return wrap(async () => {
+      const updated = await updateSkill(env.DB, id, body.value, Date.now());
+      await logOp(env.DB, {
+        actor: await panelActor(request, env),
+        module: "Skills",
+        action: "修改",
+        targetId: id,
+        targetName: updated.name,
+        text: `修改了Skills「${updated.name}」`,
+      });
+      return json({ ok: true, skill: updated });
+    });
   }
   if (method === "DELETE") {
     const gate = await mutationGate(request);
     if (gate) return gate;
     return wrap(async () => {
+      const before = (await listSkills(env.DB, null)).find((row) => row.id === id);
       await deleteSkill(env.DB, id);
+      const name = before?.name ?? id;
+      await logOp(env.DB, {
+        actor: await panelActor(request, env),
+        module: "Skills",
+        action: "删除",
+        targetId: id,
+        targetName: name,
+        text: `删除了Skills「${name}」`,
+      });
       return json({ ok: true });
     });
   }
@@ -158,7 +223,18 @@ async function apisCollection(request: Request, env: Env): Promise<Response> {
     if (gate) return gate;
     const body = await readBody(request);
     if (!body.ok) return body.response;
-    return wrap(async () => json({ ok: true, api: await createApi(env.DB, body.value, Date.now()) }, 201));
+    return wrap(async () => {
+      const created = await createApi(env.DB, body.value, Date.now());
+      await logOp(env.DB, {
+        actor: await panelActor(request, env),
+        module: "API",
+        action: "添加",
+        targetId: created.id,
+        targetName: created.name,
+        text: `添加了API「${created.name}」`,
+      });
+      return json({ ok: true, api: created }, 201);
+    });
   }
   return methodNotAllowed("GET, POST");
 }
@@ -170,13 +246,34 @@ async function apiOne(request: Request, env: Env, id: string): Promise<Response>
     if (gate) return gate;
     const body = await readBody(request);
     if (!body.ok) return body.response;
-    return wrap(async () => json({ ok: true, api: await updateApi(env.DB, id, body.value, Date.now()) }));
+    return wrap(async () => {
+      const updated = await updateApi(env.DB, id, body.value, Date.now());
+      await logOp(env.DB, {
+        actor: await panelActor(request, env),
+        module: "API",
+        action: "修改",
+        targetId: id,
+        targetName: updated.name,
+        text: `修改了API「${updated.name}」`,
+      });
+      return json({ ok: true, api: updated });
+    });
   }
   if (method === "DELETE") {
     const gate = await mutationGate(request);
     if (gate) return gate;
     return wrap(async () => {
+      const before = (await listApis(env.DB, null)).find((row) => row.id === id);
       await deleteApi(env.DB, id);
+      const name = before?.name ?? id;
+      await logOp(env.DB, {
+        actor: await panelActor(request, env),
+        module: "API",
+        action: "删除",
+        targetId: id,
+        targetName: name,
+        text: `删除了API「${name}」`,
+      });
       return json({ ok: true });
     });
   }

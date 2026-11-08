@@ -17,6 +17,7 @@ import {
   soulVersionPublic,
   updateSoul,
 } from "./soul";
+import { logOp, panelActor } from "./oplog";
 
 const MAX_BODY_BYTES = 512 * 1024; // Persona documents can be long.
 const ACTOR = "user";
@@ -66,6 +67,14 @@ async function collection(request: Request, env: Env): Promise<Response> {
     if (!body.ok) return body.response;
     return wrap(async () => {
       const created = await createSoul(env.DB, body.value, ACTOR, "panel", Date.now());
+      await logOp(env.DB, {
+        actor: await panelActor(request, env),
+        module: "Soul",
+        action: "添加",
+        targetId: created.id,
+        targetName: created.agent_name,
+        text: `添加了 Soul（${created.agent_name}）`,
+      });
       return json({ ok: true, soul: soulDetail(created) }, 201);
     });
   }
@@ -86,12 +95,30 @@ async function oneRoute(request: Request, env: Env, id: string): Promise<Respons
     if (!body.ok) return body.response;
     return wrap(async () => {
       const updated = await updateSoul(env.DB, id, body.value, ACTOR, "panel", Date.now());
+      await logOp(env.DB, {
+        actor: await panelActor(request, env),
+        module: "Soul",
+        action: "修改",
+        targetId: id,
+        targetName: updated.agent_name,
+        text: `修改了 Soul（${updated.agent_name}）`,
+      });
       return json({ ok: true, soul: soulDetail(updated) });
     });
   }
   if (method === "DELETE") {
     return wrap(async () => {
+      const before = await getSoulById(env.DB, id);
       await deleteSoul(env.DB, id, ACTOR, Date.now());
+      const name = before?.agent_name ?? id;
+      await logOp(env.DB, {
+        actor: await panelActor(request, env),
+        module: "Soul",
+        action: "删除",
+        targetId: id,
+        targetName: name,
+        text: `删除了 Soul（${name}）`,
+      });
       return json({ ok: true });
     });
   }
@@ -114,6 +141,14 @@ async function rollbackRoute(request: Request, env: Env, id: string): Promise<Re
   if (!body.ok) return body.response;
   return wrap(async () => {
     const updated = await rollbackSoul(env.DB, id, body.value.version, ACTOR, Date.now());
+    await logOp(env.DB, {
+      actor: await panelActor(request, env),
+      module: "Soul",
+      action: "回滚",
+      targetId: id,
+      targetName: updated.agent_name,
+      text: `把 Soul（${updated.agent_name}）回滚到旧版本`,
+    });
     return json({ ok: true, soul: soulDetail(updated) });
   });
 }

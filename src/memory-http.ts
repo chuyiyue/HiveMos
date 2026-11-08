@@ -18,6 +18,7 @@ import {
   updateMemory,
 } from "./memory";
 import { ingestMemories, tagOneMemory, tagUntaggedMemories } from "./memory-ai";
+import { logOp, panelActor } from "./oplog";
 
 const MAX_BODY_BYTES = 256 * 1024;
 const CHANNEL = { actor: "user", source: "panel", auditReads: false };
@@ -63,6 +64,14 @@ async function memories(request: Request, env: Env): Promise<Response> {
     const body = await readBody(request);
     if (body instanceof Response) return body;
     const created = await createMemory(env.DB, body, CHANNEL, Date.now());
+    await logOp(env.DB, {
+      actor: await panelActor(request, env),
+      module: "记忆",
+      action: "添加",
+      targetId: created.id,
+      targetName: created.title,
+      text: `添加了记忆「${created.title}」`,
+    });
     return json({ ok: true, memory: memoryPublic(created) }, 201);
   }
   return json({ ok: false, error: "方法不允许" }, 405, { allow: "GET, POST" });
@@ -75,6 +84,16 @@ async function ingest(request: Request, env: Env): Promise<Response> {
   const body = await readBody(request);
   if (body instanceof Response) return body;
   const result = await ingestMemories(env, body, CHANNEL, Date.now());
+  await logOp(env.DB, {
+    actor: await panelActor(request, env),
+    module: "记忆",
+    action: "添加",
+    targetId: null,
+    targetName: null,
+    text: result.split
+      ? `通过智能录入添加了记忆，AI 拆成 ${result.memories.length} 条`
+      : "通过智能录入添加了 1 条记忆（AI 不可用，整段保存）",
+  });
   return json(
     { ok: true, split: result.split, count: result.memories.length, memories: result.memories.map(memoryPublic) },
     201,
@@ -88,6 +107,16 @@ async function tagUntagged(request: Request, env: Env): Promise<Response> {
   const body = await readBody(request);
   if (body instanceof Response) return body;
   const result = await tagUntaggedMemories(env, body.limit, CHANNEL, Date.now());
+  if (result.tagged > 0) {
+    await logOp(env.DB, {
+      actor: await panelActor(request, env),
+      module: "记忆",
+      action: "打标",
+      targetId: null,
+      targetName: null,
+      text: `AI 补全标签：给 ${result.tagged} 条记忆打上了标签`,
+    });
+  }
   return json({ ok: true, ...result });
 }
 
@@ -96,6 +125,16 @@ async function tagOne(request: Request, env: Env, id: string): Promise<Response>
     return json({ ok: false, error: "方法不允许" }, 405, { allow: "POST" });
   }
   const result = await tagOneMemory(env, id, CHANNEL, Date.now());
+  if (!result.skipped) {
+    await logOp(env.DB, {
+      actor: await panelActor(request, env),
+      module: "记忆",
+      action: "打标",
+      targetId: id,
+      targetName: result.memory.title,
+      text: `给记忆「${result.memory.title}」打上了标签`,
+    });
+  }
   return json({ ok: true, memory: memoryPublic(result.memory), skipped: result.skipped });
 }
 
@@ -109,6 +148,14 @@ async function groups(request: Request, env: Env): Promise<Response> {
     const body = await readBody(request);
     if (body instanceof Response) return body;
     const created = await createMemoryGroup(env.DB, body, Date.now());
+    await logOp(env.DB, {
+      actor: await panelActor(request, env),
+      module: "分组",
+      action: "添加",
+      targetId: created.id,
+      targetName: created.name,
+      text: `添加了记忆分组「${created.name}」`,
+    });
     return json({ ok: true, group: memoryGroupPublic(created) }, 201);
   }
   return json({ ok: false, error: "方法不允许" }, 405, { allow: "GET, POST" });
@@ -120,10 +167,28 @@ async function groupOneHandler(request: Request, env: Env, id: string): Promise<
     const body = await readBody(request);
     if (body instanceof Response) return body;
     const updated = await renameMemoryGroup(env.DB, id, body, Date.now());
+    await logOp(env.DB, {
+      actor: await panelActor(request, env),
+      module: "分组",
+      action: "修改",
+      targetId: id,
+      targetName: updated.name,
+      text: `把记忆分组改名为「${updated.name}」`,
+    });
     return json({ ok: true, group: memoryGroupPublic(updated) });
   }
   if (method === "DELETE") {
+    const before = (await listMemoryGroups(env.DB)).find((group) => group.id === id);
     await deleteMemoryGroup(env.DB, id, Date.now());
+    const name = before?.name ?? id;
+    await logOp(env.DB, {
+      actor: await panelActor(request, env),
+      module: "分组",
+      action: "删除",
+      targetId: id,
+      targetName: name,
+      text: `删除了记忆分组「${name}」`,
+    });
     return json({ ok: true });
   }
   return json({ ok: false, error: "方法不允许" }, 405, { allow: "PATCH, DELETE" });
@@ -135,10 +200,26 @@ async function memoryOne(request: Request, env: Env, id: string): Promise<Respon
     const body = await readBody(request);
     if (body instanceof Response) return body;
     const updated = await updateMemory(env.DB, id, body, CHANNEL, Date.now());
+    await logOp(env.DB, {
+      actor: await panelActor(request, env),
+      module: "记忆",
+      action: "修改",
+      targetId: id,
+      targetName: updated.title,
+      text: `修改了记忆「${updated.title}」`,
+    });
     return json({ ok: true, memory: memoryPublic(updated) });
   }
   if (method === "DELETE") {
     const deleted = await deleteMemory(env.DB, id, CHANNEL, Date.now());
+    await logOp(env.DB, {
+      actor: await panelActor(request, env),
+      module: "记忆",
+      action: "删除",
+      targetId: id,
+      targetName: deleted.title,
+      text: `删除了记忆「${deleted.title}」`,
+    });
     return json({ ok: true, memory: memoryPublic(deleted) });
   }
   return json({ ok: false, error: "方法不允许" }, 405, { allow: "PATCH, DELETE" });

@@ -19,6 +19,7 @@ import {
   updatePasswordHash,
 } from "./accounts";
 import type { UserRecord } from "./accounts";
+import { logOp } from "./oplog";
 import type { Env } from "./env";
 import { json, readJsonLimited, readLimitedBytes, rejectsSensitiveWrite } from "./http";
 import { requireAdminUser } from "./session";
@@ -71,6 +72,14 @@ async function updatePreferences(request: Request, env: Env): Promise<Response> 
   if (!body.ok) return body.response;
   if (!body.value || typeof body.value !== "object") return json({ ok: false, error: "请求格式不正确" }, 400);
   const limit = await setSidebarPinLimit(env.DB, (body.value as { sidebar_pin_limit?: unknown }).sidebar_pin_limit);
+  await logOp(env.DB, {
+    actor: user.username,
+    module: "设置",
+    action: "修改",
+    targetId: user.id,
+    targetName: user.username,
+    text: `把侧边栏固定上限改为 ${limit}`,
+  });
   return json({ ok: true, preferences: { sidebar_pin_limit: limit } });
 }
 
@@ -107,6 +116,14 @@ async function updateProfile(request: Request, env: Env): Promise<Response> {
   const parsed = readProfileUsername(body.value);
   if ("error" in parsed) return json({ ok: false, error: parsed.error }, 400);
   await setProfileUsername(env.DB, parsed.username);
+  await logOp(env.DB, {
+    actor: user.username,
+    module: "设置",
+    action: "修改",
+    targetId: user.id,
+    targetName: user.username,
+    text: `把显示名称改为「${parsed.username}」`,
+  });
   return json({ ok: true, profile_username: parsed.username });
 }
 
@@ -125,6 +142,14 @@ async function changePassword(request: Request, env: Env): Promise<Response> {
   await updatePasswordHash(env.DB, user.id, await hashPassword(parsed.password));
   await deleteUserSessions(env.DB, user.id);
   await deleteUserTotpTickets(env.DB, user.id);
+  await logOp(env.DB, {
+    actor: user.username,
+    module: "账号",
+    action: "改密码",
+    targetId: user.id,
+    targetName: user.username,
+    text: "修改了登录密码",
+  });
   const headers = new Headers();
   headers.set("set-cookie", sessionCookieHeader("", requestIsSecure(request), 0));
   return json({ ok: true }, 200, headers);

@@ -1,31 +1,30 @@
-// Unified read-only aggregation over every module's audit / access-log
-// table. One merged, time-descending stream powers the overview page's
-// 调用记录 tab (all boards) and the per-agent record section inside the
-// agent manage dialog (agent_id filter).
+// Unified read-only aggregation over the modules' audit tables, powering
+// the overview page's 调用记录 tab and the per-agent record section inside
+// the agent manage dialog (agent_id filter).
+//
+// This feed is strictly the Agent/MCP side: only rows an agent caused
+// through the MCP tools appear here. Everything the admin does in the
+// panel lives in user_ops instead （系统日志 tab, src/oplog.ts). Sources
+// tell the two apart as follows:
+//   mcp_fetch_audit  MCP 与 Skills — written only by the agent read paths
+//                    (fetchConfigForAgent / getSkillForAgent); no panel
+//                    writer exists, so rows are kept as-is
+//   calendar_audit   日历          — the actor column discriminates:
+//   task_audit       任务            panel writes actor 'user', MCP writes
+//   memory_audit     记忆            the agent id, calendar mirror sync
+//   soul_audit       Soul            writes 'mirror-sync'; only rows whose
+//                    actor is an agent id are kept
+//   machines_audit   云计算资源    — has an explicit source column
+//                    ('panel' | 'mcp'); only 'mcp' rows are kept
+//
+// Panel-only sources are not read here at all: agents_audit (its actor is
+// always the admin managing agents), vault_access_log (it has no actor
+// column and every reveal is the admin in the panel) and sessions (admin
+// logins).
 //
 // Tolerance rule (same as overview-http): a source table that is missing
 // or fails to read degrades to "skipped" and is reported in `degraded`;
 // it never fails the whole response.
-//
-// Sources and their boards:
-//   mcp_fetch_audit  MCP 与 Skills — agent took an MCP config / Skill body
-//   calendar_audit   日历          — event create/update/delete (incl. mirror sync)
-//   task_audit       任务          — task lifecycle
-//   memory_audit     记忆          — memory reads and writes
-//   soul_audit       Soul          — soul reads and writes
-//   machines_audit   云计算资源    — machine ops, credential reveals/fetches
-//   agents_audit     Agents 与应用 — panel-side agent management (create /
-//                                    update / delete / rotate / permissions /
-//                                    token_reveal; actor is always the admin,
-//                                    the agent is the target)
-//   vault_access_log 保险库        — secret reveals (actor is always the admin)
-//   sessions         登录          — live admin sessions (one row per login;
-//                                    rows vanish on revoke/expiry, so this is
-//                                    a live view, not a durable audit trail)
-//
-// Boards with no audit table at all (app management operations,
-// panel-side MCP/Skills/API edits, vault entry edits, settings changes)
-// simply never appear here; nothing is fabricated for them.
 
 import type { D1Database } from "./env";
 
@@ -49,15 +48,12 @@ export interface RecordModule {
 }
 
 export const RECORD_MODULES: RecordModule[] = [
-  { key: "agents", label: "Agents 与应用" },
   { key: "mcp", label: "MCP 与 Skills" },
   { key: "calendar", label: "日历" },
   { key: "tasks", label: "任务" },
   { key: "memory", label: "记忆" },
   { key: "soul", label: "Soul" },
   { key: "machines", label: "云计算资源" },
-  { key: "vault", label: "保险库" },
-  { key: "login", label: "登录" },
 ];
 
 const MODULE_LABEL = new Map(RECORD_MODULES.map((m) => [m.key, m.label]));
@@ -126,8 +122,8 @@ function base(module: string): { module: string; module_label: string } {
 
 // ---- per-source fetchers ------------------------------------------------------
 // Each fetcher returns up to `need` rows, newest first. When an agentId
-// filter is set, sources whose rows carry an actor/agent column filter in
-// SQL; sources without an actor (vault, login) are skipped entirely.
+// filter is set, sources filter to that agent in SQL; otherwise they
+// filter to agent-caused rows only (see the source notes above).
 
 type Fetcher = (
   db: D1Database,
@@ -176,7 +172,7 @@ const mcpRecords: Fetcher = async (db, _agentNames, agentId, need) => {
 };
 
 const calendarRecords: Fetcher = async (db, agentNames, agentId, need) => {
-  const where = agentId ? "WHERE au.actor = ?" : "";
+  const where = agentId ? "WHERE au.actor = ?" : "WHERE substr(au.actor, 1, 4) = 'agt_'";
   const binds: Array<string | number> = agentId ? [agentId, need] : [need];
   const { rows, ok } = await allRows<{
     id: string; at: number; actor: string; action: string; event_id: string | null; calendar_id: string | null;
@@ -216,7 +212,7 @@ const calendarRecords: Fetcher = async (db, agentNames, agentId, need) => {
 };
 
 const taskRecords: Fetcher = async (db, agentNames, agentId, need) => {
-  const where = agentId ? "WHERE au.actor = ?" : "";
+  const where = agentId ? "WHERE au.actor = ?" : "WHERE substr(au.actor, 1, 4) = 'agt_'";
   const binds: Array<string | number> = agentId ? [agentId, need] : [need];
   const { rows, ok } = await allRows<{
     id: string; at: number; actor: string; action: string; task_id: string | null;
@@ -259,7 +255,7 @@ const taskRecords: Fetcher = async (db, agentNames, agentId, need) => {
 };
 
 const memoryRecords: Fetcher = async (db, agentNames, agentId, need) => {
-  const where = agentId ? "WHERE actor = ?" : "";
+  const where = agentId ? "WHERE actor = ?" : "WHERE substr(actor, 1, 4) = 'agt_'";
   const binds: Array<string | number> = agentId ? [agentId, need] : [need];
   const { rows, ok } = await allRows<{
     id: string; at: number; actor: string; action: string; memory_id: string | null; diff_json: string | null;
@@ -300,7 +296,7 @@ const memoryRecords: Fetcher = async (db, agentNames, agentId, need) => {
 };
 
 const soulRecords: Fetcher = async (db, agentNames, agentId, need) => {
-  const where = agentId ? "WHERE au.actor = ?" : "";
+  const where = agentId ? "WHERE au.actor = ?" : "WHERE substr(au.actor, 1, 4) = 'agt_'";
   const binds: Array<string | number> = agentId ? [agentId, need] : [need];
   const { rows, ok } = await allRows<{
     id: string; at: number; actor: string; action: string; soul_id: string | null;
@@ -343,7 +339,9 @@ const soulRecords: Fetcher = async (db, agentNames, agentId, need) => {
 };
 
 const machineRecords: Fetcher = async (db, agentNames, agentId, need) => {
-  const where = agentId ? "WHERE au.actor = ?" : "";
+  // machines_audit rows carry an explicit source: panel operations write
+  // 'panel', MCP tool calls write 'mcp'. Only the MCP side belongs here.
+  const where = agentId ? "WHERE au.actor = ?" : "WHERE au.source = 'mcp'";
   const binds: Array<string | number> = agentId ? [agentId, need] : [need];
   const { rows, ok } = await allRows<{
     id: string; at: number; actor: string; action: string; machine_id: string | null; machine_name: string | null;
@@ -384,137 +382,13 @@ const machineRecords: Fetcher = async (db, agentNames, agentId, need) => {
   };
 };
 
-const vaultRecords: Fetcher = async (db, _agentNames, agentId, need) => {
-  // vault_access_log has no actor column: every reveal is the admin in the
-  // panel, so an agent filter excludes this source completely.
-  if (agentId) return { rows: [], ok: true };
-  const { rows, ok } = await allRows<{
-    id: string; at: number; target_kind: string; target_id: string; action: string; target_name: string | null;
-  }>(
-    db,
-    `SELECT l.id, l.created_at AS at, l.target_kind, l.target_id, l.action,
-            CASE l.target_kind
-              WHEN 'entry' THEN (SELECT name FROM vault_entries WHERE id = l.target_id)
-              WHEN 'gateway' THEN (SELECT name FROM gateways WHERE id = l.target_id)
-            END AS target_name
-     FROM vault_access_log l
-     ORDER BY l.created_at DESC, l.id DESC LIMIT ?`,
-    [need],
-  );
-  return {
-    ok,
-    rows: rows.map((row) => {
-      const target = row.target_name || "未知条目";
-      const isGateway = row.target_kind === "gateway";
-      return {
-        ...base("vault"),
-        id: `vault:${row.id}`,
-        at: row.at,
-        actor: "管理员",
-        actor_id: null,
-        action: row.action,
-        action_label: "查看明文",
-        target,
-        target_id: row.target_id,
-        text: isGateway ? `查看了网关「${target}」的密钥明文` : `查看了「${target}」的密码明文`,
-      };
-    }),
-  };
-};
-
-const loginRecords: Fetcher = async (db, _agentNames, agentId, need) => {
-  // Sessions carry no agent actor; excluded from per-agent views.
-  if (agentId) return { rows: [], ok: true };
-  const { rows, ok } = await allRows<{ id: string; at: number; user_agent: string | null }>(
-    db,
-    "SELECT id, created_at AS at, user_agent FROM sessions ORDER BY created_at DESC LIMIT ?",
-    [need],
-  );
-  return {
-    ok,
-    rows: rows.map((row) => {
-      const ua = row.user_agent ? row.user_agent.slice(0, 80) : null;
-      return {
-        ...base("login"),
-        id: `login:${row.id}`,
-        at: row.at,
-        actor: "管理员",
-        actor_id: null,
-        action: "login",
-        action_label: "登录",
-        target: ua,
-        target_id: null,
-        text: ua ? `登录了面板（${ua}）` : "登录了面板",
-      };
-    }),
-  };
-};
-
-
-const agentMgmtRecords: Fetcher = async (db, _agentNames, agentId, need) => {
-  // agents_audit rows are ABOUT an agent (the admin is the actor), so the
-  // agentId filter matches the subject agent: a per-agent view shows the
-  // management trail for that agent.
-  const where = agentId ? "WHERE au.agent_id = ?" : "";
-  const binds: Array<string | number> = agentId ? [agentId, need] : [need];
-  const { rows, ok } = await allRows<{
-    id: string; at: number; agent_id: string; action: string; agent_name: string | null;
-  }>(
-    db,
-    `SELECT au.id, au.created_at AS at, au.agent_id, au.action,
-            a.name AS agent_name
-     FROM agents_audit au
-     LEFT JOIN agents a ON a.id = au.agent_id
-     ${where}
-     ORDER BY au.created_at DESC, au.id DESC LIMIT ?`,
-    binds,
-  );
-  const labels: Record<string, string> = {
-    create: "创建 Agent",
-    update: "修改 Agent",
-    delete: "删除 Agent",
-    rotate: "轮换密钥",
-    permissions: "修改权限",
-    token_reveal: "复制密钥",
-  };
-  const verbs: Record<string, string> = {
-    create: "创建了 Agent",
-    update: "修改了 Agent",
-    delete: "删除了 Agent",
-    rotate: "轮换了密钥",
-    permissions: "修改了权限",
-    token_reveal: "复制了密钥（查看令牌明文）",
-  };
-  return {
-    ok,
-    rows: rows.map((row) => {
-      const target = row.agent_name || "已删除的 Agent";
-      return {
-        ...base("agents"),
-        id: `agents:${row.id}`,
-        at: row.at,
-        actor: "管理员",
-        actor_id: null,
-        action: row.action,
-        action_label: labels[row.action] ?? row.action,
-        target,
-        target_id: row.agent_id,
-        text: `${verbs[row.action] ?? row.action}「${target}」`,
-      };
-    }),
-  };
-};
-
 const FETCHERS: Record<string, Fetcher> = {
-  agents: agentMgmtRecords,
   mcp: mcpRecords,
   calendar: calendarRecords,
   tasks: taskRecords,
   memory: memoryRecords,
   soul: soulRecords,
   machines: machineRecords,
-  vault: vaultRecords,
-  login: loginRecords,
 };
 
 export function isRecordModule(key: string): boolean {

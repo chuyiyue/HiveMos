@@ -26,6 +26,9 @@ import {
   updateMachine,
   vaultKeyOf,
 } from "./machines";
+import { logOp, panelActor } from "./oplog";
+
+const MACHINE_KIND_LABELS: Record<string, string> = { server: "服务器", cloud: "云主机", worker: "Worker" };
 
 const MAX_BODY_BYTES = 64 * 1024;
 const ACTOR = "user";
@@ -93,6 +96,15 @@ async function collection(request: Request, env: Env, ctx: WaitCtx): Promise<Res
     if (!body.ok) return body.response;
     return wrap(async () => {
       const created = await createMachine(env.DB, body.value, ACTOR, "panel", Date.now(), vaultKeyOf(env));
+      const kindLabel = MACHINE_KIND_LABELS[created.kind] ?? created.kind;
+      await logOp(env.DB, {
+        actor: await panelActor(request, env),
+        module: "云主机",
+        action: "添加",
+        targetId: created.id,
+        targetName: created.name,
+        text: `添加了${kindLabel}「${created.name}」`,
+      });
       return json({ ok: true, machine: machinePublic(created) }, 201);
     });
   }
@@ -106,13 +118,34 @@ async function machineOne(request: Request, env: Env, id: string): Promise<Respo
     if (gate) return gate;
     const body = await readBody(request);
     if (!body.ok) return body.response;
-    return wrap(async () => json({ ok: true, machine: machinePublic(await updateMachine(env.DB, id, body.value, ACTOR, "panel", Date.now(), vaultKeyOf(env))) }));
+    return wrap(async () => {
+      const updated = await updateMachine(env.DB, id, body.value, ACTOR, "panel", Date.now(), vaultKeyOf(env));
+      await logOp(env.DB, {
+        actor: await panelActor(request, env),
+        module: "云主机",
+        action: "修改",
+        targetId: id,
+        targetName: updated.name,
+        text: `修改了「${updated.name}」`,
+      });
+      return json({ ok: true, machine: machinePublic(updated) });
+    });
   }
   if (method === "DELETE") {
     const gate = await mutationGate(request);
     if (gate) return gate;
     return wrap(async () => {
+      const before = (await listMachines(env.DB, null)).find((row) => row.id === id);
       await deleteMachine(env.DB, id, ACTOR, "panel", Date.now());
+      const name = before?.name ?? id;
+      await logOp(env.DB, {
+        actor: await panelActor(request, env),
+        module: "云主机",
+        action: "删除",
+        targetId: id,
+        targetName: name,
+        text: `删除了「${name}」`,
+      });
       return json({ ok: true });
     });
   }
@@ -130,17 +163,45 @@ async function machineAction(request: Request, env: Env, id: string, action: str
   if (action === "probe") {
     return wrap(async () => {
       const result = await probeMachineById(env.DB, id, vaultKeyOf(env), ACTOR, Date.now());
+      await logOp(env.DB, {
+        actor: await panelActor(request, env),
+        module: "云主机",
+        action: "探活",
+        targetId: id,
+        targetName: result.machine.name,
+        text: result.probe.ok ? `测试了「${result.machine.name}」的连接，在线` : `测试了「${result.machine.name}」的连接，未连通`,
+      });
       return json({ ok: true, machine: machinePublic(result.machine), probe: result.probe });
     });
   }
   if (action === "reveal") {
     return wrap(async () => {
       const result = await revealMachineSecret(env.DB, id, vaultKeyOf(env), ACTOR, Date.now());
+      const machine = (await listMachines(env.DB, null)).find((row) => row.id === id);
+      const name = machine?.name ?? id;
+      await logOp(env.DB, {
+        actor: await panelActor(request, env),
+        module: "云主机",
+        action: "查看",
+        targetId: id,
+        targetName: name,
+        text: `查看了「${name}」的接入信息`,
+      });
       return json({ ok: true, reveal: result });
     });
   }
   return wrap(async () => {
     const result = await fetchWorkersForMachine(env.DB, id, vaultKeyOf(env), ACTOR, Date.now());
+    const machine = (await listMachines(env.DB, null)).find((row) => row.id === id);
+    const name = machine?.name ?? id;
+    await logOp(env.DB, {
+      actor: await panelActor(request, env),
+      module: "云主机",
+      action: "查看",
+      targetId: id,
+      targetName: name,
+      text: `查看了「${name}」的 Workers 列表`,
+    });
     return json({ ok: true, workers: result.workers, fetched_at: result.fetched_at });
   });
 }
@@ -184,6 +245,14 @@ async function providerCollection(request: Request, env: Env): Promise<Response>
       const config = (body.value["config"] ?? {}) as Record<string, unknown>;
       const deviceIds = Array.isArray(body.value["device_ids"]) ? body.value["device_ids"].filter((value): value is string => typeof value === "string") : [];
       const result = await createConnectionWithDevices(env.DB, vaultKeyOf(env), { provider, name, config, deviceIds, groupId: body.value["group_id"] }, ACTOR, Date.now());
+      await logOp(env.DB, {
+        actor: await panelActor(request, env),
+        module: "云主机",
+        action: "添加",
+        targetId: result.connection.id,
+        targetName: result.connection.name,
+        text: `添加了服务商连接「${result.connection.name}」，导入 ${result.machines.length} 台设备`,
+      });
       return json({ ok: true, connection: result.connection, machines: result.machines }, 201);
     });
   }
@@ -198,11 +267,31 @@ async function providerActionRun(request: Request, env: Env, id: string, action:
     return wrap(async () => {
       const outcome = await testStoredConnection(env.DB, vaultKeyOf(env), id, Date.now());
       if (!outcome.ok) return json({ ok: false, error: outcome.error ?? "连接测试失败" });
+      const conn = (await listConnections(env.DB)).find((row) => row.id === id);
+      const name = conn?.name ?? id;
+      await logOp(env.DB, {
+        actor: await panelActor(request, env),
+        module: "云主机",
+        action: "探活",
+        targetId: id,
+        targetName: name,
+        text: `测试了服务商连接「${name}」`,
+      });
       return json({ ok: true, devices: outcome.devices ?? [] });
     });
   }
   return wrap(async () => {
     const result = await syncConnection(env.DB, vaultKeyOf(env), id, Date.now());
+    const conn = (await listConnections(env.DB)).find((row) => row.id === id);
+    const name = conn?.name ?? id;
+    await logOp(env.DB, {
+      actor: await panelActor(request, env),
+      module: "云主机",
+      action: "同步",
+      targetId: id,
+      targetName: name,
+      text: `同步了服务商连接「${name}」，更新 ${result.updated} 台设备`,
+    });
     return json({ ok: true, updated: result.updated, missing: result.missing, devices: result.devices });
   });
 }
@@ -212,7 +301,17 @@ async function providerOneRun(request: Request, env: Env, id: string): Promise<R
   const gate = await mutationGate(request);
   if (gate) return gate;
   return wrap(async () => {
+    const before = (await listConnections(env.DB)).find((row) => row.id === id);
     await deleteConnection(env.DB, id, Date.now());
+    const name = before?.name ?? id;
+    await logOp(env.DB, {
+      actor: await panelActor(request, env),
+      module: "云主机",
+      action: "删除",
+      targetId: id,
+      targetName: name,
+      text: `删除了服务商连接「${name}」，已导入的设备保留为独立设备`,
+    });
     return json({ ok: true });
   });
 }

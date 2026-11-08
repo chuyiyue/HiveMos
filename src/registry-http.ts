@@ -27,8 +27,24 @@ import {
   updateAgent,
   updateServer,
 } from "./registry";
+import { logOp, panelActor } from "./oplog";
 
 const MAX_BODY_BYTES = 256 * 1024;
+
+const GROUP_SCOPE_LABELS: Record<string, string> = { agent: "Agent", mcp: "MCP", machines: "云主机" };
+
+async function findGroup(env: Env, id: string): Promise<{ scope: string; name: string } | null> {
+  for (const scope of ["agent", "mcp", "machines"]) {
+    try {
+      const groups = await listGroups(env.DB, scope);
+      const found = groups.find((group) => group.id === id);
+      if (found) return { scope: found.scope, name: found.name };
+    } catch {
+      // A scope that fails to read just is not where this group lives.
+    }
+  }
+  return null;
+}
 
 export async function handleRegistryRequest(request: Request, env: Env, ctx: WaitCtx, path: string): Promise<Response | null> {
   if (path === "/api/mcp-servers") return mcpCollection(request, env, ctx);
@@ -68,6 +84,17 @@ async function mcpCollection(request: Request, env: Env, ctx: WaitCtx): Promise<
     const body = await readJson(request);
     if (!body.ok) return body.response;
     const created = await createServer(env, ctx, body.value);
+    if (created.ok) {
+      const name = created.server.title || created.server.name;
+      await logOp(env.DB, {
+        actor: await panelActor(request, env),
+        module: "MCP",
+        action: "添加",
+        targetId: created.server.id,
+        targetName: name,
+        text: `添加了 MCP「${name}」`,
+      });
+    }
     return serverResponse(created, true);
   }
   return methodNotAllowed("GET, POST");
@@ -91,15 +118,49 @@ async function mcpOne(request: Request, env: Env, ctx: WaitCtx, id: string): Pro
     if (!body.ok) return body.response;
     if (isManualSnapshot(body.value)) {
       const raw = (body.value as { snapshot_json?: unknown }).snapshot_json;
-      return serverResponse(await saveManualSnapshot(env, ctx, id, raw), false);
+      const saved = await saveManualSnapshot(env, ctx, id, raw);
+      if (saved.ok) {
+        const name = saved.server.title || saved.server.name;
+        await logOp(env.DB, {
+          actor: await panelActor(request, env),
+          module: "MCP",
+          action: "修改",
+          targetId: id,
+          targetName: name,
+          text: `保存了 MCP「${name}」的快照`,
+        });
+      }
+      return serverResponse(saved, false);
     }
-    return serverResponse(await updateServer(env, ctx, id, body.value), false);
+    const updated = await updateServer(env, ctx, id, body.value);
+    if (updated.ok) {
+      const name = updated.server.title || updated.server.name;
+      await logOp(env.DB, {
+        actor: await panelActor(request, env),
+        module: "MCP",
+        action: "修改",
+        targetId: id,
+        targetName: name,
+        text: `修改了 MCP「${name}」`,
+      });
+    }
+    return serverResponse(updated, false);
   }
   if (method === "DELETE") {
     const gate = await mutationGate(request);
     if (gate) return gate;
+    const before = await readPublicServer(env.DB, id).catch(() => null);
     const removed = await deleteServer(env.DB, id);
     if (!removed.ok) return json({ ok: false, error: removed.error }, removed.status);
+    const name = before ? before.title || before.name : id;
+    await logOp(env.DB, {
+      actor: await panelActor(request, env),
+      module: "MCP",
+      action: "删除",
+      targetId: id,
+      targetName: name,
+      text: `删除了 MCP「${name}」`,
+    });
     return json({ ok: true });
   }
   return methodNotAllowed("GET, PUT, DELETE");
@@ -110,6 +171,17 @@ async function refreshOne(request: Request, env: Env, ctx: WaitCtx, id: string):
   const gate = await mutationGate(request);
   if (gate) return gate;
   const refreshed = await refreshServerSnapshot(env, ctx, id, null);
+  if (refreshed.ok) {
+    const name = refreshed.server.title || refreshed.server.name;
+    await logOp(env.DB, {
+      actor: await panelActor(request, env),
+      module: "MCP",
+      action: "同步",
+      targetId: id,
+      targetName: name,
+      text: `刷新了 MCP「${name}」的快照`,
+    });
+  }
   return serverResponse(refreshed, false);
 }
 
@@ -148,6 +220,14 @@ async function agentCollection(request: Request, env: Env): Promise<Response> {
     if (!body.ok) return body.response;
     const created = await createAgent(env, body.value);
     if (!created.ok) return json({ ok: false, error: created.error }, created.status);
+    await logOp(env.DB, {
+      actor: await panelActor(request, env),
+      module: "Agent",
+      action: "添加",
+      targetId: created.agent.id,
+      targetName: created.agent.name,
+      text: `添加了 Agent「${created.agent.name}」`,
+    });
     return json({ ok: true, agent: created.agent }, 201);
   }
   return methodNotAllowed("GET, POST");
@@ -162,13 +242,49 @@ async function agentOne(request: Request, env: Env, id: string): Promise<Respons
     if (!body.ok) return body.response;
     const updated = await updateAgent(env.DB, id, body.value);
     if (!updated.ok) return json({ ok: false, error: updated.error }, updated.status);
+    const value = (body.value ?? {}) as Record<string, unknown>;
+    const name = updated.agent.name;
+    let action = "修改";
+    let text = `修改了 Agent「${name}」`;
+    if ("pinned" in value) {
+      action = value.pinned ? "固定" : "取消固定";
+      text = value.pinned ? `把 Agent「${name}」固定到侧边栏` : `取消了 Agent「${name}」的固定`;
+    } else if ("status" in value) {
+      action = value.status === "active" ? "启用" : "停用";
+      text = `${action}了 Agent「${name}」`;
+    } else if ("permissions" in value) {
+      text = `修改了 Agent「${name}」的权限`;
+    } else if ("avatar_icon" in value || "avatar_url" in value) {
+      text = `更换了 Agent「${name}」的头像`;
+    } else if ("name" in value) {
+      text = `把 Agent 改名为「${name}」`;
+    }
+    await logOp(env.DB, {
+      actor: await panelActor(request, env),
+      module: "Agent",
+      action,
+      targetId: id,
+      targetName: name,
+      text,
+    });
     return json({ ok: true, agent: updated.agent });
   }
   if (method === "DELETE") {
     const gate = await mutationGate(request);
     if (gate) return gate;
+    const listed = await listAgents(env.DB).catch(() => null);
+    const before = listed?.find((agent) => agent.id === id);
     const disabled = await disableAgent(env.DB, id);
     if (!disabled.ok) return json({ ok: false, error: disabled.error }, disabled.status);
+    const name = before?.name ?? id;
+    await logOp(env.DB, {
+      actor: await panelActor(request, env),
+      module: "Agent",
+      action: "停用",
+      targetId: id,
+      targetName: name,
+      text: `停用了 Agent「${name}」`,
+    });
     return json({ ok: true });
   }
   return methodNotAllowed("PATCH, DELETE");
@@ -227,6 +343,14 @@ async function agentAvatar(request: Request, env: Env, id: string): Promise<Resp
     if (!type) return json({ ok: false, error: "只支持 PNG、JPEG、WebP 或 GIF 图片" }, 400);
     const saved = await setAgentAvatar(env.DB, id, type, bytes);
     if (!saved.ok) return json({ ok: false, error: saved.error }, saved.status);
+    await logOp(env.DB, {
+      actor: await panelActor(request, env),
+      module: "Agent",
+      action: "修改",
+      targetId: id,
+      targetName: saved.agent.name,
+      text: `更换了 Agent「${saved.agent.name}」的头像`,
+    });
     return json({ ok: true, agent: saved.agent });
   }
   if (method === "DELETE") {
@@ -234,6 +358,14 @@ async function agentAvatar(request: Request, env: Env, id: string): Promise<Resp
     if (gate) return gate;
     const cleared = await clearAgentAvatar(env.DB, id);
     if (!cleared.ok) return json({ ok: false, error: cleared.error }, cleared.status);
+    await logOp(env.DB, {
+      actor: await panelActor(request, env),
+      module: "Agent",
+      action: "修改",
+      targetId: id,
+      targetName: cleared.agent.name,
+      text: `把 Agent「${cleared.agent.name}」的头像恢复默认`,
+    });
     return json({ ok: true, agent: cleared.agent });
   }
   return methodNotAllowed("GET, POST, DELETE");
@@ -244,6 +376,16 @@ async function agentRevealToken(request: Request, env: Env, id: string): Promise
   if (gate) return gate;
   const revealed = await revealAgentToken(env, id);
   if (!revealed.ok) return json({ ok: false, error: revealed.error }, revealed.status);
+  const listed = await listAgents(env.DB).catch(() => null);
+  const name = listed?.find((agent) => agent.id === id)?.name ?? id;
+  await logOp(env.DB, {
+    actor: await panelActor(request, env),
+    module: "Agent",
+    action: "查看",
+    targetId: id,
+    targetName: name,
+    text: `复制了 Agent「${name}」的密钥`,
+  });
   return json({ ok: true, token: revealed.token });
 }
 
@@ -253,6 +395,14 @@ async function agentRotate(request: Request, env: Env, id: string): Promise<Resp
   if (gate) return gate;
   const rotated = await rotateAgentToken(env, id);
   if (!rotated.ok) return json({ ok: false, error: rotated.error }, rotated.status);
+  await logOp(env.DB, {
+    actor: await panelActor(request, env),
+    module: "Agent",
+    action: "轮换密钥",
+    targetId: id,
+    targetName: rotated.agent.name,
+    text: `轮换了 Agent「${rotated.agent.name}」的密钥`,
+  });
   return json({ ok: true, agent: rotated.agent, token: rotated.token });
 }
 
@@ -286,6 +436,14 @@ async function groupCollection(request: Request, env: Env): Promise<Response> {
     if (!scope) return json({ ok: false, error: "scope 不正确" }, 400);
     const created = await createGroup(env.DB, scope, body.value);
     if (!created.ok) return json({ ok: false, error: created.error }, created.status);
+    await logOp(env.DB, {
+      actor: await panelActor(request, env),
+      module: "分组",
+      action: "添加",
+      targetId: created.group.id,
+      targetName: created.group.name,
+      text: `添加了${GROUP_SCOPE_LABELS[created.group.scope] ?? created.group.scope}分组「${created.group.name}」`,
+    });
     return json({ ok: true, group: created.group }, 201);
   }
   return methodNotAllowed("GET, POST");
@@ -300,13 +458,32 @@ async function groupOne(request: Request, env: Env, id: string): Promise<Respons
     if (!body.ok) return body.response;
     const renamed = await renameGroup(env.DB, id, body.value);
     if (!renamed.ok) return json({ ok: false, error: renamed.error }, renamed.status);
+    await logOp(env.DB, {
+      actor: await panelActor(request, env),
+      module: "分组",
+      action: "修改",
+      targetId: id,
+      targetName: renamed.group.name,
+      text: `把${GROUP_SCOPE_LABELS[renamed.group.scope] ?? renamed.group.scope}分组改名为「${renamed.group.name}」`,
+    });
     return json({ ok: true, group: renamed.group });
   }
   if (method === "DELETE") {
     const gate = await mutationGate(request);
     if (gate) return gate;
+    const before = await findGroup(env, id);
     const removed = await deleteGroup(env.DB, id);
     if (!removed.ok) return json({ ok: false, error: removed.error }, removed.status);
+    const name = before?.name ?? id;
+    const scopeLabel = before ? GROUP_SCOPE_LABELS[before.scope] ?? before.scope : "";
+    await logOp(env.DB, {
+      actor: await panelActor(request, env),
+      module: "分组",
+      action: "删除",
+      targetId: id,
+      targetName: name,
+      text: `删除了${scopeLabel}分组「${name}」`,
+    });
     return json({ ok: true });
   }
   return methodNotAllowed("PATCH, DELETE");

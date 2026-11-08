@@ -31,6 +31,7 @@ import {
   updateEntry,
   updateGateway,
 } from "./vault";
+import { logOp, panelActor } from "./oplog";
 
 const MAX_BODY_BYTES = 64 * 1024;
 
@@ -79,6 +80,14 @@ async function entries(request: Request, env: Env): Promise<Response> {
     const body = await readBody(request);
     if (body instanceof Response) return body;
     const created = await createEntry(env.DB, env, body, Date.now());
+    await logOp(env.DB, {
+      actor: await panelActor(request, env),
+      module: "保险库",
+      action: "添加",
+      targetId: created.id,
+      targetName: created.name,
+      text: `添加了保险库条目「${created.name}」`,
+    });
     return json({ ok: true, entry: entryPublic(created) }, 201);
   }
   return json({ ok: false, error: "方法不允许" }, 405, { allow: "GET, POST" });
@@ -90,10 +99,26 @@ async function entryOneHandler(request: Request, env: Env, id: string): Promise<
     const body = await readBody(request);
     if (body instanceof Response) return body;
     const updated = await updateEntry(env.DB, env, id, body, Date.now());
+    await logOp(env.DB, {
+      actor: await panelActor(request, env),
+      module: "保险库",
+      action: "修改",
+      targetId: id,
+      targetName: updated.name,
+      text: `修改了保险库条目「${updated.name}」`,
+    });
     return json({ ok: true, entry: entryPublic(updated) });
   }
   if (method === "DELETE") {
     const deleted = await deleteEntry(env.DB, id);
+    await logOp(env.DB, {
+      actor: await panelActor(request, env),
+      module: "保险库",
+      action: "删除",
+      targetId: id,
+      targetName: deleted.name,
+      text: `删除了保险库条目「${deleted.name}」`,
+    });
     return json({ ok: true, entry: entryPublic(deleted) });
   }
   return json({ ok: false, error: "方法不允许" }, 405, { allow: "PATCH, DELETE" });
@@ -108,6 +133,14 @@ async function gateways(request: Request, env: Env): Promise<Response> {
     const body = await readBody(request);
     if (body instanceof Response) return body;
     const created = await createGateway(env.DB, env, body, Date.now());
+    await logOp(env.DB, {
+      actor: await panelActor(request, env),
+      module: "保险库",
+      action: "添加",
+      targetId: created.id,
+      targetName: created.name,
+      text: `添加了模型网关「${created.name}」`,
+    });
     return json({ ok: true, gateway: gatewayPublic(created) }, 201);
   }
   return json({ ok: false, error: "方法不允许" }, 405, { allow: "GET, POST" });
@@ -119,10 +152,26 @@ async function gatewayOneHandler(request: Request, env: Env, id: string): Promis
     const body = await readBody(request);
     if (body instanceof Response) return body;
     const updated = await updateGateway(env.DB, env, id, body, Date.now());
+    await logOp(env.DB, {
+      actor: await panelActor(request, env),
+      module: "保险库",
+      action: "修改",
+      targetId: id,
+      targetName: updated.name,
+      text: `修改了模型网关「${updated.name}」`,
+    });
     return json({ ok: true, gateway: gatewayPublic(updated) });
   }
   if (method === "DELETE") {
     const deleted = await deleteGateway(env.DB, id);
+    await logOp(env.DB, {
+      actor: await panelActor(request, env),
+      module: "保险库",
+      action: "删除",
+      targetId: id,
+      targetName: deleted.name,
+      text: `删除了模型网关「${deleted.name}」`,
+    });
     return json({ ok: true, gateway: gatewayPublic(deleted) });
   }
   return json({ ok: false, error: "方法不允许" }, 405, { allow: "PATCH, DELETE" });
@@ -137,6 +186,14 @@ async function emails(request: Request, env: Env): Promise<Response> {
     const body = await readBody(request);
     if (body instanceof Response) return body;
     const created = await createEmail(env.DB, body, Date.now());
+    await logOp(env.DB, {
+      actor: await panelActor(request, env),
+      module: "保险库",
+      action: "添加",
+      targetId: created.id,
+      targetName: created.address,
+      text: `添加了发信邮箱「${created.address}」`,
+    });
     return json({ ok: true, email: emailPublic(created) }, 201);
   }
   return json({ ok: false, error: "方法不允许" }, 405, { allow: "GET, POST" });
@@ -148,10 +205,26 @@ async function emailOneHandler(request: Request, env: Env, id: string): Promise<
     const body = await readBody(request);
     if (body instanceof Response) return body;
     const updated = await updateEmail(env.DB, id, body, Date.now());
+    await logOp(env.DB, {
+      actor: await panelActor(request, env),
+      module: "保险库",
+      action: "修改",
+      targetId: id,
+      targetName: updated.address,
+      text: `修改了发信邮箱「${updated.address}」`,
+    });
     return json({ ok: true, email: emailPublic(updated) });
   }
   if (method === "DELETE") {
     const deleted = await deleteEmail(env.DB, id);
+    await logOp(env.DB, {
+      actor: await panelActor(request, env),
+      module: "保险库",
+      action: "删除",
+      targetId: id,
+      targetName: deleted.address,
+      text: `删除了发信邮箱「${deleted.address}」`,
+    });
     return json({ ok: true, email: emailPublic(deleted) });
   }
   return json({ ok: false, error: "方法不允许" }, 405, { allow: "PATCH, DELETE" });
@@ -166,6 +239,14 @@ async function groups(request: Request, env: Env): Promise<Response> {
     const body = await readBody(request);
     if (body instanceof Response) return body;
     const created = await createGroup(env.DB, body, Date.now());
+    await logOp(env.DB, {
+      actor: await panelActor(request, env),
+      module: "分组",
+      action: "添加",
+      targetId: created.id,
+      targetName: created.name,
+      text: `添加了保险库分组「${created.name}」`,
+    });
     return json({ ok: true, group: groupPublic(created) }, 201);
   }
   return json({ ok: false, error: "方法不允许" }, 405, { allow: "GET, POST" });
@@ -177,10 +258,26 @@ async function groupOneHandler(request: Request, env: Env, id: string): Promise<
     const body = await readBody(request);
     if (body instanceof Response) return body;
     const updated = await updateGroup(env.DB, id, body);
+    await logOp(env.DB, {
+      actor: await panelActor(request, env),
+      module: "分组",
+      action: "修改",
+      targetId: id,
+      targetName: updated.name,
+      text: `把保险库分组改名为「${updated.name}」`,
+    });
     return json({ ok: true, group: groupPublic(updated) });
   }
   if (method === "DELETE") {
     const deleted = await deleteGroup(env.DB, id);
+    await logOp(env.DB, {
+      actor: await panelActor(request, env),
+      module: "分组",
+      action: "删除",
+      targetId: id,
+      targetName: deleted.name,
+      text: `删除了保险库分组「${deleted.name}」`,
+    });
     return json({ ok: true, group: groupPublic(deleted) });
   }
   return json({ ok: false, error: "方法不允许" }, 405, { allow: "PATCH, DELETE" });
