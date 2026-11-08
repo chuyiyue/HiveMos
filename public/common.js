@@ -178,7 +178,9 @@
       var looseBody = loose.length
         ? (options.cardGrid ? cardList : list)(loose.map(options.renderItem).join(""))
         : emptyState(options.emptyTitle || "暂无内容", options.emptyText || "");
-      html += section(options.ungroupedTitle || "未分组", loose.length ? loose.length + " 个" : "", looseBody);
+      html += options.bareUngrouped
+        ? looseBody
+        : section(options.ungroupedTitle || "未分组", loose.length ? loose.length + " 个" : "", looseBody);
     }
     return html;
   }

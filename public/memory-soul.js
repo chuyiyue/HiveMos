@@ -220,29 +220,27 @@
     return facts;
   }
 
+  function sentenceOf(content) {
+    var text = String(content || "").trim();
+    if (!text) return "";
+    var match = text.match(/^[^。！？.!?\n]+[。！？.!?]?/);
+    return (match ? match[0] : text).trim();
+  }
+
   function memoryCard(item) {
-    var tags = (item.tags || [])
-      .map(function (tag) {
-        return (
-          "<button type=\"button\" class=\"tag" +
-          (memTagFilter === tag ? " is-accent" : "") +
-          "\" data-mem-tag=\"" + C.escapeHtml(tag) + "\">" + C.escapeHtml(tag) + "</button>"
-        );
-      })
-      .join("");
-    return C.record({
-      id: item.id,
-      icon: "memory",
-      title: item.title,
-      pill: item.scope,
-      corner: memPinCorner(item),
-      lede: excerptOf(item.content),
-      facts: memoryFacts(item),
-      extra: tags ? "<div class=\"tag-row\">" + tags + "</div>" : "",
-      actions:
-        "<button type=\"button\" class=\"secondary\" data-copy=\"" + C.escapeHtml(item.content || "") + "\" data-label=\"复制内容\">复制内容</button>",
-      manage: "memory:" + item.id,
-    });
+    var sentence = sentenceOf(item.content) || item.title || "";
+    return (
+      '<article class="record mem-card">' +
+      '<div class="record-info" data-manage="memory:' +
+      C.escapeHtml(item.id) +
+      '" tabindex="0" role="button" aria-haspopup="dialog" aria-label="查看记忆">' +
+      '<p class="lede mem-one-line">' +
+      C.escapeHtml(sentence) +
+      "</p>" +
+      "</div>" +
+      memPinCorner(item) +
+      "</article>"
+    );
   }
 
   function allMemTags() {
@@ -306,7 +304,7 @@
         },
         renderItem: memoryCard,
         cardGrid: true,
-        ungroupedTitle: "未分组",
+        bareUngrouped: true,
         emptyGroupText: "在记忆的管理弹窗里可以移入分组",
         emptyTitle: "还没有记忆",
         emptyText: "点上方按钮添加第一条",
@@ -353,7 +351,6 @@
     var soulHtml =
       "<div class=\"stack\">" +
       C.section("Soul", String(SOULS.length) + " 份", soulBody) +
-      C.section("草稿", "", C.emptyState("没有未发布的草稿", "尚未同步的 Soul 草稿会留在这里")) +
       "</div>";
     var head =
       '<div class="page-head"><div class="page-tabs" role="tablist">' +
