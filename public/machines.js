@@ -64,6 +64,13 @@
     if (found) openMachineManage(kind, found);
   }
 
+  function connName(item) {
+    if (!item || !item.connection_id) return "";
+    var found = null;
+    state.connections.forEach(function (conn) { if (conn.id === item.connection_id) found = conn; });
+    return found ? found.name : "";
+  }
+
   function openMachineManage(kind, item) {
     var id = C.escapeHtml(item.id);
     function row(label, valueHtml) {
@@ -91,6 +98,11 @@
         row("API 令牌", item.api_token_tail ? "末四位 " + C.escapeHtml(item.api_token_tail) : "未填写") +
         row("版本", C.escapeHtml(item.version || "未记录")) +
         row("更新时间", C.escapeHtml(C.formatMinute(item.updated_at) || "—"));
+    } else if (item.connection_id) {
+      facts =
+        row("来源", C.escapeHtml(connName(item) || "服务商连接")) +
+        (item.remote_name ? row("远端名称", C.escapeHtml(item.remote_name)) : "") +
+        row("最近同步", C.escapeHtml(item.last_sync_at ? C.formatMinute(item.last_sync_at) || "—" : "尚未同步"));
     } else {
       facts =
         row("厂商", C.escapeHtml(item.vendor || "未填写")) +
@@ -98,6 +110,12 @@
         row("地域", C.escapeHtml(item.region || "未填写"));
     }
     var btns = "";
+    if (item.connection_id) {
+      var connId = C.escapeHtml(item.connection_id);
+      btns += "<button type=\"button\" class=\"secondary\" data-conn=\"test\" data-id=\"" + connId + "\">测试连接</button>";
+      btns += "<button type=\"button\" class=\"secondary\" data-conn=\"sync\" data-id=\"" + connId + "\">同步连接</button>";
+      btns += "<button type=\"button\" class=\"danger\" data-conn=\"delete\" data-id=\"" + connId + "\">删除连接</button>";
+    }
       btns += "<button type=\"button\" class=\"secondary\" data-mact=\"probe\" data-kind=\"server\" data-id=\"" + id + "\">测试连接</button>";
       btns += "<button type=\"button\" class=\"secondary\" data-mact=\"reveal\" data-kind=\"server\" data-id=\"" + id + "\">查看 SSH 密码</button>";
       btns += "<button type=\"button\" class=\"secondary\" data-mact=\"workers\" data-kind=\"worker\" data-id=\"" + id + "\">" + (item.platform === "vercel" ? "查看项目" : "查看 Workers") + "</button>";
@@ -151,6 +169,7 @@
       id: item.id,
       icon: kind === "worker" ? "layout" : "monitor",
       title: item.name,
+      pill: kind === "host" ? connName(item) || undefined : undefined,
       status: item.status,
       lede: lede || "",
       facts: facts,
@@ -178,13 +197,13 @@
       ]);
     }
     if (item.connection_id) {
-      return card(uiKind, item, [
+      var connFacts = [
         ["状态", C.escapeHtml(item.status === "running" ? "运行中" : "已停止")],
         ["规格", C.escapeHtml(item.spec || "未同步")],
-        ["服务商", C.escapeHtml(item.vendor || "")],
-        ["远端名称", C.escapeHtml(item.remote_name || "")],
         ["最近同步", C.escapeHtml(item.last_sync_at ? C.formatMinute(item.last_sync_at) || "—" : "尚未同步")],
-      ]);
+      ];
+      if (item.remote_name && item.remote_name !== item.name) connFacts.push(["远端名称", C.escapeHtml(item.remote_name)]);
+      return card(uiKind, item, connFacts);
     }
     var facts = [
       ["规格", C.escapeHtml(item.spec)],
@@ -230,7 +249,6 @@
       "</div>";
     var hostHtml =
       "<div class=\"stack\">" +
-      connectionsSection() +
       listSection("host", "云主机", "台") +
       C.section("已释放", "", C.emptyState("没有已释放的云主机", "释放后的实例会留在这里，直到记录被清掉")) +
       "</div>";
@@ -663,26 +681,6 @@
   }
 
   // ---- 云主机：服务商连接（第二阶段） ----
-
-  function connectionsSection() {
-    if (!state.loaded || !state.connections.length) return "";
-    var cards = state.connections.map(function (conn) {
-      var id = C.escapeHtml(conn.id);
-      var facts = [
-        ["服务商", C.escapeHtml(conn.provider_label)],
-        ["凭据", conn.config_tail ? "末四位 " + C.escapeHtml(conn.config_tail) : "未保存"],
-        ["已接入设备", String(conn.device_count) + " 台"],
-        ["最近测试", conn.last_test_at ? (conn.last_test_ok ? "成功 · " : "失败 · ") + (C.formatMinute(conn.last_test_at) || "") : "尚未测试"],
-      ];
-      if (!conn.last_test_ok && conn.last_error) facts.push(["失败原因", C.escapeHtml(conn.last_error)]);
-      var actions =
-        "<button type=\"button\" class=\"secondary\" data-conn=\"test\" data-id=\"" + id + "\">测试连接</button>" +
-        "<button type=\"button\" class=\"secondary\" data-conn=\"sync\" data-id=\"" + id + "\">同步</button>" +
-        "<button type=\"button\" class=\"danger\" data-conn=\"delete\" data-id=\"" + id + "\">删除连接</button>";
-      return C.record({ id: conn.id, icon: "layout", title: conn.name, facts: facts, actions: actions });
-    });
-    return C.section("服务商连接", String(state.connections.length) + " 个", C.cardList(cards.join("")));
-  }
 
   function connectionAction(conn, act, btn) {
     btn.disabled = true;
