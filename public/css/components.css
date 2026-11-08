@@ -940,4 +940,10 @@ a.alert-row:hover { background: var(--surface-hover); }
 
 /* Memory cards: uniform height across each grid (Roye: 等宽等高). */
 .card-list:has(> .mem-card) { grid-auto-rows: 1fr; }
+/* All record cards: rows in a list share one height, and each card is a
+   flex column whose action row is pinned to the bottom, so cards line up
+   across a row and across the page. */
+.card-list { grid-auto-rows: 1fr; }
+.card-list > article.record { height: 100%; }
+article.record .card-actions { margin-top: auto; }
 .mem-card { height: 100%; }

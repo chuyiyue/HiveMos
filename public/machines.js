@@ -171,7 +171,7 @@
       title: kind === "worker" ? item.name : deviceTitle(item),
       bodyHtml:
         C.manageInfoHead({
-          icon: kind === "server" ? undefined : kind === "worker" ? "layout" : "monitor",
+          icon: kind === "server" ? undefined : kind === "worker" ? (item.platform === "vercel" ? "vercel" : "cloudflare") : "monitor",
           iconHtml: kind === "server" ? serverIconBtnHtml(item) : undefined,
           title: kind === "worker" ? item.name : deviceTitle(item),
           sub:
@@ -332,7 +332,7 @@
     }
     return C.record({
       id: item.id,
-      icon: kind === "server" ? undefined : kind === "worker" ? "layout" : "monitor",
+      icon: kind === "server" ? undefined : kind === "worker" ? (item.platform === "vercel" ? "vercel" : "cloudflare") : "monitor",
       iconHtml: kind === "server" ? serverIconHtml(item) : undefined,
       title: kind === "worker" ? item.name : deviceTitle(item),
       pill: kind === "server" ? serverBadge(item) : kind === "host" ? connName(item) || undefined : undefined,
