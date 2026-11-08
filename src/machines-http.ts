@@ -183,7 +183,7 @@ async function providerCollection(request: Request, env: Env): Promise<Response>
       const name = typeof body.value["name"] === "string" ? body.value["name"] : "";
       const config = (body.value["config"] ?? {}) as Record<string, unknown>;
       const deviceIds = Array.isArray(body.value["device_ids"]) ? body.value["device_ids"].filter((value): value is string => typeof value === "string") : [];
-      const result = await createConnectionWithDevices(env.DB, vaultKeyOf(env), { provider, name, config, deviceIds }, ACTOR, Date.now());
+      const result = await createConnectionWithDevices(env.DB, vaultKeyOf(env), { provider, name, config, deviceIds, groupId: body.value["group_id"] }, ACTOR, Date.now());
       return json({ ok: true, connection: result.connection, machines: result.machines }, 201);
     });
   }

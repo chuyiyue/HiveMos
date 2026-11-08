@@ -1087,18 +1087,20 @@ function toPublicGroup(row: GroupRow): PublicGroup {
   };
 }
 
+const GROUP_MEMBER_TABLES: Record<string, string> = { agent: "agents", mcp: "mcp_servers", machines: "machines" };
+
 export async function getGroup(db: D1Database, id: string): Promise<GroupRow | null> {
   return prepare(db, "SELECT id, scope, name, created_at FROM groups WHERE id = ?", [id]).first<GroupRow>();
 }
 
 async function countGroupMembers(db: D1Database, scope: string, groupId: string): Promise<number> {
-  const table = scope === "agent" ? "agents" : "mcp_servers";
+  const table = GROUP_MEMBER_TABLES[scope] ?? "mcp_servers";
   const row = await prepare(db, "SELECT COUNT(*) AS n FROM " + table + " WHERE group_id = ?", [groupId]).first<{ n: number | string }>();
   return asNumber(row?.n) ?? 0;
 }
 
 export async function listGroups(db: D1Database, scope: string): Promise<PublicGroup[]> {
-  const table = scope === "agent" ? "agents" : "mcp_servers";
+  const table = GROUP_MEMBER_TABLES[scope] ?? "mcp_servers";
   const listed = await prepare(
     db,
     "SELECT g.id, g.scope, g.name, g.created_at, (SELECT COUNT(*) FROM " +
@@ -1156,6 +1158,7 @@ export async function deleteGroup(db: D1Database, id: string): Promise<{ ok: tru
   try {
     await prepare(db, "UPDATE agents SET group_id = NULL WHERE group_id = ?", [id]).run();
     await prepare(db, "UPDATE mcp_servers SET group_id = NULL WHERE group_id = ?", [id]).run();
+    await prepare(db, "UPDATE machines SET group_id = NULL WHERE group_id = ?", [id]).run();
     await prepare(db, "DELETE FROM groups WHERE id = ?", [id]).run();
   } catch {
     return dbFailure();

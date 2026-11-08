@@ -21,7 +21,7 @@
 import { prepare } from "./registry";
 import type { D1Database } from "./env";
 import type { ContentKey } from "./crypto";
-import { MachineError, machinePublic, openMachineSecret, sealMachineSecret, type PublicMachine } from "./machines";
+import { MachineError, machinePublic, openMachineSecret, readGroupId, sealMachineSecret, type PublicMachine } from "./machines";
 
 export interface ProviderDevice {
   remoteId: string;
@@ -487,16 +487,17 @@ export async function testStoredConnection(db: D1Database, key: ContentKey, id: 
 }
 
 const MACHINE_INSERT =
-  "INSERT INTO machines (id, kind, name, region, spec, description, version, status, binding, last_heartbeat_at, note, hostname, os, ip, ssh_host, ssh_port, ssh_user, auth_type, ssh_secret_enc, ssh_tail, vendor, access_note, cf_account_id, api_token_enc, api_token_tail, connection_id, remote_id, remote_name, last_sync_at, created_at, updated_at) VALUES (?, 'cloud', ?, ?, ?, '', '', ?, '未绑定', NULL, '', '', ?, ?, '', 22, '', 'password', '', '', ?, '', '', '', '', ?, ?, ?, ?, ?, ?)";
+  "INSERT INTO machines (id, kind, name, region, spec, description, version, status, binding, last_heartbeat_at, note, hostname, os, ip, ssh_host, ssh_port, ssh_user, auth_type, ssh_secret_enc, ssh_tail, vendor, access_note, cf_account_id, api_token_enc, api_token_tail, connection_id, remote_id, remote_name, last_sync_at, group_id, created_at, updated_at) VALUES (?, 'cloud', ?, ?, ?, '', '', ?, '未绑定', NULL, '', '', ?, ?, '', 22, '', 'password', '', '', ?, '', '', '', '', ?, ?, ?, ?, ?, ?, ?)";
 
 export async function createConnectionWithDevices(
   db: D1Database,
   key: ContentKey,
-  input: { provider: string; name?: string; config: Record<string, unknown>; deviceIds: string[] },
+  input: { provider: string; name?: string; config: Record<string, unknown>; deviceIds: string[]; groupId?: unknown },
   actor: string,
   now: number,
 ): Promise<{ connection: PublicConnection; machines: PublicMachine[] }> {
   const provider = input.provider;
+  const groupId = await readGroupId(db, input.groupId);
   const config = readProviderConfig(provider, input.config);
   // Saving re-lists from the provider: the client picks remote ids only, so
   // device facts can never be fabricated by the panel request.
@@ -530,6 +531,7 @@ export async function createConnectionWithDevices(
       device.remoteId,
       device.name,
       now,
+      groupId,
       now,
       now,
     ]).run();

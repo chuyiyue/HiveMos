@@ -15,7 +15,7 @@
 // shown on cards and never part of the public projection — it only appears
 // in the edit form and in machines_get_access results.
 
-import { prepare } from "./registry";
+import { getGroup, prepare } from "./registry";
 import type { D1Database } from "./env";
 import { decryptString, resolveContentKey, sealString, type ContentKey } from "./crypto";
 import { sshProbe, SshProbeError } from "./ssh-probe";
@@ -66,6 +66,7 @@ export interface MachineRow {
   remote_id: string;
   remote_name: string;
   last_sync_at: number | null;
+  group_id: string | null;
   ai_summary: string | null;
   ai_tags: string | null;
   created_at: number;
@@ -105,12 +106,13 @@ export interface PublicMachine {
   remote_id: string;
   remote_name: string;
   last_sync_at: number | null;
+  group_id: string | null;
   created_at: number;
   updated_at: number;
 }
 
 const COLUMNS =
-  "id, kind, name, region, spec, description, version, status, binding, last_heartbeat_at, note, hostname, os, ip, ssh_host, ssh_port, ssh_user, auth_type, ssh_secret_enc, ssh_tail, kernel, arch, probe_status, probe_at, probe_error, host_fingerprint, vendor, access_note, cf_account_id, api_token_enc, api_token_tail, connection_id, remote_id, remote_name, last_sync_at, ai_summary, ai_tags, created_at, updated_at";
+  "id, kind, name, region, spec, description, version, status, binding, last_heartbeat_at, note, hostname, os, ip, ssh_host, ssh_port, ssh_user, auth_type, ssh_secret_enc, ssh_tail, kernel, arch, probe_status, probe_at, probe_error, host_fingerprint, vendor, access_note, cf_account_id, api_token_enc, api_token_tail, connection_id, remote_id, remote_name, last_sync_at, ai_summary, ai_tags, created_at, updated_at, group_id";
 
 const ID_PREFIX: Record<string, string> = { server: "sv_", cloud: "pc_", worker: "wk_" };
 
@@ -154,6 +156,7 @@ export function machinePublic(row: MachineRow): PublicMachine {
     remote_id: row.remote_id,
     remote_name: row.remote_name,
     last_sync_at: row.last_sync_at,
+    group_id: row.group_id,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -347,12 +350,13 @@ export async function createMachine(
       apiTokenTail = tailOf(token);
     }
   }
+  const groupId = await readGroupId(db, input["group_id"]);
   const id = (ID_PREFIX[kind] ?? "mc_") + crypto.randomUUID().replace(/-/g, "");
   const status = kind === "worker" ? "active" : "running";
   await prepare(
     db,
-    "INSERT INTO machines (id, kind, name, region, spec, description, version, status, binding, last_heartbeat_at, note, hostname, os, ip, ssh_host, ssh_port, ssh_user, auth_type, ssh_secret_enc, ssh_tail, vendor, access_note, cf_account_id, api_token_enc, api_token_tail, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, '', ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    [id, kind, name, region, spec, description, status, binding, note, hostname, os, ip, sshHost, sshPort, sshUser, authType, sshSecretEnc, sshTail, vendor, accessNote, cfAccountId, apiTokenEnc, apiTokenTail, now, now],
+    "INSERT INTO machines (id, kind, name, region, spec, description, version, status, binding, last_heartbeat_at, note, hostname, os, ip, ssh_host, ssh_port, ssh_user, auth_type, ssh_secret_enc, ssh_tail, vendor, access_note, cf_account_id, api_token_enc, api_token_tail, group_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, '', ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    [id, kind, name, region, spec, description, status, binding, note, hostname, os, ip, sshHost, sshPort, sshUser, authType, sshSecretEnc, sshTail, vendor, accessNote, cfAccountId, apiTokenEnc, apiTokenTail, groupId, now, now],
   ).run();
   await writeAudit(db, { machineId: id, actor, source, action: "create", detail: { kind, name } }, now);
   const row = await getMachine(db, id);
@@ -396,6 +400,10 @@ export async function updateMachine(
   if (binding !== undefined) {
     next.binding = binding;
     changed.push("binding");
+  }
+  if (Object.prototype.hasOwnProperty.call(input, "group_id")) {
+    next.group_id = await readGroupId(db, input["group_id"]);
+    changed.push("group_id");
   }
   if (row.kind === "server" || row.kind === "cloud") {
     const note = readOptionalText(input, "note", 200, "备注");
@@ -477,7 +485,7 @@ export async function updateMachine(
   // are runtime fields owned by machines_report.
   await prepare(
     db,
-    "UPDATE machines SET name = ?, region = ?, spec = ?, description = ?, binding = ?, note = ?, hostname = ?, os = ?, ip = ?, ssh_host = ?, ssh_port = ?, ssh_user = ?, auth_type = ?, ssh_secret_enc = ?, ssh_tail = ?, vendor = ?, access_note = ?, cf_account_id = ?, api_token_enc = ?, api_token_tail = ?, updated_at = ? WHERE id = ?",
+    "UPDATE machines SET name = ?, region = ?, spec = ?, description = ?, binding = ?, note = ?, hostname = ?, os = ?, ip = ?, ssh_host = ?, ssh_port = ?, ssh_user = ?, auth_type = ?, ssh_secret_enc = ?, ssh_tail = ?, vendor = ?, access_note = ?, cf_account_id = ?, api_token_enc = ?, api_token_tail = ?, group_id = ?, updated_at = ? WHERE id = ?",
     [
       next.name,
       next.region,
@@ -499,6 +507,7 @@ export async function updateMachine(
       next.cf_account_id,
       next.api_token_enc,
       next.api_token_tail,
+      next.group_id,
       now,
       id,
     ],
@@ -798,4 +807,15 @@ export async function probeStaleServers(db: D1Database, key: ContentKey, actor: 
       // A single bad entry (or a missing vault key) must not break listing.
     }
   }
+}
+
+
+// Group membership (phase 3): one pool for the whole board, scope
+// "machines" in the shared groups table. Empty / null clears the grouping.
+export async function readGroupId(db: D1Database, value: unknown): Promise<string | null> {
+  if (value == null || value === "") return null;
+  if (typeof value !== "string") throw new MachineError(400, "分组不正确");
+  const group = await getGroup(db, value);
+  if (!group || group.scope !== "machines") throw new MachineError(400, "分组不存在");
+  return value;
 }
