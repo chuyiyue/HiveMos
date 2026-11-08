@@ -495,13 +495,13 @@
   // picks where it opens (centered dialog vs side panel) and passes an
   // onChanged(message) callback so its own list can refresh.
   var PERM_DOMAINS = [
-    ["registry", "注册表", "MCP 注册表的搜索、列表与取配置"],
+    ["registry", "MCP 与 Skills", "MCP 与 Skills 的搜索、列表与取配置"],
     ["memory", "记忆", "记忆的读写与同步"],
     ["soul", "Soul", "Soul 的读写与同步"],
     ["tasks", "任务", "任务的查看与处理"],
     ["calendar", "日历", "日程的查看与编辑"],
     ["vault", "保险库", "保险库条目的取用"],
-    ["machines", "云主机", "云主机状态与操作"],
+    ["machines", "云计算资源", "服务器、云主机与 Workers 的状态与操作"],
   ];
 
   function agentApi(method, url, body) {
