@@ -113,7 +113,7 @@
         "<p>" + C.escapeHtml(excerptOf(item.content)) + "</p>" +
         "<div class=\"manage-actions\">" +
         "<button type=\"button\" class=\"secondary\" data-card-act=\"edit\" data-kind=\"memory\" data-id=\"" + id + "\">编辑</button>" +
-        "<button type=\"button\" class=\"danger\" data-card-act=\"delete\" data-kind=\"memory\" data-id=\"" + id + "\">删除</button>" +
+        "<button type=\"button\" class=\"danger\" data-confirm-delete data-card-act=\"delete\" data-kind=\"memory\" data-id=\"" + id + "\">删除</button>" +
         "</div>",
     });
     ctrl.dialog.addEventListener("click", handleClick);
@@ -131,9 +131,8 @@
         "</dl>" +
         "<div class=\"manage-actions\">" +
         "<button type=\"button\" class=\"secondary\" data-card-act=\"edit\" data-kind=\"soul\" data-id=\"" + id + "\">编辑</button>" +
-        "<button type=\"button\" class=\"danger\" data-card-act=\"delete\" data-kind=\"soul\" data-id=\"" + id + "\">删除</button>" +
-        "</div>" +
-        "<div class=\"confirm-slot\" data-confirm-soul=\"" + id + "\"></div>",
+        "<button type=\"button\" class=\"danger\" data-confirm-delete data-card-act=\"delete\" data-kind=\"soul\" data-id=\"" + id + "\">删除</button>" +
+        "</div>"
     });
     ctrl.dialog.addEventListener("click", handleClick);
   }
@@ -321,18 +320,11 @@
   function removeMemory(item, srcEl) {
     var dlg = srcEl && srcEl.closest ? srcEl.closest("[data-manage-dialog]") : null;
     var anchor = (dlg && dlg.querySelector("[data-manage-confirm]")) || document.getElementById("memory-confirm");
-    C.askConfirm({
-      anchor: anchor,
-      title: "删除记忆",
-      text: "确认删除「" + item.title + "」吗？删除后从列表移除",
-      confirmLabel: "删除",
-      danger: true,
-    }).then(function (yes) {
-      if (!yes) return;
+    
       api("DELETE", "/api/memory/" + encodeURIComponent(item.id)).then(function (result) {
         if (result.data && result.data.ok) { C.closeCurrentOverlay(); loadMemories(); }
       });
-    });
+    
   }
 
   function openSoulHistory(item) {
@@ -402,18 +394,11 @@
 
   function deleteSoul(item) {
     var anchor = document.querySelector("[data-confirm-soul=\"" + item.id + "\"]");
-    C.askConfirm({
-      anchor: anchor,
-      title: "删除 Soul",
-      text: "确认删除「" + item.agent_name + "」的 Soul 吗？全部历史版本会一并删除",
-      confirmLabel: "删除",
-      danger: true,
-    }).then(function (yes) {
-      if (!yes) return;
+    
       soulApi("DELETE", "/api/soul/" + encodeURIComponent(item.id)).then(function (res) {
         if (res.status === 200) { C.closeCurrentOverlay(); loadSouls(); }
       });
-    });
+    
   }
 
   var page = document.getElementById("page");

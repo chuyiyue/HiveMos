@@ -122,20 +122,13 @@
   }
 
   function deleteTask(item, anchor) {
-    C.askConfirm({
-      anchor: anchor,
-      title: "删除任务",
-      text: "确认删除任务「" + item.title + "」吗？删除后无法恢复",
-      confirmLabel: "删除",
-      danger: true,
-    }).then(function (yes) {
-      if (!yes) return;
+    
       api("DELETE", "/api/tasks/" + encodeURIComponent(item.id)).then(function (res) {
         if (!res.data.ok) { taskState.error = res.data.error || "删除失败"; render(); return; }
         C.closeCurrentOverlay();
         refreshTasks();
       });
-    });
+    
   }
 
   // ---- 管理弹窗内容与动作 ----
@@ -218,7 +211,7 @@
     var id = C.escapeHtml(item.id);
     var btns =
       "<button type=\"button\" class=\"secondary\" data-action=\"task-edit\" data-id=\"" + id + "\">编辑</button>" +
-      "<button type=\"button\" class=\"danger\" data-action=\"task-delete\" data-id=\"" + id + "\">删除</button>";
+      "<button type=\"button\" class=\"danger\" data-confirm-delete data-action=\"task-delete\" data-id=\"" + id + "\">删除</button>";
     return (
       "<dl class=\"kv\">" +
       "<div><dt>状态</dt><dd>" + taskStatusText(item) + "</dd></div>" +
@@ -238,7 +231,7 @@
       btns += "<button type=\"button\" class=\"secondary\" data-action=\"cal-default\" data-id=\"" + id + "\">设为默认</button>";
     if (item.kind === "mirror")
       btns += "<button type=\"button\" class=\"secondary\" data-action=\"cal-refresh\" data-id=\"" + id + "\">立即刷新</button>";
-    btns += "<button type=\"button\" class=\"danger\" data-action=\"cal-delete\" data-id=\"" + id + "\">删除日历</button>";
+    btns += "<button type=\"button\" class=\"danger\" data-confirm-delete data-action=\"cal-delete\" data-id=\"" + id + "\">删除日历</button>";
     return "<div class=\"manage-actions\">" + btns + "</div>";
   }
 
@@ -262,21 +255,14 @@
   }
 
   function deleteCalendar(item, anchor) {
-    C.askConfirm({
-      anchor: anchor,
-      title: "删除日历",
-      text: "确认删除日历「" + item.name + "」吗？里面的日程会一起被删除",
-      confirmLabel: "删除",
-      danger: true,
-    }).then(function (yes) {
-      if (!yes) return;
+    
       api("DELETE", "/api/calendar/calendars/" + encodeURIComponent(item.id)).then(function (res) {
         setNotice(res.data.ok ? "日历已删除" : (res.data.error || "删除失败"), !res.data.ok);
         C.closeCurrentOverlay();
         cal.loaded = false;
         loadCalendar();
       });
-    });
+    
   }
 
   function eventManageBody(inst) {
@@ -290,12 +276,12 @@
         btns +=
           "<button type=\"button\" class=\"secondary\" data-action=\"event-edit-instance\" data-key=\"" + key + "\">编辑这一次</button>" +
           "<button type=\"button\" class=\"secondary\" data-action=\"event-edit-series\" data-key=\"" + key + "\">编辑整个系列</button>" +
-          "<button type=\"button\" class=\"danger\" data-action=\"event-delete-instance\" data-key=\"" + key + "\">删除这一次</button>" +
-          "<button type=\"button\" class=\"danger\" data-action=\"event-delete-series\" data-key=\"" + key + "\">删除整个系列</button>";
+          "<button type=\"button\" class=\"danger\" data-confirm-delete data-action=\"event-delete-instance\" data-key=\"" + key + "\">删除这一次</button>" +
+          "<button type=\"button\" class=\"danger\" data-confirm-delete data-action=\"event-delete-series\" data-key=\"" + key + "\">删除整个系列</button>";
       } else {
         btns +=
           "<button type=\"button\" class=\"secondary\" data-action=\"event-edit\" data-key=\"" + key + "\">编辑</button>" +
-          "<button type=\"button\" class=\"danger\" data-action=\"event-delete\" data-key=\"" + key + "\">删除</button>";
+          "<button type=\"button\" class=\"danger\" data-confirm-delete data-action=\"event-delete\" data-key=\"" + key + "\">删除</button>";
       }
     }
     return (
@@ -332,13 +318,7 @@
       doDelete();
       return;
     }
-    C.askConfirm({
-      anchor: anchor,
-      title: "删除日程",
-      text: "确认删除日程「" + inst.title + "」吗？",
-      confirmLabel: "删除",
-      danger: true,
-    }).then(function (yes) { if (yes) doDelete("series"); });
+     doDelete("series");
   }
 
   // --------------------------------------------------------------- calendar

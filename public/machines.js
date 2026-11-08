@@ -91,7 +91,7 @@
     var btns = "";
     if (kind !== "cloud")
       btns += "<button type=\"button\" class=\"secondary\" data-mact=\"edit\" data-kind=\"" + kind + "\" data-id=\"" + id + "\">编辑</button>";
-    btns += "<button type=\"button\" class=\"danger\" data-mact=\"delete\" data-kind=\"" + kind + "\" data-id=\"" + id + "\">删除</button>";
+    btns += "<button type=\"button\" class=\"danger\" data-confirm-delete data-mact=\"delete\" data-kind=\"" + kind + "\" data-id=\"" + id + "\">删除</button>";
     var kindLabel = kind === "server" ? "服务器" : kind === "worker" ? "Worker" : "云主机";
     var ctrl = C.openManageDialog({
       title: item.name,
@@ -114,18 +114,11 @@
   function deleteMachine(kind, item, anchor) {
     var dlg = anchor && anchor.closest ? anchor.closest("[data-manage-dialog]") : null;
     var mount = (dlg && dlg.querySelector("[data-manage-confirm]")) || anchor;
-    C.askConfirm({
-      anchor: mount,
-      title: "删除" + TITLE_FOR[kind],
-      text: "确认删除「" + item.name + "」吗？删除后无法恢复",
-      confirmLabel: "删除",
-      danger: true,
-    }).then(function (yes) {
-      if (!yes) return;
+    
       api("DELETE", "/api/machines/" + encodeURIComponent(item.id)).then(function (res) {
         if (res.data && res.data.ok) { C.closeCurrentOverlay(); load(); }
       });
-    });
+    
   }
 
   function card(kind, item, facts) {

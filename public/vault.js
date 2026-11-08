@@ -116,7 +116,7 @@
       "</dl>" +
       "<div class=\"manage-actions\">" +
       "<button type=\"button\" class=\"secondary\" data-vact=\"edit\" data-kind=\"secret\" data-id=\"" + id + "\">编辑</button>" +
-      "<button type=\"button\" class=\"danger\" data-vact=\"delete\" data-kind=\"secret\" data-id=\"" + id + "\">删除</button>" +
+      "<button type=\"button\" class=\"danger\" data-confirm-delete data-vact=\"delete\" data-kind=\"secret\" data-id=\"" + id + "\">删除</button>" +
       "</div>"
     );
   }
@@ -179,7 +179,7 @@
           "</dl></div>" +
           "<div class=\"manage-actions\">" +
           "<button type=\"button\" class=\"secondary\" data-vact=\"edit\" data-kind=\"gateway\" data-id=\"" + id + "\">编辑</button>" +
-          "<button type=\"button\" class=\"danger\" data-vact=\"delete\" data-kind=\"gateway\" data-id=\"" + id + "\">删除</button>" +
+          "<button type=\"button\" class=\"danger\" data-confirm-delete data-vact=\"delete\" data-kind=\"gateway\" data-id=\"" + id + "\">删除</button>" +
           "</div>",
       })
     );
@@ -198,7 +198,7 @@
           (item.note ? vaultFact("备注", item.note) : "") +
           "</dl></div>" +
           "<div class=\"manage-actions\">" +
-          "<button type=\"button\" class=\"danger\" data-vact=\"delete\" data-kind=\"email\" data-id=\"" + id + "\">删除</button>" +
+          "<button type=\"button\" class=\"danger\" data-confirm-delete data-vact=\"delete\" data-kind=\"email\" data-id=\"" + id + "\">删除</button>" +
           "</div>",
       })
     );
@@ -288,8 +288,7 @@
         head +
           "<div data-panel=\"vault\"" + (activeTab === "vault" ? "" : " hidden") + ">" + vaultHtml + "</div>" +
           "<div data-panel=\"gateway\"" + (activeTab === "gateway" ? "" : " hidden") + ">" + gatewayHtml + "</div>" +
-          "<div data-panel=\"email\"" + (activeTab === "email" ? "" : " hidden") + ">" + emailHtml + "</div>" +
-          "<div id=\"vault-confirm\"></div>"
+          "<div data-panel=\"email\"" + (activeTab === "email" ? "" : " hidden") + ">" + emailHtml + "</div>"
       )
     );
   }
@@ -442,18 +441,11 @@
     var reload = kind === "secret" ? loadEntries : kind === "gateway" ? loadGateways : loadEmails;
     var dlg = srcEl && srcEl.closest ? srcEl.closest("[data-manage-dialog]") : null;
     var anchor = (dlg && dlg.querySelector("[data-manage-confirm]")) || document.getElementById("vault-confirm");
-    C.askConfirm({
-      anchor: anchor,
-      title: "删除" + label,
-      text: "确认删除「" + title + "」吗？删除后无法恢复",
-      confirmLabel: "删除",
-      danger: true,
-    }).then(function (yes) {
-      if (!yes) return;
+    
       api("DELETE", url + encodeURIComponent(item.id)).then(function (result) {
         if (result.data && result.data.ok) { C.closeCurrentOverlay(); reload(); }
       });
-    });
+    
   }
 
   var page = document.getElementById("page");

@@ -596,3 +596,10 @@ dialog.side-panel[open] { animation: side-panel-in 0.22s ease; }
 @media (max-width: 639px) {
   article.record { padding: 16px; }
 }
+
+/* Two-step delete (common.js confirm-arm): armed button state. */
+button.is-armed, .is-armed {
+  background: var(--danger);
+  color: var(--on-danger);
+  border-color: transparent;
+}

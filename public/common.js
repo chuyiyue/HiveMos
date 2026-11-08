@@ -232,12 +232,61 @@
   // Pages fill the body, wire their own delegated handlers onto ctrl.dialog
   // (the mcp-skills wireDialog pattern), and use ctrl.confirmSlot as the
   // askConfirm anchor for flows started inside.
+  // ---- Two-step in-place delete confirmation (global) ----
+  // Any [data-confirm-delete] button: the first click only arms it (the
+  // label becomes the confirm text); the second click on the same button
+  // lets the page handler run the delete. Arming resets after a few
+  // seconds, when another button is clicked, or when a new overlay opens.
+  // Disable / revoke actions do not use this; they keep their own flows.
+  var armedDeleteBtn = null;
+  var armedDeleteTimer = null;
+  function disarmDelete() {
+    if (armedDeleteTimer) {
+      clearTimeout(armedDeleteTimer);
+      armedDeleteTimer = null;
+    }
+    if (armedDeleteBtn) {
+      var btn = armedDeleteBtn;
+      armedDeleteBtn = null;
+      btn.classList.remove("is-armed");
+      btn.removeAttribute("data-armed");
+      if (btn.dataset.armLabel !== undefined) {
+        btn.innerHTML = btn.dataset.armLabel;
+        delete btn.dataset.armLabel;
+      }
+    }
+  }
+  document.addEventListener(
+    "click",
+    function (event) {
+      var target = event.target;
+      if (!(target instanceof Element)) return;
+      var btn = target.closest("[data-confirm-delete]");
+      if (btn && btn === armedDeleteBtn) {
+        disarmDelete();
+        return;
+      }
+      if (armedDeleteBtn) disarmDelete();
+      if (!btn) return;
+      event.preventDefault();
+      event.stopPropagation();
+      armedDeleteBtn = btn;
+      btn.dataset.armLabel = btn.innerHTML;
+      btn.textContent = "确认删除";
+      btn.classList.add("is-armed");
+      btn.setAttribute("data-armed", "1");
+      armedDeleteTimer = setTimeout(disarmDelete, 3500);
+    },
+    true,
+  );
+
   var currentOverlay = null;
 
   var CLOSE_ICON =
     "<svg class=\"icon\" viewBox=\"0 0 24 24\" aria-hidden=\"true\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\"><path d=\"M6 6l12 12M18 6L6 18\"/></svg>";
 
   function buildOverlay(options, panel) {
+    disarmDelete();
     if (currentOverlay) currentOverlay.close();
     var dialog = document.createElement("dialog");
     dialog.className = panel ? "modal side-panel" : "modal manage-dialog" + (options.wide ? " wide" : "");
@@ -495,7 +544,7 @@
       "</div>" +
       (active
         ? "<div class=\"manage-danger-zone\"><p class=\"subtle\">删除后该 Agent 会被停用，令牌立即失效</p>" +
-          "<button type=\"button\" class=\"danger\" data-agent-act=\"disable\">删除</button></div>"
+          "<button type=\"button\" class=\"danger\" data-confirm-delete data-agent-act=\"disable\">删除</button></div>"
         : "<p class=\"subtle\">这个 Agent 已停用</p>");
     var permSection = partial
       ? '<p class="subtle" data-perm-pending>权限读取中</p>'
@@ -1034,14 +1083,7 @@
     }
 
     function openDisableConfirm() {
-      askConfirm({
-        anchor: ctrl.confirmSlot,
-        title: "删除 Agent",
-        text: "确认删除「" + agent.name + "」吗？删除后会被停用，该令牌不能再调用注册表",
-        confirmLabel: "删除",
-        danger: true,
-      }).then(function (yes) {
-        if (!yes || busy) return;
+      
         busy = true;
         agentApi("DELETE", "/api/agents/" + encodeURIComponent(agent.id))
           .then(function (result) {
@@ -1061,7 +1103,7 @@
             busy = false;
             setStatus("网络异常，请重试", true);
           });
-      });
+      
     }
 
     ctrl.dialog.addEventListener("click", function (event) {

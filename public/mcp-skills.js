@@ -279,7 +279,7 @@
         "<div data-mpanel=\"settings\" hidden>" +
         "<div class=\"manage-actions\">" +
         "<button type=\"button\" class=\"secondary\" data-action=\"edit\" data-id=\"" + id + "\">编辑条目</button>" +
-        "<button type=\"button\" class=\"danger\" data-action=\"delete\" data-id=\"" + id + "\">删除条目</button>" +
+        "<button type=\"button\" class=\"danger\" data-confirm-delete data-action=\"delete\" data-id=\"" + id + "\">删除条目</button>" +
         "</div>" +
         "</div>",
     });
@@ -362,9 +362,9 @@
       C.escapeHtml(server.id) +
       '">刷新快照</button><button type="button" class="secondary" data-action="snapshot" data-id="' +
       C.escapeHtml(server.id) +
-      '">手填快照</button><button type="button" class="danger" data-action="delete" data-id="' +
+      '">手填快照</button><button type="button" class="danger" data-confirm-delete data-action="delete" data-id="' +
       C.escapeHtml(server.id) +
-      '">删除</button></div><div id="mcp-confirm"></div></section>'
+      '">删除</button></div></section>'
     );
   }
 
@@ -409,15 +409,13 @@
         C.escapeHtml(group.id) +
         '"' +
         scopeAttr +
-        '>改名</button><button type="button" class="danger" data-action="' +
+        '>改名</button><button type="button" class="danger" data-confirm-delete data-action="' +
         prefix +
         'delete-group" data-id="' +
         C.escapeHtml(group.id) +
         '"' +
         scopeAttr +
-        '>删除</button><span class="confirm-slot" data-confirm-group="' +
-        C.escapeHtml(scope + ":" + group.id) +
-        '"></span>'
+        '>删除</button>'
       );
     };
   }
@@ -463,9 +461,8 @@
         "<dl class=\"kv\">" + facts + "</dl>" +
         "<div class=\"manage-actions\">" +
         "<button type=\"button\" class=\"secondary\" data-action=\"local-edit\" data-scope=\"" + scope + "\" data-id=\"" + id + "\">编辑</button>" +
-        "<button type=\"button\" class=\"danger\" data-action=\"local-delete\" data-scope=\"" + scope + "\" data-id=\"" + id + "\">删除</button>" +
-        "</div>" +
-        "<div class=\"confirm-slot\" data-confirm-item=\"" + scope + ":" + id + "\"></div>",
+        "<button type=\"button\" class=\"danger\" data-confirm-delete data-action=\"local-delete\" data-scope=\"" + scope + "\" data-id=\"" + id + "\">删除</button>" +
+        "</div>"
     });
     wireDialog(ctrl);
   }
@@ -912,14 +909,7 @@
     if (!server || state.busy) return;
     var dlg = srcEl && srcEl.closest ? srcEl.closest("[data-manage-dialog]") : null;
     var anchor = (dlg && dlg.querySelector("[data-manage-confirm]")) || document.getElementById("mcp-confirm");
-    C.askConfirm({
-      anchor: anchor,
-      title: "删除条目",
-      text: "确认删除「" + server.name + "」吗？删除后不可恢复",
-      confirmLabel: "删除",
-      danger: true,
-    }).then(function (yes) {
-      if (!yes) return;
+    
       state.busy = true;
       api("DELETE", "/api/mcp-servers/" + encodeURIComponent(id))
         .then(function (result) {
@@ -951,7 +941,7 @@
           state.noticeKind = "danger";
           render();
         });
-    });
+    
   }
 
   // ---- MCP 分组（走后端 /api/groups?scope=mcp） ----
@@ -1063,14 +1053,7 @@
     var anchor =
       document.querySelector('[data-confirm-group="' + slotScope + ':' + group.id + '"]') ||
       document.querySelector('[data-confirm-group="mcp:' + group.id + '"]');
-    C.askConfirm({
-      anchor: anchor,
-      title: "删除分组",
-      text: "确认删除分组「" + group.name + "」吗？组内条目会回到未分组，不会被删除",
-      confirmLabel: "删除",
-      danger: true,
-    }).then(function (yes) {
-      if (!yes || state.busy) return;
+    
       state.busy = true;
       api("DELETE", "/api/groups/" + encodeURIComponent(group.id))
         .then(function (result) {
@@ -1112,7 +1095,7 @@
           state.noticeKind = "danger";
           render();
         });
-    });
+    
   }
 
   // ---- MCP 卡片动作（展开区按钮直达，逻辑与原菜单一致） ----
@@ -1301,14 +1284,7 @@
 
   function deleteLocalGroup(scope, group) {
     var anchor = document.querySelector('[data-confirm-group="' + scope + ":" + group.id + '"]');
-    C.askConfirm({
-      anchor: anchor,
-      title: "删除分组",
-      text: "确认删除分组「" + group.name + "」吗？组内条目会回到未分组，不会被删除",
-      confirmLabel: "删除",
-      danger: true,
-    }).then(function (yes) {
-      if (!yes) return;
+    
       var store = localStore(scope);
       if (!store) return;
       store.groups = store.groups.filter(function (item) {
@@ -1320,19 +1296,12 @@
       state.notice = "已删除分组";
       state.noticeKind = "ok";
       render();
-    });
+    
   }
 
   function deleteLocalItem(scope, item) {
     var anchor = document.querySelector('[data-confirm-item="' + scope + ":" + item.id + '"]');
-    C.askConfirm({
-      anchor: anchor,
-      title: "删除",
-      text: "确认删除「" + item.name + "」吗？删除后不可恢复",
-      confirmLabel: "删除",
-      danger: true,
-    }).then(function (yes) {
-      if (!yes) return;
+    
       var store = localStore(scope);
       if (!store) return;
       var collection = scope === "skills" ? "/api/extras/skills" : "/api/extras/apis";
@@ -1358,7 +1327,7 @@
           state.noticeKind = "danger";
           render();
         });
-    });
+    
   }
 
   function load() {
