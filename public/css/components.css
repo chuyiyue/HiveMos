@@ -709,3 +709,15 @@ button.is-armed, .is-armed {
 .toast.is-danger { background: var(--danger); color: #fff; }
 .toast.is-out { opacity: 0; transform: translateY(4px); transition: opacity 0.25s ease, transform 0.25s ease; }
 @keyframes toast-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+/* 圆角防滚动条破坏：带圆角的滚动容器（弹窗卡片、菜单、权限云等）统一用
+   细滚动条 + 内嵌拇指 + 透明轨道，原生方形滚动条不再盖住右上角 */
+.modal-card, .action-menu-card, .perm-menu, .cs-list {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+.modal-card::-webkit-scrollbar, .action-menu-card::-webkit-scrollbar, .perm-menu::-webkit-scrollbar, .cs-list::-webkit-scrollbar { width: 10px; height: 10px; }
+.modal-card::-webkit-scrollbar-track, .action-menu-card::-webkit-scrollbar-track, .perm-menu::-webkit-scrollbar-track, .cs-list::-webkit-scrollbar-track { background: transparent; }
+.modal-card::-webkit-scrollbar-thumb, .action-menu-card::-webkit-scrollbar-thumb, .perm-menu::-webkit-scrollbar-thumb, .cs-list::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 8px; border: 3px solid transparent; background-clip: padding-box; }
+.modal-card::-webkit-scrollbar-thumb:hover, .action-menu-card::-webkit-scrollbar-thumb:hover, .perm-menu::-webkit-scrollbar-thumb:hover, .cs-list::-webkit-scrollbar-thumb:hover { background: var(--text-3); border: 3px solid transparent; background-clip: padding-box; }
+.modal-card::-webkit-scrollbar-corner, .action-menu-card::-webkit-scrollbar-corner, .perm-menu::-webkit-scrollbar-corner, .cs-list::-webkit-scrollbar-corner { background: transparent; }
