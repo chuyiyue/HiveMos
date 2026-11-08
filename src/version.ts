@@ -6,4 +6,4 @@
 // but it only moves when someone bumps it — the settings page presents it
 // as the source commit, not as a live probe of the running deployment.
 export const APP_VERSION = "";
-export const BUILD_COMMIT = "8458987";
+export const BUILD_COMMIT = "2beed4a";
