@@ -157,7 +157,7 @@
         "<label>配置<input name=\"spec\" maxlength=\"60\" autocomplete=\"off\" placeholder=\"例如 2 核 / 4 GB / 40 GB\" value=\"" + C.escapeHtml(v.spec || "") + "\" /></label>" +
         "<label>SSH 地址<input name=\"ssh_host\" maxlength=\"120\" autocomplete=\"off\" placeholder=\"留空时用主机 IP\" value=\"" + C.escapeHtml(v.ssh_host || "") + "\" /></label>" +
         "<label>SSH 端口<input name=\"ssh_port\" type=\"number\" min=\"1\" max=\"65535\" value=\"" + (v.ssh_port != null ? v.ssh_port : 22) + "\" /></label>" +
-        "<label>SSH 用户名<input name=\"ssh_user\" maxlength=\"60\" autocomplete=\"off\" value=\"" + C.escapeHtml(v.ssh_user || "") + "\" /></label>" +
+        "<label>SSH 用户名<input name=\"ssh_user\" maxlength=\"60\" autocomplete=\"off\" placeholder=\"" + (item ? "留空表示不修改" : "例如 root") + "\" /></label>" +
         "<label>SSH 密码或私钥<textarea name=\"ssh_secret\" rows=\"3\" maxlength=\"16384\" placeholder=\"" + (item ? "留空表示不修改" : "密码或私钥") + "\"></textarea></label>"
       );
     }
@@ -201,8 +201,9 @@
             spec: val(ctrl, "spec") || "未填写配置",
             ssh_host: val(ctrl, "ssh_host"),
             ssh_port: Number(val(ctrl, "ssh_port")) || 22,
-            ssh_user: val(ctrl, "ssh_user"),
           };
+          var sshUser = val(ctrl, "ssh_user");
+          if (sshUser) payload.ssh_user = sshUser;
           var secret = val(ctrl, "ssh_secret");
           if (secret) payload.ssh_secret = secret;
         } else if (kind === "host") {
@@ -266,6 +267,7 @@
           : "<p class=\"subtle\">还没有保存 SSH 密码或私钥</p>";
         var facts = [
           ["主机", C.escapeHtml((item.ssh_host || item.ip || "未填写") + (item.ssh_port ? ":" + item.ssh_port : ""))],
+          ["用户名", C.escapeHtml(result.data.reveal.ssh_user || "未填写")],
           ["密码末四位", C.escapeHtml(item.ssh_tail || "无")],
           ["更新时间", C.escapeHtml(C.formatMinute(item.updated_at) || "—")],
         ];
