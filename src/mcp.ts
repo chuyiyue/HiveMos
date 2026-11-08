@@ -202,7 +202,7 @@ const TOOLS = [
   },
   {
     name: "memory_list",
-    description: "列出记忆，可按作用域过滤；传 since（毫秒时间戳或 ISO 时间）只回增量，含这之后被删的墓碑（带 deleted_at）",
+    description: "列出记忆，可按作用域过滤；全量结果按置顶优先、权重降序、更新时间降序排列。传 since（毫秒时间戳或 ISO 时间）只回增量（含这之后被删的墓碑，带 deleted_at），增量按更新时间序返回",
     inputSchema: {
       type: "object",
       properties: {
@@ -214,7 +214,7 @@ const TOOLS = [
   },
   {
     name: "memory_search",
-    description: "按关键词搜记忆（标题、内容、标签）",
+    description: "按关键词搜记忆（标题、内容、标签），结果按置顶优先、权重降序、更新时间降序排列",
     inputSchema: {
       type: "object",
       properties: {
@@ -237,7 +237,7 @@ const TOOLS = [
   },
   {
     name: "memory_upsert",
-    description: "幂等写入记忆：给 id 按 id 更新（已软删会复活），否则按标题+作用域匹配更新，都没有才新建；每次写入版本号递增",
+    description: "幂等写入记忆：给 id 按 id 更新（已软删会复活），否则按标题+作用域匹配更新，都没有才新建；每次写入版本号递增。可选 weight（权重 0–100）、pinned（置顶）、group_id（手动分组 id，传 null 移出分组）一并写入，未传的字段保持原值",
     inputSchema: {
       type: "object",
       properties: {
@@ -246,6 +246,9 @@ const TOOLS = [
         scope: { type: "string", description: "作用域，缺省为全局" },
         content: { type: "string", description: "内容" },
         tags: { type: "array", items: { type: "string" }, description: "标签，可选" },
+        weight: { type: "integer", minimum: 0, maximum: 100, description: "权重 0–100，读取时高权重排前面，可选" },
+        pinned: { type: "boolean", description: "是否置顶，置顶的记忆在读取时排最前，可选" },
+        group_id: { type: ["string", "null"], description: "手动分组 id；传 null 移出分组，可选" },
       },
       required: ["title"],
       additionalProperties: false,
