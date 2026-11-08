@@ -755,7 +755,7 @@
         "<button type=\"button\" class=\"page-tab\" role=\"tab\" data-wiz-provider=\"future\" aria-selected=\"false\" disabled>更多厂商（即将支持）</button>" +
         "</div></div>" +
         "<div data-wiz-config>" + wizardConfigFields("huawei") + "</div>" +
-        "<label>连接名称（可留空）<input name=\"conn_name\" maxlength=\"60\" autocomplete=\"off\" placeholder=\"留空按服务商与区域自动命名\" /></label>" +
+        "<label>连接名称（可留空）<input name=\"conn_name\" maxlength=\"60\" autocomplete=\"off\" placeholder=\"留空按服务商自动命名\" /></label>" +
         "<label>导入到分组" + C.groupSelect("group_id", state.groups, "") + "</label>" +
         "<div class=\"manage-actions\"><button type=\"button\" class=\"secondary\" data-wiz-test>测试连接</button><span class=\"subtle\" data-wiz-status>尚未测试</span></div>" +
         "<div data-wiz-devices></div>",
@@ -834,7 +834,7 @@
           statusEl.textContent = "测试成功，共 " + wiz.devices.length + " 台设备可接入";
           devicesBox.innerHTML = wiz.devices.map(function (device) {
             var meta = [device.status === "running" ? "运行中" : "已停止", device.os, device.spec, device.ip].filter(Boolean).join(" · ");
-            return "<label><input type=\"checkbox\" data-wiz-device=\"" + C.escapeHtml(device.remoteId) + "\" /> " + C.escapeHtml(device.name || device.remoteId) + (meta ? "（" + C.escapeHtml(meta) + "）" : "") + "</label>";
+            return "<label class=\"wiz-device\"><input type=\"checkbox\" data-wiz-device=\"" + C.escapeHtml(device.remoteId) + "\" /><span class=\"wiz-device-main\"><span class=\"wiz-device-name\">" + C.escapeHtml(device.name || device.remoteId) + "</span>" + (meta ? "<span class=\"wiz-device-meta\">" + C.escapeHtml(meta) + "</span>" : "") + "</span></label>";
           }).join("");
         })
         .catch(function () {

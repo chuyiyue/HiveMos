@@ -200,6 +200,14 @@ button.copy-btn:hover { background: var(--surface-hover); }
 .auth-type { display: grid; gap: 6px; font-size: var(--fs-sm); color: var(--text-2); }
 .page-tabs.auth-tabs { width: 100%; margin-bottom: 0; }
 .page-tab:disabled { opacity: .45; cursor: not-allowed; }
+
+/* 向导选设备：一台一行，整行可点，勾选后整行亮起 */
+.wiz-device { display: flex; align-items: center; gap: 10px; margin-top: 8px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface); cursor: pointer; }
+.wiz-device input[type="checkbox"] { flex: none; width: 16px; height: 16px; accent-color: var(--accent); }
+.wiz-device-main { display: grid; gap: 1px; min-width: 0; flex: 1; }
+.wiz-device-name { font-weight: 600; overflow-wrap: anywhere; }
+.wiz-device-meta { color: var(--text-3); font-size: var(--fs-sm); }
+.wiz-device:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
 .auth-tabs .page-tab { flex: 1 1 0; font-size: var(--fs-md); }
 .tag-field { display: grid; gap: 6px; font-size: var(--fs-sm); color: var(--text-2); }
 .tag-field .perm-menu { max-height: 148px; }
