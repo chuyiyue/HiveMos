@@ -30,6 +30,10 @@ export interface MemoryRow {
   tags_json: string | null;
   version: number;
   ai_summary: string | null;
+  group_id: string | null;
+  pinned_at: number | null;
+  weight: number;
+  ai_state: string;
   created_at: number;
   updated_at: number;
   deleted_at: number | null;
@@ -40,6 +44,9 @@ export interface MemoryFields {
   scope?: string;
   content?: string;
   tags?: string[];
+  group_id?: string | null;
+  pinned?: boolean;
+  weight?: number;
 }
 
 const TITLE_MAX = 200;
@@ -70,6 +77,11 @@ export function memoryPublic(row: MemoryRow): Record<string, unknown> {
     content: row.content,
     source: row.source,
     tags: parseTags(row.tags_json),
+    group_id: row.group_id ?? null,
+    pinned: row.pinned_at != null,
+    pinned_at: row.pinned_at ?? null,
+    weight: typeof row.weight === "number" ? row.weight : 0,
+    ai_state: row.ai_state || "none",
     version: row.version,
     created_at: row.created_at,
     updated_at: row.updated_at,
@@ -130,6 +142,113 @@ function cleanTags(value: unknown): string[] | undefined {
   return tags;
 }
 
+function cleanWeight(value: unknown): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "number" || !Number.isFinite(value)) throw new MemError("权重格式不正确");
+  const weight = Math.floor(value);
+  if (weight < 0 || weight > 100) throw new MemError("权重需在 0 到 100 之间");
+  return weight;
+}
+
+function cleanPinned(value: unknown): boolean | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "boolean") throw new MemError("置顶格式不正确");
+  return value;
+}
+
+// undefined = 不改动，null 或空串 = 清除分组，字符串 = 目标分组 id（存在性另行校验）
+function cleanGroupId(value: unknown): string | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  if (typeof value !== "string") throw new MemError("分组格式不正确");
+  const groupId = value.trim();
+  return groupId ? groupId : null;
+}
+
+const GROUP_NAME_MAX = 40;
+
+function cleanGroupName(value: unknown): string {
+  if (typeof value !== "string") throw new MemError("请填写分组名");
+  const name = value.trim();
+  if (!name) throw new MemError("请填写分组名");
+  if (name.length > GROUP_NAME_MAX) throw new MemError("分组名过长");
+  return name;
+}
+
+export interface MemoryGroupRow {
+  id: string;
+  name: string;
+  created_at: number;
+  updated_at: number;
+  count?: number;
+}
+
+export function memoryGroupPublic(row: MemoryGroupRow): Record<string, unknown> {
+  return {
+    id: row.id,
+    name: row.name,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    count: typeof row.count === "number" ? row.count : 0,
+  };
+}
+
+export async function listMemoryGroups(db: D1Database): Promise<MemoryGroupRow[]> {
+  const result = await prepare(
+    db,
+    "SELECT g.*, (SELECT COUNT(*) FROM memories m WHERE m.group_id = g.id AND m.deleted_at IS NULL) AS count FROM memory_groups g ORDER BY g.created_at ASC",
+    [],
+  ).all<MemoryGroupRow>();
+  return rowsOf(result);
+}
+
+export async function getMemoryGroup(db: D1Database, id: string): Promise<MemoryGroupRow | null> {
+  const row = await prepare(db, "SELECT * FROM memory_groups WHERE id = ?", [id]).first<MemoryGroupRow>();
+  return row ?? null;
+}
+
+async function findGroupByName(db: D1Database, name: string): Promise<MemoryGroupRow | null> {
+  const row = await prepare(db, "SELECT * FROM memory_groups WHERE name = ?", [name]).first<MemoryGroupRow>();
+  return row ?? null;
+}
+
+async function requireGroup(db: D1Database, groupId: string | null): Promise<void> {
+  if (groupId == null) return;
+  const group = await getMemoryGroup(db, groupId);
+  if (!group) throw new MemError("分组不存在");
+}
+
+export async function createMemoryGroup(db: D1Database, input: Record<string, unknown>, now: number): Promise<MemoryGroupRow> {
+  const name = cleanGroupName(input.name);
+  if (await findGroupByName(db, name)) throw new MemError("已存在同名分组", 409);
+  const id = newId("mgrp");
+  await prepare(db, "INSERT INTO memory_groups (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)", [id, name, now, now]).run();
+  const row = await getMemoryGroup(db, id);
+  if (!row) throw new MemError("写入后读取失败", 500);
+  return { ...row, count: 0 };
+}
+
+export async function renameMemoryGroup(db: D1Database, id: string, input: Record<string, unknown>, now: number): Promise<MemoryGroupRow> {
+  const group = await getMemoryGroup(db, id);
+  if (!group) throw new MemError("分组不存在", 404);
+  const name = cleanGroupName(input.name);
+  const clash = await findGroupByName(db, name);
+  if (clash && clash.id !== id) throw new MemError("已存在同名分组", 409);
+  await prepare(db, "UPDATE memory_groups SET name = ?, updated_at = ? WHERE id = ?", [name, now, id]).run();
+  const row = await getMemoryGroup(db, id);
+  if (!row) throw new MemError("写入后读取失败", 500);
+  return row;
+}
+
+// 删组只解绑不删记忆：组内记忆 group_id 置空回未分组，updated_at 一并刷新，
+// 让 MCP 增量同步能感知到归属变化。
+export async function deleteMemoryGroup(db: D1Database, id: string, now: number): Promise<void> {
+  const group = await getMemoryGroup(db, id);
+  if (!group) throw new MemError("分组不存在", 404);
+  await prepare(db, "UPDATE memories SET group_id = NULL, updated_at = ? WHERE group_id = ?", [now, id]).run();
+  await prepare(db, "DELETE FROM memory_groups WHERE id = ?", [id]).run();
+}
+
 export async function getMemoryRow(db: D1Database, id: string, includeDeleted = false): Promise<MemoryRow | null> {
   const sql = includeDeleted
     ? "SELECT * FROM memories WHERE id = ?"
@@ -163,7 +282,13 @@ export async function listMemories(db: D1Database, options: ListOptions = {}): P
     where.push("scope = ?");
     values.push(options.scope);
   }
-  const sql = "SELECT * FROM memories WHERE " + where.join(" AND ") + " ORDER BY updated_at DESC LIMIT 500";
+  // 全量读取走分级排序：置顶优先 → 权重降序 → 更新时间降序（面板与 MCP 同序）。
+  // 增量（since）保持更新时间序：游标语义只认 updated_at，不因呈现排序变化。
+  const order =
+    options.since != null
+      ? "updated_at DESC"
+      : "(pinned_at IS NULL) ASC, weight DESC, updated_at DESC";
+  const sql = "SELECT * FROM memories WHERE " + where.join(" AND ") + " ORDER BY " + order + " LIMIT 500";
   const result = await prepare(db, sql, values).all<MemoryRow>();
   return rowsOf(result);
 }
@@ -177,7 +302,7 @@ export async function searchMemories(db: D1Database, query: string, scope?: stri
     sql += "AND scope = ? ";
     values.push(scope);
   }
-  sql += "ORDER BY updated_at DESC LIMIT 200";
+  sql += "ORDER BY (pinned_at IS NULL) ASC, weight DESC, updated_at DESC LIMIT 200";
   const result = await prepare(db, sql, values).all<MemoryRow>();
   return rowsOf(result);
 }
@@ -212,17 +337,37 @@ export async function searchMemoriesAudited(db: D1Database, query: string, scope
   return rows;
 }
 
+interface TierFields {
+  groupId?: string | null;
+  pinnedAt?: number | null;
+  weight?: number;
+  aiState?: string;
+}
+
 async function insertMemory(
   db: D1Database,
-  fields: { title: string; scope: string; content: string; tags: string[] },
+  fields: { title: string; scope: string; content: string; tags: string[] } & TierFields,
   channel: Channel,
   now: number,
 ): Promise<MemoryRow> {
   const id = newId("mem");
   await prepare(
     db,
-    "INSERT INTO memories (id, title, scope, content, source, tags_json, version, created_at, updated_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, NULL)",
-    [id, fields.title, fields.scope, fields.content, channel.source, JSON.stringify(fields.tags), now, now],
+    "INSERT INTO memories (id, title, scope, content, source, tags_json, version, created_at, updated_at, deleted_at, group_id, pinned_at, weight, ai_state) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, NULL, ?, ?, ?, ?)",
+    [
+      id,
+      fields.title,
+      fields.scope,
+      fields.content,
+      channel.source,
+      JSON.stringify(fields.tags),
+      now,
+      now,
+      fields.groupId ?? null,
+      fields.pinnedAt ?? null,
+      fields.weight ?? 0,
+      fields.aiState ?? "none",
+    ],
   ).run();
   const row = await getMemoryRow(db, id);
   if (!row) throw new MemError("写入后读取失败", 500);
@@ -235,23 +380,43 @@ export async function createMemory(db: D1Database, input: Record<string, unknown
   const scope = cleanScope(input.scope);
   const content = cleanContent(input.content);
   const tags = cleanTags(input.tags) ?? [];
+  const groupId = cleanGroupId(input.group_id) ?? null;
+  await requireGroup(db, groupId);
+  const weight = cleanWeight(input.weight) ?? 0;
+  const pinned = cleanPinned(input.pinned);
+  const aiState = typeof input.ai_state === "string" && input.ai_state ? input.ai_state : "none";
   const existing = await findActiveByTitleScope(db, title, scope);
   if (existing) throw new MemError("同一作用域下已存在同名记忆，请改标题或用编辑", 409);
-  return insertMemory(db, { title, scope, content, tags }, channel, now);
+  return insertMemory(
+    db,
+    { title, scope, content, tags, groupId, weight, pinnedAt: pinned ? now : null, aiState },
+    channel,
+    now,
+  );
 }
 
 async function applyUpdate(
   db: D1Database,
   row: MemoryRow,
-  fields: { title: string; scope: string; content: string; tags: string[] },
+  fields: { title: string; scope: string; content: string; tags: string[] } & TierFields,
   channel: Channel,
   action: string,
   now: number,
 ): Promise<MemoryRow> {
   await prepare(
     db,
-    "UPDATE memories SET title = ?, scope = ?, content = ?, tags_json = ?, version = version + 1, updated_at = ?, deleted_at = NULL WHERE id = ?",
-    [fields.title, fields.scope, fields.content, JSON.stringify(fields.tags), now, row.id],
+    "UPDATE memories SET title = ?, scope = ?, content = ?, tags_json = ?, group_id = ?, pinned_at = ?, weight = ?, version = version + 1, updated_at = ?, deleted_at = NULL WHERE id = ?",
+    [
+      fields.title,
+      fields.scope,
+      fields.content,
+      JSON.stringify(fields.tags),
+      fields.groupId !== undefined ? fields.groupId : row.group_id,
+      fields.pinnedAt !== undefined ? fields.pinnedAt : row.pinned_at,
+      fields.weight !== undefined ? fields.weight : row.weight,
+      now,
+      row.id,
+    ],
   ).run();
   const updated = await getMemoryRow(db, row.id);
   if (!updated) throw new MemError("写入后读取失败", 500);
@@ -266,12 +431,29 @@ export async function upsertMemory(db: D1Database, input: Record<string, unknown
   const scope = cleanScope(input.scope);
   const content = cleanContent(input.content);
   const tags = cleanTags(input.tags);
+  const groupId = cleanGroupId(input.group_id);
+  if (groupId !== undefined) await requireGroup(db, groupId);
+  const weight = cleanWeight(input.weight);
+  const pinned = cleanPinned(input.pinned);
   const id = typeof input.id === "string" && input.id.trim() ? input.id.trim() : null;
   let target: MemoryRow | null = null;
   if (id) target = await getMemoryRow(db, id, true);
   if (!target) target = await findActiveByTitleScope(db, title, scope);
   if (!target) {
-    return insertMemory(db, { title, scope, content, tags: tags ?? [] }, channel, now);
+    return insertMemory(
+      db,
+      {
+        title,
+        scope,
+        content,
+        tags: tags ?? [],
+        groupId: groupId ?? null,
+        weight: weight ?? 0,
+        pinnedAt: pinned ? now : null,
+      },
+      channel,
+      now,
+    );
   }
   // Changing title/scope onto another active row's key would break the
   // unique index; surface it instead of failing the write opaquely.
@@ -282,7 +464,15 @@ export async function upsertMemory(db: D1Database, input: Record<string, unknown
   return applyUpdate(
     db,
     target,
-    { title, scope, content, tags: tags ?? parseTags(target.tags_json) },
+    {
+      title,
+      scope,
+      content,
+      tags: tags ?? parseTags(target.tags_json),
+      groupId: groupId !== undefined ? groupId : target.group_id,
+      weight: weight !== undefined ? weight : target.weight,
+      pinnedAt: pinned === undefined ? target.pinned_at : pinned ? now : null,
+    },
     channel,
     target.deleted_at != null ? "upsert_revive" : "upsert",
     now,
@@ -296,11 +486,30 @@ export async function updateMemory(db: D1Database, id: string, input: Record<str
   const scope = input.scope === undefined ? row.scope : cleanScope(input.scope);
   const content = input.content === undefined ? row.content : cleanContent(input.content);
   const tags = cleanTags(input.tags) ?? parseTags(row.tags_json);
+  const groupId = cleanGroupId(input.group_id);
+  if (groupId !== undefined) await requireGroup(db, groupId);
+  const weight = cleanWeight(input.weight);
+  const pinned = cleanPinned(input.pinned);
   if (title !== row.title || scope !== row.scope) {
     const clash = await findActiveByTitleScope(db, title, scope);
     if (clash && clash.id !== row.id) throw new MemError("同一作用域下已存在同名记忆", 409);
   }
-  return applyUpdate(db, row, { title, scope, content, tags }, channel, "update", now);
+  return applyUpdate(
+    db,
+    row,
+    {
+      title,
+      scope,
+      content,
+      tags,
+      groupId: groupId !== undefined ? groupId : row.group_id,
+      weight: weight !== undefined ? weight : row.weight,
+      pinnedAt: pinned === undefined ? row.pinned_at : pinned ? now : null,
+    },
+    channel,
+    "update",
+    now,
+  );
 }
 
 export async function deleteMemory(db: D1Database, id: string, channel: Channel, now: number): Promise<MemoryRow> {
@@ -311,4 +520,29 @@ export async function deleteMemory(db: D1Database, id: string, channel: Channel,
   if (!deleted) throw new MemError("写入后读取失败", 500);
   await audit(db, { memoryId: id, actor: channel.actor, action: "delete", diff: { title: row.title, scope: row.scope } }, now);
   return deleted;
+}
+
+
+// AI 补打标的落库点：只改 tags 与 ai_state，内容不动。拆分来的记忆保持
+// split 状态，其余成功后记 tagged；失败不调用本函数，状态原样保留。
+export async function applyAiTags(
+  db: D1Database,
+  id: string,
+  tags: string[],
+  channel: Channel,
+  now: number,
+): Promise<MemoryRow> {
+  const row = await getMemoryRow(db, id);
+  if (!row) throw new MemError("记忆不存在或已删除", 404);
+  const nextState = row.ai_state === "split" ? "split" : "tagged";
+  await prepare(db, "UPDATE memories SET tags_json = ?, ai_state = ?, version = version + 1, updated_at = ? WHERE id = ?", [
+    JSON.stringify(tags),
+    nextState,
+    now,
+    id,
+  ]).run();
+  const updated = await getMemoryRow(db, id);
+  if (!updated) throw new MemError("写入后读取失败", 500);
+  await audit(db, { memoryId: id, actor: channel.actor, action: "ai_tag", diff: { tags, ai_state: nextState } }, now);
+  return updated;
 }
