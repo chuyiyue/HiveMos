@@ -1,5 +1,5 @@
 /* SMSinBox shell layout: fixed sidebar, sticky topbar, 64px icon rail, mobile drawer.
-   Colors come only from tokens. The auth watermark glyph is 巢. */
+   Colors come only from tokens. */
 .app-layout { min-height: 100dvh; }
 
 .sidebar {
@@ -528,20 +528,6 @@ button.account-logout:hover { background: var(--sidebar-bg-hover); color: var(--
   background: var(--bg);
   position: relative;
   overflow: hidden;
-}
-
-.auth-body::before {
-  content: "巢";
-  position: fixed;
-  right: -0.15em;
-  bottom: -0.28em;
-  font-family: var(--font-serif);
-  font-size: 42vw;
-  line-height: 1;
-  color: var(--text);
-  opacity: 0.03;
-  pointer-events: none;
-  user-select: none;
 }
 
 .auth-card {
