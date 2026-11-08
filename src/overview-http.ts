@@ -50,7 +50,7 @@ export async function handleOverviewRequest(
 async function buildOverview(db: D1Database, now: number) {
   const agentNames = await loadAgentNames(db);
   const [stats, activity, alerts] = await Promise.all([
-    buildStats(db, now),
+    buildOverviewStats(db, now),
     buildActivity(db, agentNames),
     buildAlerts(db, now),
   ]);
@@ -117,7 +117,7 @@ function quoted(title: string | null): string {
 
 // ---- stats -----------------------------------------------------------------
 
-async function buildStats(db: D1Database, now: number) {
+export async function buildOverviewStats(db: D1Database, now: number) {
   const agentGroups = await groupCounts(db, "agents", "status");
   const serverGroups = await groupCounts(db, "mcp_servers", "status");
   const taskGroups = await groupCounts(db, "tasks", "status");

@@ -35,6 +35,7 @@ import { handleSoulRequest } from "./soul-http";
 import { handleTasksRequest } from "./tasks-http";
 import { handleMachinesRequest } from "./machines-http";
 import { handleOverviewRequest } from "./overview-http";
+import { handleSystemRequest, recordCronRun } from "./system-http";
 import { handleVaultRequest } from "./vault-http";
 import { handleExtrasRequest } from "./extras-http";
 import { syncDueMirrors } from "./calendar";
@@ -110,6 +111,8 @@ export default {
       if (machines) return machines;
       const overview = await handleOverviewRequest(request, env, wait, path);
       if (overview) return overview;
+      const system = await handleSystemRequest(request, env, wait, path);
+      if (system) return system;
       const vault = await handleVaultRequest(request, env, wait, path);
       if (vault) return vault;
       const extras = await handleExtrasRequest(request, env, wait, path);
@@ -121,7 +124,7 @@ export default {
     }
   },
 
-  async scheduled(_event: ScheduledEvent, env: Env, ctx: WaitCtx): Promise<void> {
+  async scheduled(event: ScheduledEvent, env: Env, ctx: WaitCtx): Promise<void> {
     try {
       await refreshActiveSnapshots(env, ctx);
     } catch {
@@ -131,6 +134,13 @@ export default {
       await syncDueMirrors(env.DB, Date.now());
     } catch {
       // Mirror sources retry on the next sweep; failures keep the old data.
+    }
+    try {
+      // Evidence stamp for the settings page: cron status there is read
+      // from this marker, never from the declared trigger config.
+      await recordCronRun(env.DB, event.scheduledTime || Date.now());
+    } catch {
+      // The stamp is best-effort; a failed write must not fail the sweep.
     }
   },
 };

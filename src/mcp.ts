@@ -452,6 +452,10 @@ function domainOfTool(name: string): string | null {
   return Object.prototype.hasOwnProperty.call(TOOL_DOMAINS, name) ? TOOL_DOMAINS[name] : null;
 }
 
+// Read by the system-info endpoint so the settings page can report the
+// size of the public tool surface without duplicating the list.
+export const MCP_TOOL_COUNT = TOOLS.length;
+
 export async function handleMcp(request: Request, env: Env, _ctx: WaitCtx): Promise<Response> {
   if (request.method.toUpperCase() !== "POST") {
     return json({ jsonrpc: "2.0", id: null, error: { code: -32600, message: "只接受 POST" } }, 405, { allow: "POST" });
