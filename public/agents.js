@@ -291,9 +291,6 @@
       });
   }
 
-  function confirmAnchor(selector) {
-    return document.querySelector(selector);
-  }
 
   function cssEscape(value) {
     return window.CSS && CSS.escape ? CSS.escape(value) : value;
@@ -441,7 +438,6 @@
   }
 
   function deleteGroup(group) {
-    var anchor = confirmAnchor('[data-confirm-group="' + cssEscape(group.id) + '"]');
     
       state.busy = true;
       api("DELETE", "/api/groups/" + encodeURIComponent(group.id))
@@ -714,7 +710,6 @@
   }
 
   function deleteAppGroup(group) {
-    var anchor = confirmAnchor('[data-confirm-app-group="' + cssEscape(group.id) + '"]');
     
       state.apps.groups = state.apps.groups.filter(function (item) {
         return item.id !== group.id;
@@ -729,7 +724,6 @@
   }
 
   function deleteApp(item) {
-    var anchor = confirmAnchor('[data-confirm-app-item="' + cssEscape(item.id) + '"]');
     
       api("DELETE", "/api/extras/apps/" + encodeURIComponent(item.id))
         .then(function (result) {

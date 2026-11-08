@@ -440,7 +440,6 @@
     var url = kind === "secret" ? "/api/vault/entries/" : kind === "gateway" ? "/api/vault/gateways/" : "/api/vault/emails/";
     var reload = kind === "secret" ? loadEntries : kind === "gateway" ? loadGateways : loadEmails;
     var dlg = srcEl && srcEl.closest ? srcEl.closest("[data-manage-dialog]") : null;
-    var anchor = (dlg && dlg.querySelector("[data-manage-confirm]")) || document.getElementById("vault-confirm");
     
       api("DELETE", url + encodeURIComponent(item.id)).then(function (result) {
         if (result.data && result.data.ok) { C.closeCurrentOverlay(); reload(); }

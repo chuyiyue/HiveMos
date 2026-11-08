@@ -319,7 +319,6 @@
 
   function removeMemory(item, srcEl) {
     var dlg = srcEl && srcEl.closest ? srcEl.closest("[data-manage-dialog]") : null;
-    var anchor = (dlg && dlg.querySelector("[data-manage-confirm]")) || document.getElementById("memory-confirm");
     
       api("DELETE", "/api/memory/" + encodeURIComponent(item.id)).then(function (result) {
         if (result.data && result.data.ok) { C.closeCurrentOverlay(); loadMemories(); }
@@ -393,7 +392,6 @@
   }
 
   function deleteSoul(item) {
-    var anchor = document.querySelector("[data-confirm-soul=\"" + item.id + "\"]");
     
       soulApi("DELETE", "/api/soul/" + encodeURIComponent(item.id)).then(function (res) {
         if (res.status === 200) { C.closeCurrentOverlay(); loadSouls(); }

@@ -908,7 +908,6 @@
     });
     if (!server || state.busy) return;
     var dlg = srcEl && srcEl.closest ? srcEl.closest("[data-manage-dialog]") : null;
-    var anchor = (dlg && dlg.querySelector("[data-manage-confirm]")) || document.getElementById("mcp-confirm");
     
       state.busy = true;
       api("DELETE", "/api/mcp-servers/" + encodeURIComponent(id))
@@ -1050,9 +1049,6 @@
 
   function deleteGroupFlow(group) {
     var slotScope = activeTab === "skills" || activeTab === "api" ? activeTab : "mcp";
-    var anchor =
-      document.querySelector('[data-confirm-group="' + slotScope + ':' + group.id + '"]') ||
-      document.querySelector('[data-confirm-group="mcp:' + group.id + '"]');
     
       state.busy = true;
       api("DELETE", "/api/groups/" + encodeURIComponent(group.id))
@@ -1283,7 +1279,6 @@
   }
 
   function deleteLocalGroup(scope, group) {
-    var anchor = document.querySelector('[data-confirm-group="' + scope + ":" + group.id + '"]');
     
       var store = localStore(scope);
       if (!store) return;
@@ -1300,7 +1295,6 @@
   }
 
   function deleteLocalItem(scope, item) {
-    var anchor = document.querySelector('[data-confirm-item="' + scope + ":" + item.id + '"]');
     
       var store = localStore(scope);
       if (!store) return;
