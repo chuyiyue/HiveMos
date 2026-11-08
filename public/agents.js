@@ -85,7 +85,7 @@
     return C.record({
       id: agent.id,
       className: "agent-card",
-      iconHtml: C.agentAvatarHtml(agent, "icon record-icon"),
+      iconHtml: '<span class="agent-avatar-tile">' + C.agentAvatarHtml(agent, "icon record-icon") + "</span>",
       title: agent.name,
       status: active ? "enabled" : "disabled",
       corner: pinCorner(agent),

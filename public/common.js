@@ -190,6 +190,9 @@
     style.id = "hive-avatar-styles";
     style.textContent = [
       ".agent-avatar-img{object-fit:cover;border-radius:26%}",
+      ".agent-avatar-tile{display:inline-grid;place-items:center;width:36px;height:36px;flex:none;border-radius:var(--r-md);background:var(--bg-sunken);overflow:hidden}",
+      ".agent-avatar-tile img.agent-avatar-img{width:100%;height:100%;object-fit:cover;display:block;border-radius:0}",
+      ".agent-avatar-tile svg{width:20px;height:20px}",
       ".manage-avatar-btn{position:relative;overflow:hidden;display:grid;place-items:center;width:44px;height:44px;padding:0;border:0;border-radius:var(--r-md);background:var(--bg-sunken);color:var(--text-2);cursor:pointer}",
       ".manage-avatar-btn:hover{box-shadow:0 0 0 2px var(--accent)}",
       ".manage-avatar-btn .icon{width:24px;height:24px}",
