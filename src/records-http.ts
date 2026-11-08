@@ -42,6 +42,7 @@ export async function handleRecordsRequest(
       limit,
       offset,
       has_more: data.has_more,
+      total: data.total,
       degraded: data.degraded,
       modules: RECORD_MODULES,
       generated_at: Date.now(),

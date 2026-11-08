@@ -138,6 +138,32 @@
 
   // ---- 调用记录页签：只看 Agent 经 MCP 的调用（GET /api/records） ----
 
+  function storedPageSize(key) {
+    var v = parseInt(window.localStorage.getItem(key) || "", 10);
+    return v === 20 || v === 50 || v === 100 ? v : 50;
+  }
+  function pagerPages(state) {
+    return state.total != null ? Math.max(1, Math.ceil(state.total / state.pageSize)) : null;
+  }
+  function pagerHtml(kind, state) {
+    var pages = pagerPages(state);
+    var opts = [20, 50, 100]
+      .map(function (n) {
+        return '<option value="' + n + '"' + (state.pageSize === n ? " selected" : "") + ">" + n + "</option>";
+      })
+      .join("");
+    var nextOff = state.loading || (pages != null ? state.page >= pages : !state.hasMore);
+    return (
+      '<div class="pager">' +
+      '<label class="pager-size">每页 <select data-pager-size="' + kind + '">' + opts + "</select> 条</label>" +
+      '<span class="pager-info">' + (pages != null ? "第 " + state.page + " / " + pages + " 页" : "第 " + state.page + " 页") + "</span>" +
+      '<span class="pager-btns">' +
+      '<button type="button" class="secondary" data-pager-prev="' + kind + '"' + (state.page <= 1 || state.loading ? " disabled" : "") + ">上一页</button>" +
+      '<button type="button" class="secondary" data-pager-next="' + kind + '"' + (nextOff ? " disabled" : "") + ">下一页</button>" +
+      "</span></div>"
+    );
+  }
+
   var REC_MODULES = [
     ["all", "全部"],
     ["mcp", "MCP 与 Skills"],
@@ -147,7 +173,7 @@
     ["soul", "Soul"],
     ["machines", "云计算资源"],
   ];
-  var recState = { module: "all", offset: 0, items: [], hasMore: false, loading: false, failed: false, started: false };
+  var recState = { module: "all", page: 1, pageSize: storedPageSize("hivemos-records-size"), total: null, hasMore: false, items: [], loading: false, failed: false, started: false };
 
   function recPanel() {
     return document.querySelector("[data-panel=\"calls\"]");
@@ -207,33 +233,22 @@
     } else if (!recState.items.length) {
       body = C.emptyState("还没有记录", "Agent 通过 MCP 的调用会汇总到这里");
     } else {
-      body = recFeed(recState.items);
-      if (recState.hasMore) {
-        body +=
-          "<div class=\"row-actions\"><button type=\"button\" class=\"secondary\" data-rec-more" +
-          (recState.loading ? " disabled" : "") +
-          ">" +
-          (recState.loading ? "正在读取" : "加载更多") +
-          "</button></div>";
-      }
+      body = recFeed(recState.items) + pagerHtml("rec", recState);
     }
-    var sub = recState.items.length ? "已加载 " + recState.items.length + " 条" + (recState.hasMore ? "，还有更多" : "") : "";
+    var sub = recState.started && recState.total != null ? "共 " + recState.total + " 条" : "";
     panel.innerHTML = C.section("调用记录", sub, recChips() + body);
   }
 
-  function loadRecords(append) {
+  function loadRecords() {
     if (recState.loading) return;
     recState.loading = true;
     recState.failed = false;
-    if (!append) {
-      recState.offset = 0;
-      recState.items = [];
-      recState.hasMore = false;
-    }
     renderCalls();
     var query =
-      "/api/records?limit=30&offset=" +
-      recState.offset +
+      "/api/records?limit=" +
+      recState.pageSize +
+      "&offset=" +
+      (recState.page - 1) * recState.pageSize +
       (recState.module !== "all" ? "&module=" + encodeURIComponent(recState.module) : "");
     fetch(query, { headers: { accept: "application/json" }, cache: "no-store" })
       .then(function (response) {
@@ -243,9 +258,15 @@
         recState.loading = false;
         recState.started = true;
         if (!data || data.ok !== true || !Array.isArray(data.records)) throw new Error("bad records");
-        recState.items = recState.items.concat(data.records);
-        recState.offset = recState.items.length;
+        recState.items = data.records;
+        recState.total = typeof data.total === "number" ? data.total : null;
         recState.hasMore = data.has_more === true;
+        var pages = pagerPages(recState);
+        if (pages != null && recState.page > pages) {
+          recState.page = pages;
+          loadRecords();
+          return;
+        }
         renderCalls();
       })
       .catch(function () {
@@ -266,36 +287,55 @@
         var key = chip.getAttribute("data-rec-module") || "all";
         if (key !== recState.module || recState.failed) {
           recState.module = key;
-          loadRecords(false);
+          recState.page = 1;
+          loadRecords();
         }
         return;
       }
-      if (target.closest("[data-rec-more]")) loadRecords(true);
+      var prevR = target.closest("[data-pager-prev]");
+      if (prevR && !prevR.disabled) {
+        recState.page -= 1;
+        loadRecords();
+        return;
+      }
+      var nextR = target.closest("[data-pager-next]");
+      if (nextR && !nextR.disabled) {
+        recState.page += 1;
+        loadRecords();
+        return;
+      }
+    });
+  }
+  if (callsPanel) {
+    callsPanel.addEventListener("change", function (event) {
+      var sel = event.target;
+      if (!(sel instanceof Element) || !sel.hasAttribute("data-pager-size")) return;
+      var n = parseInt(sel.value, 10);
+      if (n === 20 || n === 50 || n === 100) {
+        recState.pageSize = n;
+        window.localStorage.setItem("hivemos-records-size", String(n));
+        recState.page = 1;
+        loadRecords();
+      }
     });
   }
   renderCalls();
-  loadRecords(false);
+  loadRecords();
 
   // ---- 系统日志页签：管理员在面板里的操作记录（GET /api/oplog） ----
 
   var OP_MODULES = [
     ["all", "全部"],
-    ["Agent", "Agent"],
-    ["MCP", "MCP"],
-    ["Skills", "Skills"],
-    ["API", "API"],
-    ["应用", "应用"],
-    ["记忆", "记忆"],
-    ["Soul", "Soul"],
-    ["任务", "任务"],
-    ["日历", "日历"],
-    ["云主机", "云主机"],
-    ["保险库", "保险库"],
-    ["分组", "分组"],
-    ["设置", "设置"],
-    ["账号", "账号"],
+    ["agents", "Agents 与应用"],
+    ["mcp-skills", "MCP 与 Skills"],
+    ["machines", "云计算资源"],
+    ["memory-soul", "记忆与 Soul"],
+    ["tasks-calendar", "任务与日历"],
+    ["vault", "保险库"],
+    ["settings", "设置"],
+    ["groups", "分组"],
   ];
-  var opState = { module: "all", offset: 0, items: [], hasMore: false, loading: false, failed: false, started: false };
+  var opState = { module: "all", page: 1, pageSize: storedPageSize("hivemos-oplog-size"), total: 0, hasMore: false, items: [], loading: false, failed: false, started: false };
 
   function opPanel() {
     return document.querySelector("[data-panel=\"oplog\"]");
@@ -355,34 +395,23 @@
     } else if (!opState.items.length) {
       body = C.emptyState("还没有日志", "你在面板里的操作会记录到这里");
     } else {
-      body = opFeed(opState.items);
-      if (opState.hasMore) {
-        body +=
-          "<div class=\"row-actions\"><button type=\"button\" class=\"secondary\" data-op-more" +
-          (opState.loading ? " disabled" : "") +
-          ">" +
-          (opState.loading ? "正在读取" : "加载更多") +
-          "</button></div>";
-      }
+      body = opFeed(opState.items) + pagerHtml("op", opState);
     }
-    var sub = opState.items.length ? "已加载 " + opState.items.length + " 条" + (opState.hasMore ? "，还有更多" : "") : "";
+    var sub = opState.started ? "共 " + opState.total + " 条" : "";
     panel.innerHTML = C.section("系统日志", sub, opChips() + body);
   }
 
-  function loadOps(append) {
+  function loadOps() {
     if (opState.loading) return;
     opState.loading = true;
     opState.failed = false;
-    if (!append) {
-      opState.offset = 0;
-      opState.items = [];
-      opState.hasMore = false;
-    }
     renderOps();
     var query =
-      "/api/oplog?limit=30&offset=" +
-      opState.offset +
-      (opState.module !== "all" ? "&module=" + encodeURIComponent(opState.module) : "");
+      "/api/oplog?limit=" +
+      opState.pageSize +
+      "&offset=" +
+      (opState.page - 1) * opState.pageSize +
+      (opState.module !== "all" ? "&board=" + encodeURIComponent(opState.module) : "");
     fetch(query, { headers: { accept: "application/json" }, cache: "no-store" })
       .then(function (response) {
         return response.json();
@@ -391,9 +420,15 @@
         opState.loading = false;
         opState.started = true;
         if (!data || data.ok !== true || !Array.isArray(data.entries)) throw new Error("bad oplog");
-        opState.items = opState.items.concat(data.entries);
-        opState.offset = opState.items.length;
+        opState.items = data.entries;
+        opState.total = typeof data.total === "number" ? data.total : 0;
         opState.hasMore = data.has_more === true;
+        var pages = pagerPages(opState);
+        if (pages != null && opState.page > pages) {
+          opState.page = pages;
+          loadOps();
+          return;
+        }
         renderOps();
       })
       .catch(function () {
@@ -414,13 +449,38 @@
         var key = chip.getAttribute("data-op-module") || "all";
         if (key !== opState.module || opState.failed) {
           opState.module = key;
-          loadOps(false);
+          opState.page = 1;
+          loadOps();
         }
         return;
       }
-      if (target.closest("[data-op-more]")) loadOps(true);
+      var prevO = target.closest("[data-pager-prev]");
+      if (prevO && !prevO.disabled) {
+        opState.page -= 1;
+        loadOps();
+        return;
+      }
+      var nextO = target.closest("[data-pager-next]");
+      if (nextO && !nextO.disabled) {
+        opState.page += 1;
+        loadOps();
+        return;
+      }
+    });
+  }
+  if (opsPanel) {
+    opsPanel.addEventListener("change", function (event) {
+      var sel = event.target;
+      if (!(sel instanceof Element) || !sel.hasAttribute("data-pager-size")) return;
+      var n = parseInt(sel.value, 10);
+      if (n === 20 || n === 50 || n === 100) {
+        opState.pageSize = n;
+        window.localStorage.setItem("hivemos-oplog-size", String(n));
+        opState.page = 1;
+        loadOps();
+      }
     });
   }
   renderOps();
-  loadOps(false);
+  loadOps();
 })();

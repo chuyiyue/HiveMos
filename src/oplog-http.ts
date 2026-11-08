@@ -11,7 +11,7 @@
 
 import { json } from "./http";
 import type { Env, WaitCtx } from "./env";
-import { OPLOG_MODULES, isOplogModule, listOps } from "./oplog";
+import { OPLOG_BOARDS, OPLOG_MODULES, isOplogModule, listOps, oplogBoardModules } from "./oplog";
 
 export async function handleOplogRequest(
   request: Request,
@@ -29,18 +29,24 @@ export async function handleOplogRequest(
   if (moduleParam && !isOplogModule(moduleParam)) {
     return json({ ok: false, error: "板块不正确" }, 400);
   }
+  const boardParam = url.searchParams.get("board");
+  if (boardParam && !oplogBoardModules(boardParam)) {
+    return json({ ok: false, error: "板块不正确" }, 400);
+  }
   const limitRaw = Number(url.searchParams.get("limit"));
   const offsetRaw = Number(url.searchParams.get("offset"));
   const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(100, Math.floor(limitRaw)) : 30;
   const offset = Number.isFinite(offsetRaw) && offsetRaw > 0 ? Math.floor(offsetRaw) : 0;
   try {
-    const data = await listOps(env.DB, { module: moduleParam, limit, offset });
+    const data = await listOps(env.DB, { module: moduleParam, board: boardParam, limit, offset });
     return json({
       ok: true,
       entries: data.entries,
       limit,
       offset,
       has_more: data.has_more,
+      total: data.total,
+      boards: OPLOG_BOARDS.map((board) => board.label),
       modules: OPLOG_MODULES,
     });
   } catch {

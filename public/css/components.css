@@ -696,3 +696,9 @@ button.is-armed, .is-armed {
 
 .copy-text { cursor: pointer; }
 .copy-text:hover { color: var(--accent); }
+
+.pager { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-top: 14px; }
+.pager-size { display: inline-flex; align-items: center; gap: 6px; color: var(--text-2); font-size: var(--fs-sm); }
+.pager-size select { width: auto; min-height: 32px; padding: 4px 8px; }
+.pager-info { color: var(--text-3); font-size: var(--fs-sm); }
+.pager-btns { display: inline-flex; gap: 8px; margin-left: auto; }

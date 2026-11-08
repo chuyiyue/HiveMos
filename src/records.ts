@@ -69,6 +69,7 @@ export interface ListRecordsResult {
   records: RecordItem[];
   has_more: boolean;
   degraded: string[];
+  total: number | null;
 }
 
 // ---- tolerant query helpers -------------------------------------------------
@@ -397,6 +398,28 @@ export function isRecordModule(key: string): boolean {
 
 // ---- merged listing -----------------------------------------------------------
 
+async function countRows(db: D1Database, sql: string, binds: Array<string | number>): Promise<number> {
+  const row = await db.prepare(sql).bind(...binds).first<{ n: number }>();
+  return row?.n ?? 0;
+}
+
+// Per-source totals mirroring each fetcher's WHERE clause, so the panel
+// can paginate with an exact 共 N 条.
+const COUNTERS: Record<string, (db: D1Database, agentId: string | null) => Promise<number>> = {
+  mcp: (db, agentId) =>
+    countRows(db, `SELECT COUNT(*) AS n FROM mcp_fetch_audit f${agentId ? " WHERE f.agent_id = ?" : ""}`, agentId ? [agentId] : []),
+  calendar: (db, agentId) =>
+    countRows(db, `SELECT COUNT(*) AS n FROM calendar_audit au WHERE ${agentId ? "au.actor = ?" : "substr(au.actor, 1, 4) = 'agt_'"}`, agentId ? [agentId] : []),
+  tasks: (db, agentId) =>
+    countRows(db, `SELECT COUNT(*) AS n FROM task_audit au WHERE ${agentId ? "au.actor = ?" : "substr(au.actor, 1, 4) = 'agt_'"}`, agentId ? [agentId] : []),
+  memory: (db, agentId) =>
+    countRows(db, `SELECT COUNT(*) AS n FROM memory_audit WHERE ${agentId ? "actor = ?" : "substr(actor, 1, 4) = 'agt_'"}`, agentId ? [agentId] : []),
+  soul: (db, agentId) =>
+    countRows(db, `SELECT COUNT(*) AS n FROM soul_audit au WHERE ${agentId ? "au.actor = ?" : "substr(au.actor, 1, 4) = 'agt_'"}`, agentId ? [agentId] : []),
+  machines: (db, agentId) =>
+    countRows(db, `SELECT COUNT(*) AS n FROM machines_audit au WHERE ${agentId ? "au.actor = ?" : "au.source = 'mcp'"}`, agentId ? [agentId] : []),
+};
+
 export async function listRecords(db: D1Database, options: ListRecordsOptions): Promise<ListRecordsResult> {
   const limit = Math.max(1, Math.min(100, Math.floor(options.limit) || 30));
   const offset = Math.max(0, Math.floor(options.offset) || 0);
@@ -414,9 +437,17 @@ export async function listRecords(db: D1Database, options: ListRecordsOptions): 
     merged.push(...outcome.rows);
   });
   merged.sort((a, b) => (b.at - a.at) || (a.module < b.module ? -1 : a.module > b.module ? 1 : 0) || (a.id < b.id ? 1 : -1));
+  let total: number | null = null;
+  try {
+    const counts = await Promise.all(keys.map((key) => COUNTERS[key](db, agentId)));
+    total = counts.reduce((sum, n) => sum + n, 0);
+  } catch {
+    total = null;
+  }
   return {
     records: merged.slice(offset, offset + limit),
     has_more: merged.length > offset + limit,
     degraded,
+    total,
   };
 }

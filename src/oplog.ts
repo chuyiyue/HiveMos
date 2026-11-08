@@ -12,6 +12,24 @@ import { readCookie } from "./http";
 
 // 系统日志的模块值域（前端筛选 chips 与 GET /api/oplog 的 module 参数
 // 都以此为准）。
+// 系统日志的筛选口径：按系统板块整合（与左侧导航的功能名一致），一个
+// 板块包含若干个日志模块。前端 chips 用板块 key，后端据此展开模块集合。
+export const OPLOG_BOARDS = [
+  { key: "agents", label: "Agents 与应用", modules: ["Agent", "应用"] },
+  { key: "mcp-skills", label: "MCP 与 Skills", modules: ["MCP", "Skills", "API"] },
+  { key: "machines", label: "云计算资源", modules: ["云主机"] },
+  { key: "memory-soul", label: "记忆与 Soul", modules: ["记忆", "Soul"] },
+  { key: "tasks-calendar", label: "任务与日历", modules: ["任务", "日历"] },
+  { key: "vault", label: "保险库", modules: ["保险库"] },
+  { key: "settings", label: "设置", modules: ["设置", "账号"] },
+  { key: "groups", label: "分组", modules: ["分组"] },
+] as const;
+
+export function oplogBoardModules(key: string): string[] | null {
+  const board = OPLOG_BOARDS.find((entry) => entry.key === key);
+  return board ? [...board.modules] : null;
+}
+
 export const OPLOG_MODULES = [
   "Agent",
   "MCP",
@@ -97,17 +115,23 @@ interface OpRow {
 
 export async function listOps(
   db: D1Database,
-  options: { module?: string | null; limit: number; offset: number },
-): Promise<{ entries: OpLogItem[]; has_more: boolean }> {
+  options: { module?: string | null; board?: string | null; limit: number; offset: number },
+): Promise<{ entries: OpLogItem[]; has_more: boolean; total: number }> {
   const limit = Math.max(1, Math.min(100, Math.floor(options.limit) || 30));
   const offset = Math.max(0, Math.floor(options.offset) || 0);
-  const binds: Array<string | number> = [];
-  let sql = "SELECT id, at, module, action, target_name, text FROM user_ops";
-  if (options.module) {
-    sql += " WHERE module = ?";
-    binds.push(options.module);
-  }
-  sql += " ORDER BY at DESC, id DESC LIMIT ? OFFSET ?";
+  const modules = options.board
+    ? oplogBoardModules(options.board) ?? []
+    : options.module
+      ? [options.module]
+      : null;
+  const where = modules ? ` WHERE module IN (${modules.map(() => "?").join(", ")})` : "";
+  const countRow = await db
+    .prepare(`SELECT COUNT(*) AS n FROM user_ops${where}`)
+    .bind(...(modules ?? []))
+    .first<{ n: number }>();
+  const total = countRow?.n ?? 0;
+  const binds: Array<string | number> = [...(modules ?? [])];
+  const sql = `SELECT id, at, module, action, target_name, text FROM user_ops${where} ORDER BY at DESC, id DESC LIMIT ? OFFSET ?`;
   binds.push(limit + 1, offset);
   const result = await db.prepare(sql).bind(...binds).all<OpRow>();
   const rows = Array.isArray(result) ? result : result.results ?? [];
@@ -122,5 +146,6 @@ export async function listOps(
       text: row.text,
     })),
     has_more: hasMore,
+    total,
   };
 }
