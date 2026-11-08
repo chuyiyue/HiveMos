@@ -54,6 +54,8 @@ export interface MachineRow {
   vendor: string;
   access_note: string;
   cf_account_id: string;
+  platform: string;
+  team_id: string;
   api_token_enc: string;
   api_token_tail: string;
   kernel: string;
@@ -101,6 +103,8 @@ export interface PublicMachine {
   vendor: string;
   access_note: string;
   cf_account_id: string;
+  platform: string;
+  team_id: string;
   api_token_tail: string;
   connection_id: string;
   remote_id: string;
@@ -112,7 +116,7 @@ export interface PublicMachine {
 }
 
 const COLUMNS =
-  "id, kind, name, region, spec, description, version, status, binding, last_heartbeat_at, note, hostname, os, ip, ssh_host, ssh_port, ssh_user, auth_type, ssh_secret_enc, ssh_tail, kernel, arch, probe_status, probe_at, probe_error, host_fingerprint, vendor, access_note, cf_account_id, api_token_enc, api_token_tail, connection_id, remote_id, remote_name, last_sync_at, ai_summary, ai_tags, created_at, updated_at, group_id";
+  "id, kind, name, region, spec, description, version, status, binding, last_heartbeat_at, note, hostname, os, ip, ssh_host, ssh_port, ssh_user, auth_type, ssh_secret_enc, ssh_tail, kernel, arch, probe_status, probe_at, probe_error, host_fingerprint, vendor, access_note, cf_account_id, platform, team_id, api_token_enc, api_token_tail, connection_id, remote_id, remote_name, last_sync_at, ai_summary, ai_tags, created_at, updated_at, group_id";
 
 const ID_PREFIX: Record<string, string> = { server: "sv_", cloud: "pc_", worker: "wk_" };
 
@@ -151,6 +155,8 @@ export function machinePublic(row: MachineRow): PublicMachine {
     vendor: row.vendor,
     access_note: row.access_note,
     cf_account_id: row.cf_account_id,
+    platform: row.platform || "cloudflare",
+    team_id: row.team_id,
     api_token_tail: row.api_token_tail,
     connection_id: row.connection_id,
     remote_id: row.remote_id,
@@ -233,6 +239,17 @@ function readKind(value: unknown): string {
     throw new MachineError(400, "类型不正确");
   }
   return value;
+}
+
+
+// Worker entries are platform-scoped: Cloudflare Workers or Vercel.
+// Anything else is a client error; an absent platform means cloudflare
+// (the pre-0024 shape and all existing rows).
+function readPlatform(input: Record<string, unknown>): string {
+  const raw = input["platform"];
+  if (raw === undefined || raw === null || raw === "" || raw === "cloudflare") return "cloudflare";
+  if (raw === "vercel") return "vercel";
+  throw new MachineError(400, "平台不正确");
 }
 
 function readName(value: unknown): string {
@@ -322,6 +339,8 @@ export async function createMachine(
   let vendor = "";
   let accessNote = "";
   let cfAccountId = "";
+  let platform = "cloudflare";
+  let teamId = "";
   let apiTokenEnc = "";
   let apiTokenTail = "";
   if (kind === "server") {
@@ -343,7 +362,12 @@ export async function createMachine(
     vendor = readOptionalText(input, "vendor", 60, "厂商") ?? "";
     accessNote = readOptionalText(input, "access_note", 200, "接入方式备注") ?? "";
   } else {
-    cfAccountId = readOptionalText(input, "cf_account_id", 64, "Cloudflare 账号 ID") ?? "";
+    platform = readPlatform(input);
+    if (platform === "vercel") {
+      teamId = readOptionalText(input, "team_id", 64, "Team ID") ?? "";
+    } else {
+      cfAccountId = readOptionalText(input, "cf_account_id", 64, "Cloudflare 账号 ID") ?? "";
+    }
     const token = readSecretInput(input, "api_token", "API 令牌");
     if (token) {
       apiTokenEnc = await sealMachineSecret(key, token);
@@ -355,8 +379,8 @@ export async function createMachine(
   const status = kind === "worker" ? "active" : "running";
   await prepare(
     db,
-    "INSERT INTO machines (id, kind, name, region, spec, description, version, status, binding, last_heartbeat_at, note, hostname, os, ip, ssh_host, ssh_port, ssh_user, auth_type, ssh_secret_enc, ssh_tail, vendor, access_note, cf_account_id, api_token_enc, api_token_tail, group_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, '', ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    [id, kind, name, region, spec, description, status, binding, note, hostname, os, ip, sshHost, sshPort, sshUser, authType, sshSecretEnc, sshTail, vendor, accessNote, cfAccountId, apiTokenEnc, apiTokenTail, groupId, now, now],
+    "INSERT INTO machines (id, kind, name, region, spec, description, version, status, binding, last_heartbeat_at, note, hostname, os, ip, ssh_host, ssh_port, ssh_user, auth_type, ssh_secret_enc, ssh_tail, vendor, access_note, cf_account_id, platform, team_id, api_token_enc, api_token_tail, group_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, '', ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    [id, kind, name, region, spec, description, status, binding, note, hostname, os, ip, sshHost, sshPort, sshUser, authType, sshSecretEnc, sshTail, vendor, accessNote, cfAccountId, platform, teamId, apiTokenEnc, apiTokenTail, groupId, now, now],
   ).run();
   await writeAudit(db, { machineId: id, actor, source, action: "create", detail: { kind, name } }, now);
   const row = await getMachine(db, id);
@@ -474,6 +498,11 @@ export async function updateMachine(
       next.cf_account_id = cfAccountId;
       changed.push("cf_account_id");
     }
+    const teamId = readOptionalText(input, "team_id", 64, "Team ID");
+    if (teamId !== undefined) {
+      next.team_id = teamId;
+      changed.push("team_id");
+    }
     const token = readSecretInput(input, "api_token", "API 令牌");
     if (token) {
       next.api_token_enc = await sealMachineSecret(key, token);
@@ -485,7 +514,7 @@ export async function updateMachine(
   // are runtime fields owned by machines_report.
   await prepare(
     db,
-    "UPDATE machines SET name = ?, region = ?, spec = ?, description = ?, binding = ?, note = ?, hostname = ?, os = ?, ip = ?, ssh_host = ?, ssh_port = ?, ssh_user = ?, auth_type = ?, ssh_secret_enc = ?, ssh_tail = ?, vendor = ?, access_note = ?, cf_account_id = ?, api_token_enc = ?, api_token_tail = ?, group_id = ?, updated_at = ? WHERE id = ?",
+    "UPDATE machines SET name = ?, region = ?, spec = ?, description = ?, binding = ?, note = ?, hostname = ?, os = ?, ip = ?, ssh_host = ?, ssh_port = ?, ssh_user = ?, auth_type = ?, ssh_secret_enc = ?, ssh_tail = ?, vendor = ?, access_note = ?, cf_account_id = ?, team_id = ?, api_token_enc = ?, api_token_tail = ?, group_id = ?, updated_at = ? WHERE id = ?",
     [
       next.name,
       next.region,
@@ -505,6 +534,7 @@ export async function updateMachine(
       next.vendor,
       next.access_note,
       next.cf_account_id,
+      next.team_id,
       next.api_token_enc,
       next.api_token_tail,
       next.group_id,
@@ -556,6 +586,7 @@ export async function revealMachineSecret(
 export interface WorkerScript {
   name: string;
   modified_on: string | null;
+  meta?: string | null;
 }
 
 export async function fetchWorkersForMachine(
@@ -568,9 +599,36 @@ export async function fetchWorkersForMachine(
   const row = await getMachine(db, id);
   if (!row) throw new MachineError(404, "机器不存在");
   if (row.kind !== "worker") throw new MachineError(400, "只有 Workers 条目可以查看名下 Workers");
-  if (!row.cf_account_id) throw new MachineError(400, "先填写 Cloudflare 账号 ID");
   if (!row.api_token_enc) throw new MachineError(400, "先补上 API 令牌");
   const token = await openMachineSecret(key, row.api_token_enc);
+  if ((row.platform || "cloudflare") === "vercel") {
+    let vResponse: Response;
+    try {
+      vResponse = await fetch(
+        "https://api.vercel.com/v9/projects" + (row.team_id ? "?teamId=" + encodeURIComponent(row.team_id) : ""),
+        { headers: { authorization: "Bearer " + token, accept: "application/json" } },
+      );
+    } catch {
+      throw new MachineError(502, "连接 Vercel 失败，请稍后重试");
+    }
+    const vBody = (await vResponse.json().catch(() => null)) as {
+      projects?: Array<{ name?: string; updatedAt?: number; framework?: string | null }>;
+      error?: { message?: string };
+    } | null;
+    if (!vResponse.ok || !vBody || !Array.isArray(vBody.projects)) {
+      throw new MachineError(502, vBody?.error?.message ? "Vercel：" + vBody.error.message : "Vercel 返回了无法识别的响应");
+    }
+    const vWorkers: WorkerScript[] = vBody.projects
+      .map((project) => ({
+        name: String(project.name ?? ""),
+        modified_on: project.updatedAt ? new Date(project.updatedAt).toISOString() : null,
+        meta: project.framework ?? null,
+      }))
+      .filter((project) => project.name !== "");
+    await writeAudit(db, { machineId: id, actor, source: "panel", action: "workers_list", detail: { count: vWorkers.length, platform: "vercel" } }, now);
+    return { workers: vWorkers, fetched_at: now };
+  }
+  if (!row.cf_account_id) throw new MachineError(400, "先填写 Cloudflare 账号 ID");
   let response: Response;
   try {
     response = await fetch("https://api.cloudflare.com/client/v4/accounts/" + encodeURIComponent(row.cf_account_id) + "/workers/scripts", {
@@ -638,7 +696,10 @@ export async function getMachineAccessForAgent(
   if (row.kind === "worker") {
     if (!row.api_token_enc) throw new MachineError(400, "这个 Workers 接入还没有保存 API 令牌");
     const token = await openMachineSecret(key, row.api_token_enc);
-    return { ...base, cloudflare: { account_id: row.cf_account_id, api_token: token } };
+    if ((row.platform || "cloudflare") === "vercel") {
+      return { ...base, platform: "vercel", vercel: { team_id: row.team_id, api_token: token } };
+    }
+    return { ...base, platform: "cloudflare", cloudflare: { account_id: row.cf_account_id, api_token: token } };
   }
   return { ...base, vendor: row.vendor, access_note: row.access_note };
 }

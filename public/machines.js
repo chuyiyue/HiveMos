@@ -84,7 +84,10 @@
         );
     } else if (kind === "worker") {
       facts =
-        row("Cloudflare 账号", C.escapeHtml(item.cf_account_id || "未填写")) +
+        row("平台", item.platform === "vercel" ? "Vercel" : "Cloudflare") +
+        (item.platform === "vercel"
+          ? row("Team ID", C.escapeHtml(item.team_id || "个人账号"))
+          : row("Cloudflare 账号", C.escapeHtml(item.cf_account_id || "未填写"))) +
         row("API 令牌", item.api_token_tail ? "末四位 " + C.escapeHtml(item.api_token_tail) : "未填写") +
         row("版本", C.escapeHtml(item.version || "未记录")) +
         row("更新时间", C.escapeHtml(C.formatMinute(item.updated_at) || "—"));
@@ -97,7 +100,7 @@
     var btns = "";
       btns += "<button type=\"button\" class=\"secondary\" data-mact=\"probe\" data-kind=\"server\" data-id=\"" + id + "\">测试连接</button>";
       btns += "<button type=\"button\" class=\"secondary\" data-mact=\"reveal\" data-kind=\"server\" data-id=\"" + id + "\">查看 SSH 密码</button>";
-      btns += "<button type=\"button\" class=\"secondary\" data-mact=\"workers\" data-kind=\"worker\" data-id=\"" + id + "\">查看 Workers</button>";
+      btns += "<button type=\"button\" class=\"secondary\" data-mact=\"workers\" data-kind=\"worker\" data-id=\"" + id + "\">" + (item.platform === "vercel" ? "查看项目" : "查看 Workers") + "</button>";
     btns += "<button type=\"button\" class=\"secondary\" data-mact=\"group\" data-kind=\"" + kind + "\" data-id=\"" + id + "\">设置分组</button>";
     btns += "<button type=\"button\" class=\"secondary\" data-mact=\"edit\" data-kind=\"" + kind + "\" data-id=\"" + id + "\">编辑</button>";
     btns += "<button type=\"button\" class=\"danger\" data-confirm-delete data-mact=\"delete\" data-kind=\"" + kind + "\" data-id=\"" + id + "\">删除</button>";
@@ -140,7 +143,7 @@
       actions += "<button type=\"button\" class=\"secondary\" data-mact=\"reveal\" data-kind=\"server\" data-id=\"" + id + "\">查看密码</button>";
       if (item.ip) actions += "<button type=\"button\" class=\"secondary\" data-copy=\"" + C.escapeHtml(item.ip) + "\" data-label=\"复制 IP\">复制 IP</button>";
     } else if (kind === "worker") {
-      actions += "<button type=\"button\" class=\"secondary\" data-mact=\"workers\" data-kind=\"worker\" data-id=\"" + id + "\">查看 Workers</button>";
+      actions += "<button type=\"button\" class=\"secondary\" data-mact=\"workers\" data-kind=\"worker\" data-id=\"" + id + "\">" + (item.platform === "vercel" ? "查看项目" : "查看 Workers") + "</button>";
     } else {
       actions += "<button type=\"button\" class=\"secondary\" data-mact=\"edit\" data-kind=\"" + kind + "\" data-id=\"" + id + "\">编辑</button>";
     }
@@ -159,8 +162,10 @@
 
   function cardFor(uiKind, item) {
     if (uiKind === "worker") {
-      var facts = [["版本", C.escapeHtml(item.version || "未记录")], ["更新时间", C.escapeHtml(C.formatMinute(item.updated_at) || "—")]];
-      if (item.cf_account_id) facts.push(["Cloudflare 账号", C.escapeHtml(item.cf_account_id)]);
+      var facts = [["平台", item.platform === "vercel" ? "Vercel" : "Cloudflare"], ["版本", C.escapeHtml(item.version || "未记录")], ["更新时间", C.escapeHtml(C.formatMinute(item.updated_at) || "—")]];
+      if (item.platform === "vercel") {
+        if (item.team_id) facts.push(["Team ID", C.escapeHtml(item.team_id)]);
+      } else if (item.cf_account_id) facts.push(["Cloudflare 账号", C.escapeHtml(item.cf_account_id)]);
       if (item.api_token_tail) facts.push(["API 令牌", "末四位 " + C.escapeHtml(item.api_token_tail)]);
       return card("worker", item, facts);
     }
@@ -296,6 +301,28 @@
   // 添加与编辑共用同一套字段构建；item 为空是添加，传入条目是编辑并预填。
   // 状态、心跳、版本是运行态字段，不在表单里，编辑时保持不变；
   // 密码或私钥、API 令牌不回填，编辑时留空表示不修改
+  function workerPlatformFields(platform, v, editing) {
+    v = v || {};
+    var tokenField =
+      "<label>API 令牌<input name=\"api_token\" type=\"password\" maxlength=\"16384\" autocomplete=\"off\" placeholder=\"" +
+      (editing ? "留空表示不修改" : platform === "vercel" ? "有项目读取权限的 Vercel 令牌" : "有 Workers 读取权限的令牌") +
+      "\" /></label>";
+    if (platform === "vercel") {
+      return (
+        tokenField +
+        "<label>Team ID（选填）<input name=\"team_id\" maxlength=\"64\" autocomplete=\"off\" placeholder=\"团队账号才需要，个人账号留空\" value=\"" +
+        C.escapeHtml(v.team_id || "") +
+        "\" /></label>"
+      );
+    }
+    return (
+      "<label>Cloudflare 账号 ID<input name=\"cf_account_id\" maxlength=\"64\" autocomplete=\"off\" value=\"" +
+      C.escapeHtml(v.cf_account_id || "") +
+      "\" /></label>" +
+      tokenField
+    );
+  }
+
   function itemFields(kind, item) {
     var v = item || {};
     var nameField = "<label>名称<input name=\"name\" maxlength=\"60\" autocomplete=\"off\" value=\"" + C.escapeHtml(v.name || "") + "\" /></label>";
@@ -326,18 +353,25 @@
         "<label>分组" + C.groupSelect("group_id", state.groups, v.group_id || "") + "</label>"
       );
     }
+    var platform = v.platform === "vercel" ? "vercel" : "cloudflare";
     return (
       nameField +
       "<label>说明<input name=\"lede\" maxlength=\"60\" autocomplete=\"off\" placeholder=\"例如 本控制面\" value=\"" + C.escapeHtml(v.description || "") + "\" /></label>" +
-      "<label>Cloudflare 账号 ID<input name=\"cf_account_id\" maxlength=\"64\" autocomplete=\"off\" value=\"" + C.escapeHtml(v.cf_account_id || "") + "\" /></label>" +
-      "<label>API 令牌<input name=\"api_token\" type=\"password\" maxlength=\"16384\" autocomplete=\"off\" placeholder=\"" + (item ? "留空表示不修改" : "有 Workers 读取权限的令牌") + "\" /></label>" +
+      "<div class=\"auth-type\"><span>平台</span>" +
+      "<div class=\"page-tabs auth-tabs\" role=\"tablist\" aria-label=\"平台\">" +
+      "<button type=\"button\" class=\"page-tab\" role=\"tab\" data-wplatform=\"cloudflare\" aria-selected=\"" + (platform === "cloudflare" ? "true" : "false") + "\"" + (item ? " disabled" : "") + ">Cloudflare Workers</button>" +
+      "<button type=\"button\" class=\"page-tab\" role=\"tab\" data-wplatform=\"vercel\" aria-selected=\"" + (platform === "vercel" ? "true" : "false") + "\"" + (item ? " disabled" : "") + ">Vercel</button>" +
+      "</div>" +
+      "<input type=\"hidden\" name=\"platform\" value=\"" + platform + "\" />" +
+      "</div>" +
+      "<div data-worker-fields>" + workerPlatformFields(platform, v, !!item) + "</div>" +
       "<label>分组" + C.groupSelect("group_id", state.groups, v.group_id || "") + "</label>"
     );
   }
 
   function openItemDialog(kind, item) {
     var editing = !!item;
-    C.openFormDialog({
+    var dlg = C.openFormDialog({
       title: (editing ? "编辑" : "添加") + TITLE_FOR[kind],
       bodyHtml: itemFields(kind, item),
       submitLabel: editing ? "保存" : "添加",
@@ -373,12 +407,15 @@
             group_id: val(ctrl, "group_id") || null,
           };
         } else {
+          var platform = val(ctrl, "platform") || "cloudflare";
           payload = {
             name: name,
             description: val(ctrl, "lede"),
-            cf_account_id: val(ctrl, "cf_account_id"),
+            platform: platform,
             group_id: val(ctrl, "group_id") || null,
           };
+          if (platform === "vercel") payload.team_id = val(ctrl, "team_id");
+          else payload.cf_account_id = val(ctrl, "cf_account_id");
           var token = val(ctrl, "api_token");
           if (token) payload.api_token = token;
         }
@@ -402,6 +439,20 @@
           });
       },
     });
+    if (kind === "worker" && !editing) {
+      dlg.form.addEventListener("click", function (event) {
+        var tab = event.target.closest("[data-wplatform]");
+        if (!tab || tab.disabled) return;
+        var platform = tab.getAttribute("data-wplatform");
+        dlg.form.querySelectorAll("[data-wplatform]").forEach(function (b) {
+          b.setAttribute("aria-selected", b === tab ? "true" : "false");
+        });
+        var hidden = dlg.form.querySelector("[name=\"platform\"]");
+        if (hidden) hidden.value = platform;
+        var box = dlg.form.querySelector("[data-worker-fields]");
+        if (box) box.innerHTML = workerPlatformFields(platform, null, false);
+      });
+    }
   }
 
   // ---- 服务器：极简表单（IP / 用户名 / 认证二选一 / 备注）+ 真探活 ----
@@ -841,14 +892,14 @@
   // 查看 Workers：服务端用存好的令牌实时拉取，失败把 Cloudflare 的错误原样展示
   function openWorkersDialog(item) {
     var ctrl = C.openFormDialog({
-      title: item.name + " 名下的 Workers",
+      title: item.name + (item.platform === "vercel" ? " 名下的项目" : " 名下的 Workers"),
       size: "md",
       bodyHtml: C.emptyState("正在读取", "马上就好"),
       submitLabel: "关闭",
       onSubmit: function (c) { c.close(); },
     });
     if (!item.api_token_tail) {
-      ctrl.setBody(C.emptyState("还没有保存 API 令牌", "先在编辑里补上 Cloudflare 账号 ID 与 API 令牌，再来查看名下 Workers"));
+      ctrl.setBody(C.emptyState("还没有保存 API 令牌", item.platform === "vercel" ? "先在编辑里补上 API 令牌，再来查看名下项目" : "先在编辑里补上 Cloudflare 账号 ID 与 API 令牌，再来查看名下 Workers"));
       return;
     }
     api("POST", "/api/machines/" + encodeURIComponent(item.id) + "/workers")
@@ -859,12 +910,13 @@
         }
         var workers = result.data.workers || [];
         if (!workers.length) {
-          ctrl.setBody(C.emptyState("这个账号下还没有 Workers", "拉取于 " + (C.formatMinute(result.data.fetched_at) || "刚刚")));
+          ctrl.setBody(C.emptyState(item.platform === "vercel" ? "这个账号下还没有项目" : "这个账号下还没有 Workers", "拉取于 " + (C.formatMinute(result.data.fetched_at) || "刚刚")));
           return;
         }
         var rows = workers.map(function (w) {
           var modified = w.modified_on ? String(w.modified_on).slice(0, 10) + " " + String(w.modified_on).slice(11, 16) : "未记录";
-          return C.record({ id: w.name, title: w.name, facts: [["更新时间", C.escapeHtml(modified)]] });
+          var wfacts = w.meta ? [["框架", C.escapeHtml(w.meta)], ["更新时间", C.escapeHtml(modified)]] : [["更新时间", C.escapeHtml(modified)]];
+          return C.record({ id: w.name, title: w.name, facts: wfacts });
         }).join("");
         ctrl.setBody(
           "<p class=\"subtle\">拉取于 " + C.escapeHtml(C.formatMinute(result.data.fetched_at) || "刚刚") + "，共 " + workers.length + " 个</p>" + C.list(rows)
