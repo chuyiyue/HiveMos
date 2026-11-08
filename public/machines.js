@@ -1,9 +1,11 @@
 /* 云主机板块三页签（服务器 / 云主机 / Workers），数据走 /api/machines。
    状态、最近心跳是运行态字段（由 Agent 经 MCP 上报），表单里不出现；
    绑定是普通文本字段，随添加/编辑一起保存。
-   二期接入：服务器存 SSH 信息（密码或私钥加密保存，卡片只展示备注、主机名、
-   系统与主机 IP，用户名只在编辑弹窗里出现，密码经「查看 SSH 密码」走
-   reveal 接口）；云主机只记厂商与接入方式备注；Workers 存 Cloudflare
+   二期接入：服务器改为极简录入（IP、用户名、密码或密钥二选一、备注），
+   保存后用存好的配置真连 SSH 探活回填主机名、系统、内核与架构；卡片只
+   展示备注、主机名、系统与主机 IP，用户名只在编辑弹窗里出现，密码经
+   「查看 SSH 密码」走 reveal 接口；打开列表时对过期条目后台补测（暂无
+   Cron，阈值 10 分钟）；云主机只记厂商与接入方式备注；Workers 存 Cloudflare
    账号 ID 与 API 令牌（加密保存），可实时查看该账号名下的 Workers。 */
 (function () {
   var C = window.HiveCommon;
@@ -61,15 +63,20 @@
   function openMachineManage(kind, item) {
     var id = C.escapeHtml(item.id);
     var btns = "";
-    if (kind === "server")
+    if (kind === "server") {
+      btns += "<button type=\"button\" class=\"secondary\" data-mact=\"probe\" data-kind=\"server\" data-id=\"" + id + "\">测试连接</button>";
       btns += "<button type=\"button\" class=\"secondary\" data-mact=\"reveal\" data-kind=\"server\" data-id=\"" + id + "\">查看 SSH 密码</button>";
+    }
     if (kind === "worker")
       btns += "<button type=\"button\" class=\"secondary\" data-mact=\"workers\" data-kind=\"worker\" data-id=\"" + id + "\">查看 Workers</button>";
     btns += "<button type=\"button\" class=\"secondary\" data-mact=\"edit\" data-kind=\"" + kind + "\" data-id=\"" + id + "\">编辑</button>";
     btns += "<button type=\"button\" class=\"danger\" data-mact=\"delete\" data-kind=\"" + kind + "\" data-id=\"" + id + "\">删除</button>";
+    var body = "";
+    if (kind === "server") body += C.record({ id: item.id, title: "探活信息", facts: probeFactsRows(item) });
+    body += "<div class=\"manage-actions\">" + btns + "</div>";
     var ctrl = C.openManageDialog({
       title: item.name,
-      bodyHtml: "<div class=\"manage-actions\">" + btns + "</div>",
+      bodyHtml: body,
     });
     ctrl.dialog.addEventListener("click", handleClick);
   }
@@ -96,6 +103,7 @@
     var id = C.escapeHtml(item.id);
     var actions = "";
     if (kind === "server") {
+      actions += "<button type=\"button\" class=\"secondary\" data-mact=\"probe\" data-kind=\"server\" data-id=\"" + id + "\">测试连接</button>";
       actions += "<button type=\"button\" class=\"secondary\" data-mact=\"reveal\" data-kind=\"server\" data-id=\"" + id + "\">查看密码</button>";
       if (item.ip) actions += "<button type=\"button\" class=\"secondary\" data-copy=\"" + C.escapeHtml(item.ip) + "\" data-label=\"复制 IP\">复制 IP</button>";
     } else if (kind === "worker") {
@@ -132,8 +140,8 @@
       cards = items.map(function (item) {
         return card("server", item, [
           ["备注", C.escapeHtml(item.note || "无")],
-          ["主机名", C.escapeHtml(item.hostname || "未填写")],
-          ["系统", C.escapeHtml(item.os || "未填写")],
+          ["主机名", C.escapeHtml(item.hostname || "尚未探活")],
+          ["系统", C.escapeHtml(item.os || "尚未探活")],
           ["主机 IP", C.escapeHtml(item.ip || "未填写")],
         ]);
       });
@@ -208,6 +216,7 @@
           state.loadError = (res.data && res.data.error) || "云主机数据读取失败";
         }
         render();
+        scheduleProbeRefresh();
       })
       .catch(function () {
         state.loaded = true;
@@ -323,6 +332,142 @@
     });
   }
 
+  // ---- 服务器：极简表单（IP / 用户名 / 认证二选一 / 备注）+ 真探活 ----
+
+  function probeFactsRows(item) {
+    var rows = [
+      ["探活状态", item.probe_status === "ok" ? "在线" : item.probe_status === "error" ? "离线" : "尚未探活"],
+      ["主机名", item.hostname || "尚未探活"],
+      ["系统", item.os || "尚未探活"],
+      ["内核", item.kernel || "尚未探活"],
+      ["架构", item.arch || "尚未探活"],
+      ["最近探活", item.probe_at ? C.formatMinute(item.probe_at) || "—" : "尚未探活"],
+    ];
+    if (item.host_fingerprint) rows.push(["主机指纹", item.host_fingerprint]);
+    if (item.probe_status === "error" && item.probe_error) rows.push(["失败原因", item.probe_error]);
+    return rows.map(function (row) { return [row[0], C.escapeHtml(String(row[1]))]; });
+  }
+
+  // 列表打开后服务端会经 waitUntil 对过期服务器后台补测；若本页有这类
+  // 条目，8 秒后静默重拉一次，让补测结果自己浮现（只排一次，不轮询）。
+  var probeRefreshTimer = null;
+  function scheduleProbeRefresh() {
+    if (probeRefreshTimer) return;
+    var now = Date.now();
+    var stale = state.items.some(function (item) {
+      return item.kind === "server" && item.ssh_tail && (item.probe_at == null || now - item.probe_at > 10 * 60 * 1000);
+    });
+    if (!stale) return;
+    probeRefreshTimer = setTimeout(function () {
+      probeRefreshTimer = null;
+      load();
+    }, 8000);
+  }
+
+  function probeServer(item, btn) {
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "正在测试…";
+    }
+    api("POST", "/api/machines/" + encodeURIComponent(item.id) + "/probe")
+      .then(function (res) {
+        return load().then(function () {
+          var failed = !res.data || !res.data.ok || (res.data.probe && !res.data.probe.ok);
+          if (failed) {
+            var fresh = null;
+            state.items.forEach(function (entry) { if (entry.id === item.id) fresh = entry; });
+            if (fresh) openMachineManage("server", fresh);
+          }
+        });
+      })
+      .catch(function () { load(); });
+  }
+
+  // 认证方式二选一：只渲染选中方式的输入框，另一个不出现在 DOM 里。
+  function secretFieldHtml(authType, editing) {
+    if (authType === "key") {
+      return "<label>私钥<textarea name=\"ssh_secret\" rows=\"5\" maxlength=\"16384\" autocomplete=\"off\" placeholder=\"" + (editing ? "留空表示不修改" : "粘贴 OpenSSH 或 PEM 私钥") + "\"></textarea></label>";
+    }
+    return "<label>密码<input name=\"ssh_secret\" type=\"password\" maxlength=\"200\" autocomplete=\"off\" placeholder=\"" + (editing ? "留空表示不修改" : "SSH 登录密码") + "\" /></label>";
+  }
+
+  function serverFields(item) {
+    var v = item || {};
+    var authType = v.auth_type === "key" ? "key" : "password";
+    var html = "";
+    if (item) html += C.record({ id: item.id, title: "探活信息", facts: probeFactsRows(item) });
+    html +=
+      "<label>IP<input name=\"ip\" maxlength=\"120\" autocomplete=\"off\" placeholder=\"例如 203.0.113.10\" value=\"" + C.escapeHtml(v.ip || "") + "\" /></label>" +
+      "<label>用户名<input name=\"ssh_user\" maxlength=\"60\" autocomplete=\"off\" placeholder=\"" + (item ? "留空表示不修改" : "例如 root") + "\" /></label>" +
+      "<fieldset class=\"auth-type\"><legend>认证方式</legend>" +
+      "<label><input type=\"radio\" name=\"auth_type\" value=\"password\"" + (authType === "password" ? " checked" : "") + " /> 密码</label>" +
+      "<label><input type=\"radio\" name=\"auth_type\" value=\"key\"" + (authType === "key" ? " checked" : "") + " /> 密钥</label>" +
+      "</fieldset>" +
+      "<div data-secret-slot>" + secretFieldHtml(authType, !!item) + "</div>" +
+      "<label>备注<input name=\"note\" maxlength=\"200\" autocomplete=\"off\" value=\"" + C.escapeHtml(v.note || "") + "\" /></label>" +
+      "<details><summary>高级</summary>" +
+      "<label>SSH 端口<input name=\"ssh_port\" type=\"number\" min=\"1\" max=\"65535\" value=\"" + (v.ssh_port != null ? v.ssh_port : 22) + "\" /></label>" +
+      "<label>SSH 地址<input name=\"ssh_host\" maxlength=\"120\" autocomplete=\"off\" placeholder=\"留空时用 IP\" value=\"" + C.escapeHtml(v.ssh_host || "") + "\" /></label>" +
+      "</details>";
+    return html;
+  }
+
+  function openServerDialog(item) {
+    var editing = !!item;
+    var ctrl = C.openFormDialog({
+      title: (editing ? "编辑" : "添加") + "服务器",
+      bodyHtml: serverFields(item),
+      submitLabel: editing ? "保存" : "添加",
+      onSubmit: function (c) {
+        var ip = val(c, "ip");
+        var checked = c.form.querySelector("[name=\"auth_type\"]:checked");
+        var authType = checked && checked.value === "key" ? "key" : "password";
+        var secret = val(c, "ssh_secret");
+        var sshUser = val(c, "ssh_user");
+        if (!editing) {
+          if (!ip) { c.setError("请填写 IP"); return; }
+          if (!sshUser) { c.setError("请填写用户名"); return; }
+          if (!secret) { c.setError(authType === "key" ? "请粘贴私钥" : "请填写密码"); return; }
+        }
+        var payload = { auth_type: authType, note: val(c, "note"), ssh_port: Number(val(c, "ssh_port")) || 22 };
+        if (ip) payload.ip = ip;
+        payload.ssh_host = val(c, "ssh_host") || ip;
+        if (sshUser) payload.ssh_user = sshUser;
+        if (secret) payload.ssh_secret = secret;
+        c.setBusy(true);
+        var request = editing
+          ? api("PATCH", "/api/machines/" + encodeURIComponent(item.id), payload)
+          : api("POST", "/api/machines", Object.assign({ kind: "server" }, payload));
+        request
+          .then(function (res) {
+            c.setBusy(false);
+            if (!res.data || !res.data.ok) {
+              c.setError((res.data && res.data.error) || "保存失败，请重试");
+              return;
+            }
+            c.close();
+            if (!editing && res.data.machine && res.data.machine.id) {
+              var created = res.data.machine;
+              load().then(function () { probeServer(created, null); });
+            } else {
+              load();
+            }
+          })
+          .catch(function () {
+            c.setBusy(false);
+            c.setError("网络异常，请重试");
+          });
+      },
+    });
+    var slot = ctrl.form.querySelector("[data-secret-slot]");
+    ctrl.form.addEventListener("change", function (event) {
+      var t = event.target;
+      if (t && t.name === "auth_type" && slot) {
+        slot.innerHTML = secretFieldHtml(t.value === "key" ? "key" : "password", editing);
+      }
+    });
+  }
+
   // 查看 SSH 密码：走 reveal 接口拿明文（服务端记审计），与保险库同口径
   function openRevealDialog(item) {
     var ctrl = C.openFormDialog({
@@ -406,7 +551,9 @@
     }
     var add = target.closest("[data-add]");
     if (add) {
-      openItemDialog(add.getAttribute("data-add"), null);
+      var addKind = add.getAttribute("data-add");
+      if (addKind === "server") openServerDialog(null);
+      else openItemDialog(addKind, null);
       return;
     }
     var zone = target.closest("[data-manage]");
@@ -422,9 +569,13 @@
       state.items.forEach(function (entry) { if (entry.id === mid) found = entry; });
       if (found) {
         var act = mact.getAttribute("data-mact");
-        if (act === "reveal") openRevealDialog(found);
+        if (act === "probe") probeServer(found, mact);
+        else if (act === "reveal") openRevealDialog(found);
         else if (act === "workers") openWorkersDialog(found);
-        else if (act === "edit") openItemDialog(mkind, found);
+        else if (act === "edit") {
+          if (mkind === "server") openServerDialog(found);
+          else openItemDialog(mkind, found);
+        }
         else if (act === "delete") deleteMachine(mkind, found, mact);
       }
     }
