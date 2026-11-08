@@ -161,70 +161,499 @@
     );
   }
 
-  function record(options) {
-    var idAttr = options.id ? ' id="' + escapeHtml(options.id) + '"' : "";
+  // ---- Card structure (SMSinBox device-card layout) ----
+  // A card is one column: a head row (icon, big name, type capsule, status,
+  // optional corner control), an optional lede/extra, a two-column
+  // label-over-value meta grid, and an equal-width outline button row for
+  // direct actions. The head + meta area is the card info zone: when
+  // options.manage is set it becomes the click target (focusable, Enter /
+  // Space friendly) that opens the item management dialog. Management
+  // itself never lives inside the card any more.
+  function iconSvg(name) {
     return (
-      '<article class="record"' +
-      idAttr +
-      '><div class="record-main"><div class="record-title-row"><h3>' +
+      "<svg class=\"icon record-icon\" viewBox=\"0 0 24 24\" aria-hidden=\"true\"><use href=\"/icons.svg#icon-" +
+      escapeHtml(name) +
+      "\"/></svg>"
+    );
+  }
+
+  function metaGrid(pairs) {
+    if (!pairs || !pairs.length) return "";
+    return (
+      "<dl class=\"card-meta\">" +
+      pairs
+        .map(function (pair) {
+          return "<div><dt>" + escapeHtml(pair[0]) + "</dt><dd>" + pair[1] + "</dd></div>";
+        })
+        .join("") +
+      "</dl>"
+    );
+  }
+
+  function record(options) {
+    var idAttr = options.id ? " id=\"" + escapeHtml(options.id) + "\"" : "";
+    var zoneAttrs = options.manage
+      ? " data-manage=\"" +
+        escapeHtml(options.manage) +
+        "\" tabindex=\"0\" role=\"button\" aria-haspopup=\"dialog\" aria-label=\"" +
+        escapeHtml("管理：" + (options.title || "")) +
+        "\""
+      : "";
+    var head =
+      "<div class=\"record-head\">" +
+      (options.icon ? iconSvg(options.icon) : "") +
+      "<h3 class=\"record-name\">" +
       escapeHtml(options.title) +
       "</h3>" +
+      (options.pill ? badge(options.pill) : "") +
       (options.status ? statusPill(options.status) : "") +
-      "</div>" +
-      (options.lede ? '<p class="lede">' + escapeHtml(options.lede) + "</p>" : "") +
+      (options.corner ? "<span class=\"record-corner\">" + options.corner + "</span>" : "") +
+      "</div>";
+    return (
+      "<article class=\"record\"" +
+      idAttr +
+      "><div class=\"record-info\"" +
+      zoneAttrs +
+      ">" +
+      head +
+      (options.lede ? "<p class=\"lede\">" + escapeHtml(options.lede) + "</p>" : "") +
       (options.extra || "") +
+      metaGrid(options.facts || []) +
       "</div>" +
-      facts(options.facts || []) +
-      (options.expandKey
-        ? expandPanel(options.expandKey, options.expandBody || "") + expandToggle(options.expandKey, options.expandLabel)
-        : "") +
+      (options.actions ? "<div class=\"card-actions\">" + options.actions + "</div>" : "") +
       "</article>"
     );
   }
 
-  // ---- Expandable card panels (SMSinBox style) ----
-  // A card renders a toggle strip plus a panel inside the card; management
-  // actions and inline settings live in the panel instead of a centered
-  // menu. Expansion state lives in this module so a page re-render
-  // (innerHTML swap) restores which cards were open. Panels toggle
-  // independently: any number of cards may be open at once.
-  var expandedCards = {};
+  // ---- Overlay containers for secondary (management) content ----
+  // Two shared shells, both a modal <dialog> appended to <body> so a page
+  // render() never destroys them: a centered floating dialog (card and row
+  // management) and a right-hand slide-over panel (sidebar Agent detail).
+  // Pages fill the body, wire their own delegated handlers onto ctrl.dialog
+  // (the mcp-skills wireDialog pattern), and use ctrl.confirmSlot as the
+  // askConfirm anchor for flows started inside.
+  var currentOverlay = null;
 
-  function cardExpanded(key) {
-    return !!expandedCards[key];
+  var CLOSE_ICON =
+    "<svg class=\"icon\" viewBox=\"0 0 24 24\" aria-hidden=\"true\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\"><path d=\"M6 6l12 12M18 6L6 18\"/></svg>";
+
+  function buildOverlay(options, panel) {
+    if (currentOverlay) currentOverlay.close();
+    var dialog = document.createElement("dialog");
+    dialog.className = panel ? "modal side-panel" : "modal manage-dialog" + (options.wide ? " wide" : "");
+    dialog.setAttribute("data-manage-dialog", "");
+    dialog.setAttribute("aria-label", options.title || "管理");
+    var card = document.createElement("div");
+    card.className = "modal-card";
+    var head = document.createElement("div");
+    head.className = "manage-head";
+    var heading = document.createElement("h2");
+    heading.className = "modal-title";
+    heading.textContent = options.title || "";
+    var closeBtn = document.createElement("button");
+    closeBtn.type = "button";
+    closeBtn.className = "icon-btn ghost manage-close";
+    closeBtn.setAttribute("aria-label", "关闭");
+    closeBtn.innerHTML = CLOSE_ICON;
+    head.append(heading, closeBtn);
+    var body = document.createElement("div");
+    body.className = "manage-body";
+    body.innerHTML = options.bodyHtml || "";
+    var confirmSlot = document.createElement("div");
+    confirmSlot.className = "confirm-slot";
+    confirmSlot.setAttribute("data-manage-confirm", "");
+    body.append(confirmSlot);
+    card.append(head, body);
+    dialog.append(card);
+    document.body.append(dialog);
+    var ctrl = {
+      dialog: dialog,
+      bodyEl: body,
+      confirmSlot: confirmSlot,
+      setTitle: function (text) {
+        heading.textContent = text || "";
+        dialog.setAttribute("aria-label", text || "管理");
+      },
+      setBody: function (html) {
+        body.innerHTML = html || "";
+        body.append(confirmSlot);
+      },
+      close: function () {
+        if (dialog.open) dialog.close();
+      },
+    };
+    currentOverlay = ctrl;
+    closeBtn.addEventListener("click", function () {
+      ctrl.close();
+    });
+    dialog.addEventListener("click", function (event) {
+      if (event.target === dialog) ctrl.close();
+    });
+    dialog.addEventListener("close", function () {
+      document.body.classList.remove("modal-open");
+      if (currentOverlay === ctrl) currentOverlay = null;
+      dialog.remove();
+      if (typeof options.onClose === "function") options.onClose();
+    });
+    dialog.showModal();
+    document.body.classList.add("modal-open");
+    closeBtn.focus();
+    return ctrl;
   }
 
-  function setCardExpanded(key, on) {
-    if (on) expandedCards[key] = true;
-    else delete expandedCards[key];
+  function openManageDialog(options) {
+    return buildOverlay(options || {}, false);
   }
 
-  function expandToggle(key, label) {
+  function openSidePanel(options) {
+    return buildOverlay(options || {}, true);
+  }
+
+  // ---- Agent management (shared by the Agents board dialog and the
+  // sidebar side panel) ----
+  // One builder + one wiring for both hosts: detail facts, the full
+  // management action set and the per-Agent permission switches (saved the
+  // moment they are flipped, PATCH with the complete set). The host only
+  // picks where it opens (centered dialog vs side panel) and passes an
+  // onChanged(message) callback so its own list can refresh.
+  var PERM_DOMAINS = [
+    ["registry", "注册表", "MCP 注册表的搜索、列表与取配置"],
+    ["memory", "记忆", "记忆的读写与同步"],
+    ["soul", "Soul", "Soul 的读写与同步"],
+    ["tasks", "任务", "任务的查看与处理"],
+    ["calendar", "日历", "日程的查看与编辑"],
+    ["vault", "保险库", "保险库条目的取用"],
+    ["machines", "云主机", "云主机状态与操作"],
+  ];
+
+  function agentApi(method, url, body) {
+    var headers = { accept: "application/json" };
+    var init = { method: method, headers: headers, cache: "no-store" };
+    if (body !== undefined) {
+      headers["content-type"] = "application/json";
+      init.body = JSON.stringify(body);
+    }
+    return fetch(url, init).then(function (response) {
+      return response
+        .json()
+        .catch(function () {
+          return {};
+        })
+        .then(function (data) {
+          return { status: response.status, data: data || {} };
+        });
+    });
+  }
+
+  function permTextOf(agent) {
+    var perms = agent.permissions || [];
+    if (!perms.length) return "未开启任何功能";
+    var labels = perms.map(function (domain) {
+      var entry = PERM_DOMAINS.find(function (item) {
+        return item[0] === domain;
+      });
+      return entry ? entry[1] : domain;
+    });
+    return perms.length + " / " + PERM_DOMAINS.length + "：" + labels.join("、");
+  }
+
+  function agentPermRows(agent) {
+    var enabled = new Set(agent.permissions || []);
+    return PERM_DOMAINS.map(function (entry) {
+      var on = enabled.has(entry[0]);
+      return (
+        "<div class=\"perm-row\"><div class=\"perm-meta\"><strong>" +
+        escapeHtml(entry[1]) +
+        "</strong><span class=\"subtle\">" +
+        escapeHtml(entry[0] + " · " + entry[2]) +
+        "</span></div><button type=\"button\" class=\"switch\" role=\"switch\" aria-checked=\"" +
+        (on ? "true" : "false") +
+        "\" data-perm=\"" +
+        escapeHtml(entry[0]) +
+        "\" aria-label=\"" +
+        escapeHtml(entry[1]) +
+        "\"><span class=\"switch-knob\"></span></button></div>"
+      );
+    }).join("");
+  }
+
+  function agentManageBody(agent, groupName) {
+    var active = agent.status === "active";
+    var actions =
+      "<button type=\"button\" class=\"secondary\" data-agent-act=\"rename\">改名</button>" +
+      "<button type=\"button\" class=\"secondary\" data-agent-act=\"move\">移动分组</button>" +
+      "<button type=\"button\" class=\"secondary\" data-agent-act=\"pin\">" +
+      (agent.pinned_at ? "取消固定" : "固定到侧边栏") +
+      "</button>";
+    if (active) {
+      actions +=
+        "<button type=\"button\" class=\"secondary\" data-agent-act=\"rotate\">轮换令牌</button>" +
+        "<button type=\"button\" class=\"danger\" data-agent-act=\"disable\">停用</button>";
+    }
     return (
-      '<button type="button" class="expand-toggle" data-expand-toggle="' +
-      escapeHtml(key) +
-      '" aria-expanded="' +
-      (cardExpanded(key) ? "true" : "false") +
-      '"><span>' +
-      escapeHtml(label || "高级设置") +
-      '</span><span class="chev" aria-hidden="true"></span></button>'
-    );
-  }
-
-  function expandPanel(key, bodyHtml) {
-    return (
-      '<div class="expand-panel" data-expand-panel="' +
-      escapeHtml(key) +
-      '"' +
-      (cardExpanded(key) ? "" : " hidden") +
-      ">" +
-      (bodyHtml || "") +
+      "<p class=\"manage-status\" data-manage-status role=\"status\"></p>" +
+      "<dl class=\"kv\">" +
+      "<div><dt>标识</dt><dd><span class=\"mono\">" +
+      escapeHtml(agent.id) +
+      "</span></dd></div>" +
+      "<div><dt>状态</dt><dd>" +
+      statusPill(active ? "enabled" : "disabled") +
+      "</dd></div>" +
+      "<div><dt>分组</dt><dd>" +
+      escapeHtml(groupName || "未分组") +
+      "</dd></div>" +
+      "<div><dt>权限</dt><dd>" +
+      escapeHtml(permTextOf(agent)) +
+      "</dd></div>" +
+      "<div><dt>最近调用</dt><dd>" +
+      escapeHtml(formatMinute(agent.last_seen_at) || "还没有调用") +
+      "</dd></div>" +
+      "<div><dt>创建</dt><dd>" +
+      escapeHtml(formatMinute(agent.created_at) || "未知") +
+      "</dd></div>" +
+      "</dl>" +
+      "<div class=\"manage-actions\">" +
+      actions +
+      "</div>" +
+      "<h3 class=\"manage-subhead\">系统功能权限</h3>" +
+      "<p class=\"subtle manage-note\">这个 Agent 通过面板 MCP 能访问的系统功能，拨动开关立即生效</p>" +
+      "<div class=\"perm-list\">" +
+      agentPermRows(agent) +
       "</div>"
     );
   }
 
-  function expandActions(buttonsHtml) {
-    return '<div class="expand-actions">' + (buttonsHtml || "") + "</div>";
+  function openAgentManage(agentId, options) {
+    options = options || {};
+    var ctrl = (options.panel ? openSidePanel : openManageDialog)({
+      title: "Agent",
+      bodyHtml: emptyState("正在读取", "稍等片刻"),
+    });
+    var agent = null;
+    var groups = [];
+    var busy = false;
+
+    function groupNameOf(target) {
+      if (!target || !target.group_id) return "未分组";
+      var found = groups.find(function (item) {
+        return item.id === target.group_id;
+      });
+      return found ? found.name : "未分组";
+    }
+
+    function setStatus(text, isError) {
+      var el = ctrl.bodyEl.querySelector("[data-manage-status]");
+      if (!el) return;
+      el.textContent = text || "";
+      el.classList.toggle("is-error", !!isError);
+    }
+
+    function changed(message) {
+      window.dispatchEvent(new CustomEvent("hivemos:sidebar-refresh"));
+      if (typeof options.onChanged === "function") options.onChanged(message || "");
+    }
+
+    function refresh() {
+      return Promise.all([agentApi("GET", "/api/agents"), agentApi("GET", "/api/groups?scope=agent")])
+        .then(function (results) {
+          if (results[0].status === 401) {
+            location.assign("/login.html");
+            return;
+          }
+          var list = results[0].data && results[0].data.ok === true ? results[0].data.agents || [] : [];
+          groups = results[1].data && results[1].data.ok === true ? results[1].data.groups || [] : [];
+          agent =
+            list.find(function (item) {
+              return item.id === agentId;
+            }) || null;
+          if (!agent) {
+            ctrl.setTitle("Agent");
+            ctrl.setBody(emptyState("找不到这个 Agent", "它可能已经被停用或删除"));
+            return;
+          }
+          ctrl.setTitle(agent.name);
+          ctrl.setBody(agentManageBody(agent, groupNameOf(agent)));
+        })
+        .catch(function () {
+          ctrl.setBody(emptyState("读取失败", "网络异常，请稍后重试"));
+        });
+    }
+
+    function patch(body, okMessage) {
+      if (busy || !agent) return Promise.resolve(false);
+      busy = true;
+      return agentApi("PATCH", "/api/agents/" + encodeURIComponent(agent.id), body)
+        .then(function (result) {
+          busy = false;
+          if (result.status === 401) {
+            location.assign("/login.html");
+            return false;
+          }
+          if (!result.data || result.data.ok !== true) {
+            var message = (result.data && result.data.error) || "没有保存，请重试";
+            return refresh().then(function () {
+              setStatus(message, true);
+              return false;
+            });
+          }
+          changed(okMessage);
+          return refresh().then(function () {
+            setStatus(okMessage, false);
+            return true;
+          });
+        })
+        .catch(function () {
+          busy = false;
+          setStatus("网络异常，请重试", true);
+          return false;
+        });
+    }
+
+    function doRename() {
+      openFormDialog({
+        title: "改名",
+        bodyHtml:
+          "<label>名字" +
+          "<input data-field=\"name\" name=\"name\" maxlength=\"64\" autocomplete=\"off\" value=\"" +
+          escapeHtml(agent.name) +
+          "\" /></label>",
+        submitLabel: "保存",
+        onSubmit: function (c) {
+          var input = c.form.querySelector("[data-field=\"name\"]");
+          var name = input ? input.value.trim() : "";
+          if (!name) {
+            c.setError("请填写设备名字");
+            return;
+          }
+          c.setBusy(true);
+          patch({ name: name }, "已改名").then(function (ok) {
+            c.setBusy(false);
+            if (ok) c.close();
+          });
+        },
+      });
+    }
+
+    function doMove() {
+      openFormDialog({
+        title: "移动分组",
+        bodyHtml: "<label>分组" + groupSelect("group_id", groups, agent.group_id || "") + "</label>",
+        submitLabel: "保存",
+        onSubmit: function (c) {
+          var input = c.form.querySelector("[data-field=\"group_id\"]");
+          var groupId = input ? input.value : "";
+          c.setBusy(true);
+          patch({ group_id: groupId || null }, "已移动分组").then(function (ok) {
+            c.setBusy(false);
+            if (ok) c.close();
+          });
+        },
+      });
+    }
+
+    function doRotate() {
+      askConfirm({
+        anchor: ctrl.confirmSlot,
+        title: "轮换令牌",
+        text: "确认轮换「" + agent.name + "」的令牌吗？旧令牌会立即失效",
+        confirmLabel: "轮换",
+        danger: true,
+      }).then(function (yes) {
+        if (!yes || busy) return;
+        busy = true;
+        agentApi("POST", "/api/agents/" + encodeURIComponent(agent.id) + "/rotate")
+          .then(function (result) {
+            busy = false;
+            if (result.status === 401) {
+              location.assign("/login.html");
+              return;
+            }
+            if (!result.data || result.data.ok !== true || !result.data.token) {
+              setStatus((result.data && result.data.error) || "没有轮换成功，请重试", true);
+              return;
+            }
+            changed("已轮换令牌");
+            var resultDialog = openFormDialog({
+              title: "新令牌",
+              bodyHtml: "",
+              submitLabel: "完成",
+              onSubmit: function (c) {
+                c.close();
+              },
+            });
+            resultDialog.showResult(
+              "<p>新令牌只显示这一次。旧令牌已经失效，请立刻复制并换到设备上</p>" + copyLine(result.data.token, "复制令牌"),
+              "我已复制",
+            );
+          })
+          .catch(function () {
+            busy = false;
+            setStatus("网络异常，请重试", true);
+          });
+      });
+    }
+
+    function doDisable() {
+      askConfirm({
+        anchor: ctrl.confirmSlot,
+        title: "停用设备",
+        text: "确认停用「" + agent.name + "」吗？停用后该令牌不能再调用注册表",
+        confirmLabel: "停用",
+        danger: true,
+      }).then(function (yes) {
+        if (!yes || busy) return;
+        busy = true;
+        agentApi("DELETE", "/api/agents/" + encodeURIComponent(agent.id))
+          .then(function (result) {
+            busy = false;
+            if (result.status === 401) {
+              location.assign("/login.html");
+              return;
+            }
+            if (!result.data || result.data.ok !== true) {
+              setStatus((result.data && result.data.error) || "没有停用，请重试", true);
+              return;
+            }
+            ctrl.close();
+            changed("已停用");
+          })
+          .catch(function () {
+            busy = false;
+            setStatus("网络异常，请重试", true);
+          });
+      });
+    }
+
+    ctrl.dialog.addEventListener("click", function (event) {
+      var target = event.target;
+      if (!(target instanceof Element)) return;
+      var permBtn = target.closest("[data-perm]");
+      if (permBtn) {
+        if (busy || !agent) return;
+        var domain = permBtn.getAttribute("data-perm");
+        var next = new Set(agent.permissions || []);
+        if (next.has(domain)) next.delete(domain);
+        else next.add(domain);
+        permBtn.setAttribute("aria-checked", next.has(domain) ? "true" : "false");
+        var ordered = PERM_DOMAINS.map(function (entry) {
+          return entry[0];
+        }).filter(function (entry) {
+          return next.has(entry);
+        });
+        patch({ permissions: ordered }, "已保存权限");
+        return;
+      }
+      var actBtn = target.closest("[data-agent-act]");
+      if (!actBtn || busy || !agent) return;
+      var act = actBtn.getAttribute("data-agent-act");
+      if (act === "rename") doRename();
+      else if (act === "move") doMove();
+      else if (act === "pin") patch({ pinned: !agent.pinned_at }, agent.pinned_at ? "已取消固定" : "已固定到侧边栏");
+      else if (act === "rotate") doRotate();
+      else if (act === "disable") doDisable();
+    });
+    refresh();
+    return ctrl;
   }
 
   function list(html) {
@@ -584,20 +1013,15 @@
     return ctrl;
   }
 
-  document.addEventListener("click", function (event) {
+    // Info zones (record manage targets) are focusable buttons: Enter and
+  // Space open the management dialog through the page click delegation.
+  document.addEventListener("keydown", function (event) {
+    if (event.key !== "Enter" && event.key !== " ") return;
     var target = event.target;
     if (!(target instanceof Element)) return;
-    var toggle = target.closest("[data-expand-toggle]");
-    if (!toggle) return;
-    var key = toggle.getAttribute("data-expand-toggle") || "";
-    var scope = toggle.closest("article") || toggle.parentElement;
-    var selector = '[data-expand-panel="' + (window.CSS && CSS.escape ? CSS.escape(key) : key) + '"]';
-    var panel = scope ? scope.querySelector(selector) : null;
-    if (!panel && scope && scope.parentElement) panel = scope.parentElement.querySelector(selector);
-    if (!panel) panel = document.querySelector(selector);
-    expandedCards[key] = !expandedCards[key];
-    toggle.setAttribute("aria-expanded", expandedCards[key] ? "true" : "false");
-    if (panel) panel.hidden = !expandedCards[key];
+    if (!target.hasAttribute("data-manage")) return;
+    event.preventDefault();
+    target.click();
   });
 
   document.addEventListener("click", function (event) {
@@ -648,11 +1072,12 @@
     askConfirm: askConfirm,
     openFormDialog: openFormDialog,
     openActionMenu: openActionMenu,
-    cardExpanded: cardExpanded,
-    setCardExpanded: setCardExpanded,
-    expandToggle: expandToggle,
-    expandPanel: expandPanel,
-    expandActions: expandActions,
+    openManageDialog: openManageDialog,
+    openSidePanel: openSidePanel,
+    openAgentManage: openAgentManage,
+    permDomains: PERM_DOMAINS,
+    metaGrid: metaGrid,
+    iconSvg: iconSvg,
     addBar: addBar,
     groupSelect: groupSelect,
     groupedSections: groupedSections,

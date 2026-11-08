@@ -331,56 +331,232 @@ dialog.action-menu::backdrop { background: var(--overlay); }
 .switch[aria-checked="true"] { background: var(--accent-button); border-color: transparent; }
 .switch[aria-checked="true"] .switch-knob { left: 20px; background: var(--on-accent); }
 
-/* Expandable card panel (shared, SMSinBox style): the toggle strip sits at
-   the card foot, the panel opens inside the card above it. Used by every
-   board instead of a centered action menu for card management. */
-.record > .expand-panel, .record > .expand-toggle { grid-column: 1 / -1; }
+/* Reference device-card layout (SMSinBox): one column — head row, meta
+   grid, button row. .record also has rules in pages.css; the article
+   selector here outranks them. */
+article.record {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px 20px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: none;
+  scroll-margin-top: calc(var(--topbar-height, 56px) + 12px);
+}
 
-.expand-toggle {
+.record-info { display: grid; gap: 10px; min-width: 0; }
+
+.record-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  width: 100%;
-  min-height: 36px;
-  padding: 6px 2px;
+  gap: 10px;
+  min-width: 0;
+}
+
+.record-icon { width: 20px; height: 20px; flex: none; color: var(--text-3); }
+
+.record-name {
+  margin: 0;
+  font-size: var(--fs-lg);
+  font-weight: 700;
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.record-head .badge,
+.record-head .status-indicator { flex: none; }
+
+.record-corner { margin-left: auto; flex: none; display: inline-flex; }
+
+.pin-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  min-width: 34px;
+  height: 34px;
+  min-height: 34px;
+  padding: 0;
   background: transparent;
   border: 0;
-  border-top: 1px solid var(--border);
-  border-radius: 0;
-  color: var(--text-2);
-  font: inherit;
-  font-size: var(--fs-sm);
-  font-weight: 600;
+  border-radius: var(--r-sm);
+  color: var(--text-3);
   cursor: pointer;
+}
+
+.pin-btn .icon { width: 19px; height: 19px; }
+
+.pin-btn:hover { background: var(--surface-hover); color: var(--text-2); }
+
+.pin-btn[aria-pressed="true"] { color: var(--text); }
+
+.pin-btn[aria-pressed="true"] .icon { fill: currentColor; }
+
+.card-meta {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px 20px;
+  margin: 0;
+}
+
+.card-meta > div { min-width: 0; display: grid; gap: 2px; align-content: start; }
+
+.card-meta dt { margin: 0; font-size: var(--fs-sm); color: var(--text-3); }
+
+.card-meta dd {
+  margin: 0;
+  min-width: 0;
+  font-size: var(--fs-base);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.card-actions { display: flex; gap: 8px; }
+
+.card-actions > button { flex: 1 1 0; min-width: 0; min-height: 38px; }
+
+/* The info zone is the management entry: pointer + hover wash on devices
+   that can hover, inset focus ring for keyboards. The negative margins
+   let the hover wash bleed a little past the text without moving layout. */
+.record-info[data-manage] {
+  cursor: pointer;
+  border-radius: 12px;
+  margin: -10px -12px -6px;
+  padding: 10px 12px 6px;
   -webkit-tap-highlight-color: transparent;
 }
 
-.expand-toggle:hover { color: var(--text); }
+@media (hover: hover) {
+  .record-info[data-manage]:hover { background: var(--surface-hover); }
+}
 
-.expand-toggle .chev {
+.record-info[data-manage]:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--focus-ring);
+}
+
+/* Management overlays: centered dialog + right side panel. Both reuse the
+   .modal shell; the body stacks detail facts, an action row and any
+   inline settings the item carries. */
+.manage-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.manage-head .modal-title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.manage-close { flex: none; margin: -4px -4px 0 0; }
+
+.manage-body { display: block; }
+
+.manage-body > .kv { margin-bottom: 4px; }
+
+.manage-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+
+.manage-actions button { min-height: 36px; }
+
+.manage-subhead {
+  margin: 18px 0 4px;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.manage-note { margin: 0 0 6px; }
+
+.manage-status { margin: 0 0 10px; font-size: var(--fs-sm); color: var(--success-text); }
+
+.manage-status:empty { display: none; }
+
+.manage-status.is-error { color: var(--danger-text); }
+
+.manage-body .confirm-slot:empty { display: none; }
+
+.manage-body .confirm-panel { margin-top: 14px; }
+
+dialog.side-panel {
+  inset: 0 0 0 auto;
+  margin: 0;
+  width: min(400px, 94vw);
+  height: 100dvh;
+  max-height: 100dvh;
+}
+
+dialog.side-panel .modal-card {
+  height: 100%;
+  max-height: none;
+  border-radius: 0;
+  overflow-y: auto;
+}
+
+@media (min-width: 640px) {
+  dialog.side-panel .modal-card { border-radius: 16px 0 0 16px; }
+}
+
+dialog.side-panel[open] { animation: side-panel-in 0.22s ease; }
+
+@keyframes side-panel-in {
+  from { transform: translateX(36px); opacity: 0.3; }
+}
+
+/* Vault entry rows: list rows, not cards. The row body is the management
+   entry (same overlay as cards); the reveal button stays independent.
+   Scoped to .entry-row so settings session rows keep their own rules. */
+.entry-row .session-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface);
+}
+
+.entry-row .session-main { flex: 1; min-width: 0; }
+
+.entry-row .session-title h3 {
+  margin: 0;
+  font-size: var(--fs-md);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.entry-row .session-row[data-manage] { cursor: pointer; }
+
+@media (hover: hover) {
+  .entry-row .session-row[data-manage]:hover { background: var(--surface-hover); }
+}
+
+.entry-row .session-row[data-manage]:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--focus-ring);
+}
+
+.entry-row .row-chev {
   width: 8px;
   height: 8px;
   flex: none;
-  margin-right: 4px;
-  border-right: 2px solid currentColor;
-  border-bottom: 2px solid currentColor;
-  transform: rotate(45deg);
-  transition: transform var(--dur-fast) var(--ease);
+  margin-right: 2px;
+  border-right: 2px solid var(--text-3);
+  border-bottom: 2px solid var(--text-3);
+  transform: rotate(-45deg);
 }
 
-.expand-toggle[aria-expanded="true"] .chev { transform: rotate(225deg); }
-
-.expand-panel { border-top: 1px solid var(--border); padding-top: 12px; }
-.expand-panel[hidden] { display: none; }
-
-.expand-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.expand-actions button { min-height: 36px; }
-
-.expand-note { margin: 0 0 10px; }
-.expand-subhead { margin: 14px 0 4px; font-size: var(--fs-sm); font-weight: 600; color: var(--text-2); }
-.expand-subhead:first-child { margin-top: 0; }
-
-/* 保险库条目行：展开切换在行尾（行本身不是 .record 网格） */
-.session-row .expand-toggle { width: auto; border-top: 0; padding: 6px 8px; }
-.entry-row > .expand-panel { margin-top: 2px; }
+@media (max-width: 639px) {
+  article.record { padding: 16px; }
+  .record-name { font-size: var(--fs-md); }
+}
