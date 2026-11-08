@@ -310,6 +310,7 @@
     var soulCards = SOULS.map(function (item) {
       return C.record({
         id: item.id,
+        className: "soul-card",
         icon: "soul",
         title: item.agent_name,
         facts: [
@@ -317,7 +318,9 @@
           ["更新时间", C.escapeHtml(C.formatMinute(item.updated_at) || "—")],
         ],
         actions:
-          "<button type=\"button\" class=\"secondary\" data-card-act=\"history\" data-kind=\"soul\" data-id=\"" + C.escapeHtml(item.id) + "\">历史版本</button>",
+          "<button type=\"button\" class=\"secondary\" data-card-act=\"edit\" data-kind=\"soul\" data-id=\"" + C.escapeHtml(item.id) + "\">编辑</button>" +
+          "<button type=\"button\" class=\"secondary\" data-card-act=\"history\" data-kind=\"soul\" data-id=\"" + C.escapeHtml(item.id) + "\">历史版本</button>" +
+          "<button type=\"button\" class=\"secondary\" data-confirm-delete data-card-act=\"delete\" data-kind=\"soul\" data-id=\"" + C.escapeHtml(item.id) + "\">删除</button>",
         manage: "soul:" + item.id,
       });
     }).join("");
