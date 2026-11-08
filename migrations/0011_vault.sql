@@ -73,7 +73,7 @@ INSERT INTO gateways (id, name, proto, base_url, models, key_enc, tail, status, 
    CAST(strftime('%s', '2026-11-05 01:00:00') AS INTEGER) * 1000,
    CAST(strftime('%s', '2026-11-05 01:00:00') AS INTEGER) * 1000);
 
-INSERT INTO emails (id, address, purpose, portal, note, created_at, updated_at) VALUES,
+INSERT INTO emails (id, address, purpose, portal, note, created_at, updated_at) VALUES
   ('em_main', 'royecc@outlook.com', '主邮箱', 'Outlook', '微软账号与订阅都在这个邮箱',
    CAST(strftime('%s', '2026-11-01 00:00:00') AS INTEGER) * 1000,
    CAST(strftime('%s', '2026-11-01 00:00:00') AS INTEGER) * 1000),
