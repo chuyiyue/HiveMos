@@ -36,6 +36,7 @@ import { handleTasksRequest } from "./tasks-http";
 import { handleMachinesRequest } from "./machines-http";
 import { handleOverviewRequest } from "./overview-http";
 import { handleVaultRequest } from "./vault-http";
+import { handleExtrasRequest } from "./extras-http";
 import { syncDueMirrors } from "./calendar";
 import { refreshActiveSnapshots } from "./registry";
 import { issueSession, publicUser, requireAdminUser } from "./session";
@@ -111,6 +112,8 @@ export default {
       if (overview) return overview;
       const vault = await handleVaultRequest(request, env, wait, path);
       if (vault) return vault;
+      const extras = await handleExtrasRequest(request, env, wait, path);
+      if (extras) return extras;
       if (path === "/api" || path.startsWith("/api/")) return json({ ok: false, error: "未找到" }, 404);
       return env.ASSETS.fetch(request);
     } catch {

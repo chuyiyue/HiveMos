@@ -1,5 +1,6 @@
-/* MCP 与 Skills 合并板块。MCP 注册表走 /api/mcp-servers，分组走 /api/groups?scope=mcp；
-   Skills 与 API 为本地状态占位（接入后换成对应接口）。三个页签共用同一套操作区、
+/* MCP 与 Skills 合并板块。MCP 注册表走 /api/mcp-servers，Skills 与 API 走
+   /api/extras/skills 与 /api/extras/apis；三个页签的分组都走
+   /api/groups?scope=mcp 同一套分组池。三个页签共用同一套操作区、
    分组分区、卡片与中央高级菜单组件 */
 (function () {
   var C = window.HiveCommon;
@@ -16,25 +17,12 @@
     notice: "",
     noticeKind: "danger",
     busy: false,
-    // Skills / API 页签的本地状态：结构与 MCP 页签一致（分组 + 条目），
-    // 添加与分组在页内即时生效，接后端时把这层换成接口即可
+    // Skills / API 页签的条目走 /api/extras/*（load 时拉取）；分组与 MCP
+    // 页签共用后端 scope=mcp 分组池（state.groups），这里只留条目数组
     local: {
       seq: 0,
-      skills: {
-        groups: [],
-        items: [
-          { id: "skill_search", name: "web-search", version: "1.4.0", source: "官方注册表", used: "研究、编排", status: "enabled", group_id: null },
-          { id: "skill_deploy", name: "wrangler-deploy", version: "0.9.2", source: "工作区", used: "编排", status: "enabled", group_id: null },
-          { id: "skill_vault", name: "vault-read", version: "1.0.1", source: "官方注册表", used: "值守", status: "disabled", group_id: null },
-        ],
-      },
-      api: {
-        groups: [],
-        items: [
-          { id: "api_mails", name: "mails.dev", base: "https://api.mails.dev", auth: "Bearer API Key", note: "邮箱服务 API，没有 MCP", status: "active", group_id: null },
-          { id: "api_mistgate", name: "Mistgate 管理 API", base: "http://127.0.0.1:18446", auth: "Admin Token", note: "面板管理接口，没有 MCP", status: "active", group_id: null },
-        ],
-      },
+      skills: { groups: [], items: [] },
+      api: { groups: [], items: [] },
     },
   };
 
@@ -322,11 +310,11 @@
   // ---- 三个页签共用的列表骨架 ----
   // 操作区（C.addBar）、分组分区（C.groupedSections）、卡片（C.record）与
   // 分组 section 头操作在三个页签里是同一套渲染；差异只在 data-action 前缀
-  // 与卡片内容。scope 为 mcp 时分组走后端，其余两个页签走本地状态
+  // 与卡片内容。三个页签的分组都走后端 scope=mcp 分组池
 
   function groupActionsFor(scope) {
     return function (group) {
-      var prefix = scope === "mcp" ? "" : "local-";
+      var prefix = scope === "mcp" || scope === "skills" || scope === "api" ? "" : "local-";
       var scopeAttr = scope === "mcp" ? "" : ' data-scope="' + scope + '"';
       return (
         '<button type="button" class="secondary" data-action="' +
@@ -387,8 +375,8 @@
     var store = state.local.skills;
     return (
       '<div class="stack">' +
-      C.addBar({ addLabel: "添加技能", addAction: "local-add", groupAction: "local-add-group" }) +
-      groupedHtml("skills", store.groups, store.items, skillsCard, "点上方「添加技能」登记第一个") +
+      C.addBar({ addLabel: "添加技能", addAction: "local-add", groupAction: "add-group" }) +
+      groupedHtml("skills", state.groups, store.items, skillsCard, "点上方「添加技能」登记第一个") +
       C.section("待审核", "", C.emptyState("没有待审核的技能", "新提交的技能会先出现在这里")) +
       "</div>"
     );
@@ -417,8 +405,8 @@
     var store = state.local.api;
     return (
       '<div class="stack">' +
-      C.addBar({ addLabel: "添加 API", addAction: "local-add", groupAction: "local-add-group" }) +
-      groupedHtml("api", store.groups, store.items, apiCard, "点上方「添加 API」登记第一个") +
+      C.addBar({ addLabel: "添加 API", addAction: "local-add", groupAction: "add-group" }) +
+      groupedHtml("api", state.groups, store.items, apiCard, "点上方「添加 API」登记第一个") +
       "</div>"
     );
   }
@@ -930,7 +918,10 @@
   }
 
   function deleteGroupFlow(group) {
-    var anchor = document.querySelector('[data-confirm-group="mcp:' + group.id + '"]');
+    var slotScope = activeTab === "skills" || activeTab === "api" ? activeTab : "mcp";
+    var anchor =
+      document.querySelector('[data-confirm-group="' + slotScope + ':' + group.id + '"]') ||
+      document.querySelector('[data-confirm-group="mcp:' + group.id + '"]');
     C.askConfirm({
       anchor: anchor,
       title: "删除分组",
@@ -958,6 +949,16 @@
             var copy = Object.assign({}, server);
             copy.group_id = null;
             return copy;
+          });
+          ["skills", "api"].forEach(function (scope) {
+            var store = state.local[scope];
+            if (!store) return;
+            store.items = store.items.map(function (entry) {
+              if (entry.group_id !== group.id) return entry;
+              var copy = Object.assign({}, entry);
+              copy.group_id = null;
+              return copy;
+            });
           });
           if (state.draft && state.draft.group_id === group.id) state.draft.group_id = "";
           state.notice = "已删除分组";
@@ -1019,7 +1020,7 @@
     });
   }
 
-  // ---- Skills / API 页签（本地状态，与 MCP 页签同一套骨架） ----
+  // ---- Skills / API 页签（条目走 /api/extras/*，分组共用后端池） ----
 
   function localStore(scope) {
     return state.local[scope] || null;
@@ -1057,6 +1058,32 @@
       .join("");
   }
 
+  function mapSkillRow(row) {
+    return {
+      id: row.id,
+      name: row.name,
+      version: row.version || "",
+      source: row.source || "",
+      used: row.used_by || "",
+      status: row.status || "enabled",
+      group_id: row.group_id || null,
+      description: row.description || "",
+      content: row.content || "",
+    };
+  }
+
+  function mapApiRow(row) {
+    return {
+      id: row.id,
+      name: row.name,
+      base: row.base_url || "",
+      auth: row.auth_note || "",
+      note: row.note || "",
+      status: row.status || "active",
+      group_id: row.group_id || null,
+    };
+  }
+
   function openLocalDialog(scope, item) {
     var store = localStore(scope);
     if (!store) return;
@@ -1067,18 +1094,22 @@
         field("名称", input("name", editing ? item.name : "", 'maxlength="64" autocomplete="off"')) +
         field("版本", input("version", editing ? item.version : "", 'maxlength="32" placeholder="1.0.0"')) +
         field("来源", input("source", editing ? item.source : "", 'maxlength="64" placeholder="官方注册表"')) +
-        field("分组", C.groupSelect("group_id", store.groups, editing ? item.group_id || "" : ""));
+        field("说明", area("description", editing ? item.description || "" : "", 2)) +
+        field("正文", area("content", editing ? item.content || "" : "", 6), "技能正文，Agent 用 skills_get 取到的就是这一份") +
+        field("分组", C.groupSelect("group_id", state.groups, editing ? item.group_id || "" : ""));
     } else {
       bodyHtml =
         field("名称", input("name", editing ? item.name : "", 'maxlength="64" autocomplete="off"')) +
         field("端点", input("base", editing ? item.base : "", 'spellcheck="false" autocomplete="off" placeholder="https://"')) +
-        field("鉴权方式", '<select data-field="auth" name="auth">' + authOptions(editing ? item.auth : "Bearer API Key") + "</select>") +
-        field("分组", C.groupSelect("group_id", store.groups, editing ? item.group_id || "" : ""));
+        field("鉴权方式", '<select data-field="auth" name="auth">' + authOptions(editing ? item.auth : "Bearer <redacted> Key") + "</select>") +
+        field("说明", area("note", editing ? item.note || "" : "", 2)) +
+        field("分组", C.groupSelect("group_id", state.groups, editing ? item.group_id || "" : ""));
     }
     C.openFormDialog({
       title: (editing ? "编辑" : "添加") + (scope === "skills" ? "技能" : " API"),
       bodyHtml: bodyHtml,
       submitLabel: editing ? "保存" : scope === "skills" ? "添加技能" : "添加 API",
+      wide: scope === "skills",
       onSubmit: function (ctrl) {
         var read = function (name) {
           var el = ctrl.form.querySelector('[data-field="' + name + '"]');
@@ -1090,53 +1121,52 @@
           return;
         }
         var groupId = read("group_id") || null;
+        var payload;
         if (scope === "skills") {
-          var version = read("version");
-          var source = read("source");
-          if (editing) {
-            item.name = name;
-            item.version = version;
-            item.source = source;
-            item.group_id = groupId;
-          } else {
-            store.items.unshift({
-              id: "skill_local_" + ++state.local.seq,
-              name: name,
-              version: version || "0.1.0",
-              source: source || "工作区",
-              used: "暂无",
-              status: "enabled",
-              group_id: groupId,
-            });
-          }
+          payload = {
+            name: name,
+            version: read("version") || (editing ? item.version : "0.1.0"),
+            source: read("source") || (editing ? item.source : "工作区"),
+            description: read("description"),
+            content: read("content"),
+            group_id: groupId,
+          };
         } else {
           var base = read("base");
           if (!base) {
             ctrl.setError("请填写端点");
             return;
           }
-          var auth = read("auth");
-          if (editing) {
-            item.name = name;
-            item.base = base;
-            item.auth = auth;
-            item.group_id = groupId;
-          } else {
-            store.items.unshift({
-              id: "api_local_" + ++state.local.seq,
-              name: name,
-              base: base,
-              auth: auth,
-              note: "普通 API，没有 MCP",
-              status: "active",
-              group_id: groupId,
-            });
-          }
+          payload = { name: name, base_url: base, auth_note: read("auth"), note: read("note"), group_id: groupId };
         }
-        state.notice = editing ? "已保存" : "已添加";
-        state.noticeKind = "ok";
-        ctrl.close();
-        render();
+        var collection = scope === "skills" ? "/api/extras/skills" : "/api/extras/apis";
+        ctrl.setBusy(true);
+        api(editing ? "PATCH" : "POST", editing ? collection + "/" + encodeURIComponent(item.id) : collection, payload)
+          .then(function (result) {
+            if (authRedirect(result.status)) return;
+            var saved = result.data && (scope === "skills" ? result.data.skill : result.data.api);
+            if (!result.data || result.data.ok !== true || !saved) {
+              ctrl.setBusy(false);
+              ctrl.setError((result.data && result.data.error) || "没有保存成功，请重试");
+              return;
+            }
+            var mapped = scope === "skills" ? mapSkillRow(saved) : mapApiRow(saved);
+            if (editing) {
+              store.items = store.items.map(function (entry) {
+                return entry.id === mapped.id ? mapped : entry;
+              });
+            } else {
+              store.items.unshift(mapped);
+            }
+            state.notice = editing ? "已保存" : "已添加";
+            state.noticeKind = "ok";
+            ctrl.close();
+            render();
+          })
+          .catch(function () {
+            ctrl.setBusy(false);
+            ctrl.setError("网络异常，请重试");
+          });
       },
     });
   }
@@ -1229,17 +1259,39 @@
       if (!yes) return;
       var store = localStore(scope);
       if (!store) return;
-      store.items = store.items.filter(function (entry) {
-        return entry.id !== item.id;
-      });
-      state.notice = "已删除";
-      state.noticeKind = "ok";
-      render();
+      var collection = scope === "skills" ? "/api/extras/skills" : "/api/extras/apis";
+      api("DELETE", collection + "/" + encodeURIComponent(item.id))
+        .then(function (result) {
+          if (authRedirect(result.status)) return;
+          if (!result.data || result.data.ok !== true) {
+            state.notice = (result.data && result.data.error) || "没有删除，请重试";
+            state.noticeKind = "danger";
+            render();
+            return;
+          }
+          store.items = store.items.filter(function (entry) {
+            return entry.id !== item.id;
+          });
+          state.notice = "已删除";
+          state.noticeKind = "ok";
+          render();
+        })
+        .catch(function () {
+          state.notice = "网络异常，请重试";
+          state.noticeKind = "danger";
+          render();
+        });
     });
   }
 
   function load() {
-    Promise.all([api("GET", "/api/mcp-servers"), api("GET", "/api/mcp-audit"), api("GET", "/api/groups?scope=mcp")])
+    Promise.all([
+      api("GET", "/api/mcp-servers"),
+      api("GET", "/api/mcp-audit"),
+      api("GET", "/api/groups?scope=mcp"),
+      api("GET", "/api/extras/skills"),
+      api("GET", "/api/extras/apis"),
+    ])
       .then(function (results) {
         if (authRedirect(results[0].status) || authRedirect(results[1].status)) return;
         state.loading = false;
@@ -1251,6 +1303,12 @@
         state.servers = results[0].data.servers || [];
         state.audit = results[1].data && results[1].data.ok === true ? results[1].data.audit || [] : [];
         state.groups = results[2].data && results[2].data.ok === true ? results[2].data.groups || [] : [];
+        if (results[3].data && results[3].data.ok === true) {
+          state.local.skills.items = (results[3].data.skills || []).map(mapSkillRow);
+        }
+        if (results[4].data && results[4].data.ok === true) {
+          state.local.api.items = (results[4].data.apis || []).map(mapApiRow);
+        }
         var hash = "";
         try {
           hash = decodeURIComponent(location.hash.slice(1));

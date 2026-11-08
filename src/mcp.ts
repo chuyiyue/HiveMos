@@ -58,6 +58,8 @@ import {
   reportMachine,
 } from "./machines";
 
+import { ExtraError, getSkillForAgent, listSkills, skillSummary } from "./extras";
+
 const MAX_BODY_BYTES = 64 * 1024;
 
 const TOOLS = [
@@ -379,6 +381,23 @@ const TOOLS = [
       additionalProperties: false,
     },
   },
+  {
+    name: "skills_list",
+    description: "列出 Skills 页签登记的技能摘要（名称、说明、来源、版本），不含正文",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "skills_get",
+    description: "按 skill_id 或 name 取一个技能的完整内容（含正文）。成功时记一条获取审计",
+    inputSchema: {
+      type: "object",
+      properties: {
+        skill_id: { type: "string", description: "技能 id" },
+        name: { type: "string", description: "技能名称" },
+      },
+      additionalProperties: false,
+    },
+  },
 ];
 
 // Every panel tool belongs to a permission domain (see PERMISSION_DOMAINS
@@ -410,6 +429,8 @@ const TOOL_DOMAINS: Record<string, string> = {
   machines_list: "machines",
   machines_get: "machines",
   machines_report: "machines",
+  skills_list: "registry",
+  skills_get: "registry",
 };
 
 function domainOfTool(name: string): string | null {
@@ -533,6 +554,14 @@ async function callTool(request: Request, env: Env, id: unknown, params: unknown
       return await callMachinesTool(env, id, name, record as Record<string, unknown>, auth.agentId);
     } catch (error) {
       if (error instanceof MachineError) return toolResult(id, error.message, true);
+      throw error;
+    }
+  }
+  if (name.startsWith("skills_")) {
+    try {
+      return await callSkillsTool(env, id, name, record as Record<string, unknown>, auth.agentId);
+    } catch (error) {
+      if (error instanceof ExtraError) return toolResult(id, error.message, true);
       throw error;
     }
   }
@@ -742,6 +771,23 @@ async function callMachinesTool(env: Env, id: unknown, name: string, args: Recor
   if (name === "machines_report") {
     const updated = await reportMachine(env.DB, args, agentId, now);
     return toolResult(id, { machine: machinePublic(updated) });
+  }
+  return toolResult(id, "未知工具", true);
+}
+
+async function callSkillsTool(env: Env, id: unknown, name: string, args: Record<string, unknown>, agentId: string): Promise<Response> {
+  const now = Date.now();
+  if (name === "skills_list") {
+    const rows = await listSkills(env.DB, null);
+    return toolResult(id, { skills: rows.map(skillSummary) });
+  }
+  if (name === "skills_get") {
+    const skillId = argString(args, "skill_id") ?? "";
+    const skillName = argString(args, "name") ?? "";
+    if (!skillId.trim() && !skillName.trim()) return toolResult(id, "请提供 skill_id 或 name", true);
+    const row = await getSkillForAgent(env.DB, skillId.trim(), skillName.trim(), agentId, now);
+    if (!row) return toolResult(id, "技能不存在", true);
+    return toolResult(id, { skill: row });
   }
   return toolResult(id, "未知工具", true);
 }

@@ -2,7 +2,8 @@
    GET /api/agents + GET /api/groups?scope=agent，按分组分区展示；添加设备/
    添加分组走弹窗，卡片高级操作（改名、移动分组、高级设置、轮换令牌、停用）
    走中央菜单，高级设置里是 per-Agent 的系统功能权限开关（PATCH 保存）。
-   应用：接入 MCP 的应用条目，本地状态占位，与 Agents 页签共用同一套
+   应用：接入 MCP 的应用条目，走 /api/extras/apps；分组没有独立的后端
+   scope，仍是页内状态（group_id 不落库），其余与 Agents 页签共用同一套
    操作区、分组分区、卡片与中央菜单。令牌明文只在生成/轮换那一次响应里出现 */
 (function () {
   var C = window.HiveCommon;
@@ -27,15 +28,12 @@
     noticeKind: "danger",
     busy: false,
     activeTab: location.hash === "#apps" ? "apps" : "agents",
-    // 应用页签的本地状态：结构与 Agents 页签一致（分组 + 条目），添加与
-    // 分组在页内即时生效，接后端时把这层换成接口即可
+    // 应用页签：条目走 /api/extras/apps（loadAll 时拉取）；分组没有后端
+    // scope 可用，仍是页内状态，条目的 group_id 只在页内生效、不落库
     apps: {
       seq: 0,
       groups: [],
-      items: [
-        { id: "app_claude", name: "Claude 桌面端", type: "桌面客户端", note: "通过 MCP 接入注册表", last_used: "2026-11-08 03:40", group_id: null },
-        { id: "app_cursor", name: "Cursor", type: "桌面客户端", note: "", last_used: "2026-11-07 22:15", group_id: null },
-      ],
+      items: [],
     },
   };
 
@@ -241,7 +239,7 @@
   }
 
   function loadAll() {
-    return Promise.all([api("GET", "/api/agents"), api("GET", "/api/groups?scope=agent")])
+    return Promise.all([api("GET", "/api/agents"), api("GET", "/api/groups?scope=agent"), api("GET", "/api/extras/apps")])
       .then(function (results) {
         if (authRedirect(results[0].status) || authRedirect(results[1].status)) return;
         state.loading = false;
@@ -252,6 +250,9 @@
         }
         state.agents = results[0].data.agents || [];
         state.groups = results[1].data && results[1].data.ok === true ? results[1].data.groups || [] : [];
+        if (results[2].data && results[2].data.ok === true) {
+          state.apps.items = (results[2].data.apps || []).map(mapApp);
+        }
         state.loadError = "";
         render();
       })
@@ -708,7 +709,18 @@
     });
   }
 
-  // ---- 应用页签（本地状态，与 Agents 页签同一套骨架） ----
+  // ---- 应用页签（条目走后端，分组页内，与 Agents 页签同一套骨架） ----
+
+  function mapApp(row) {
+    return {
+      id: row.id,
+      name: row.name,
+      type: row.type || "",
+      note: row.note || "",
+      last_used: row.last_used_at ? C.formatMinute(row.last_used_at) : "还没有使用",
+      group_id: row.group_id || null,
+    };
+  }
 
   function findApp(id) {
     return state.apps.items.find(function (item) {
@@ -808,25 +820,37 @@
         var type = read("type") || "未注明类型";
         var note = read("note");
         var groupId = read("group_id") || null;
-        if (editing) {
-          item.name = name;
-          item.type = type;
-          item.note = note;
-          item.group_id = groupId;
-        } else {
-          state.apps.items.unshift({
-            id: "app_local_" + ++state.apps.seq,
-            name: name,
-            type: type,
-            note: note,
-            last_used: "还没有使用",
-            group_id: groupId,
+        ctrl.setBusy(true);
+        api(editing ? "PATCH" : "POST", editing ? "/api/extras/apps/" + encodeURIComponent(item.id) : "/api/extras/apps", {
+          name: name,
+          type: type,
+          note: note,
+        })
+          .then(function (result) {
+            if (authRedirect(result.status)) return;
+            if (!result.data || result.data.ok !== true || !result.data.app) {
+              ctrl.setBusy(false);
+              ctrl.setError((result.data && result.data.error) || "没有保存成功，请重试");
+              return;
+            }
+            var saved = mapApp(result.data.app);
+            saved.group_id = groupId;
+            if (editing) {
+              state.apps.items = state.apps.items.map(function (entry) {
+                return entry.id === saved.id ? saved : entry;
+              });
+            } else {
+              state.apps.items.unshift(saved);
+            }
+            state.notice = editing ? "已保存" : "已添加应用";
+            state.noticeKind = "ok";
+            ctrl.close();
+            render();
+          })
+          .catch(function () {
+            ctrl.setBusy(false);
+            ctrl.setError("网络异常，请重试");
           });
-        }
-        state.notice = editing ? "已保存" : "已添加应用";
-        state.noticeKind = "ok";
-        ctrl.close();
-        render();
       },
     });
   }
@@ -918,12 +942,27 @@
       danger: true,
     }).then(function (yes) {
       if (!yes) return;
-      state.apps.items = state.apps.items.filter(function (entry) {
-        return entry.id !== item.id;
-      });
-      state.notice = "已删除";
-      state.noticeKind = "ok";
-      render();
+      api("DELETE", "/api/extras/apps/" + encodeURIComponent(item.id))
+        .then(function (result) {
+          if (authRedirect(result.status)) return;
+          if (!result.data || result.data.ok !== true) {
+            state.notice = (result.data && result.data.error) || "没有删除，请重试";
+            state.noticeKind = "danger";
+            render();
+            return;
+          }
+          state.apps.items = state.apps.items.filter(function (entry) {
+            return entry.id !== item.id;
+          });
+          state.notice = "已删除";
+          state.noticeKind = "ok";
+          render();
+        })
+        .catch(function () {
+          state.notice = "网络异常，请重试";
+          state.noticeKind = "danger";
+          render();
+        });
     });
   }
 
