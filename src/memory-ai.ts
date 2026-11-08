@@ -262,7 +262,8 @@ export async function ingestMemories(
   if (typeof input.text !== "string" || !input.text.trim()) throw new MemError("请填写要保存的内容");
   const text = input.text.trim();
   if (text.length > INGEST_TEXT_MAX) throw new MemError("内容过长，请分段保存");
-  const base: Record<string, unknown> = { scope: input.scope, group_id: input.group_id };
+  // 录入不推导置顶或权重：显式不置顶、权重 0，不从内容重要程度换算。
+  const base: Record<string, unknown> = { scope: input.scope, group_id: input.group_id, weight: 0, pinned: false };
   const userTags: string[] = Array.isArray(input.tags)
     ? Array.from(new Set(input.tags.filter((x): x is string => typeof x === "string").map((x) => x.trim()).filter(Boolean)))
     : [];
