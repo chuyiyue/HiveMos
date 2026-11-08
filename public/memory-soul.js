@@ -269,18 +269,19 @@
     return n;
   }
 
-  // 置顶和普通记忆各一张卡，上下排列，置顶在上。组内按权重降序，再按更新时间降序。
+  // 置顶和普通记忆各一张卡，上下排列，置顶在上；标签云在记忆卡内顶部。组内按权重降序，再按更新时间降序。
   // 条数只数这张卡里列出的记忆，标签筛选同时收窄两边，不再并回同一张卡。
   // 没有可列的置顶时不渲染置顶卡。加载、失败、全空、筛选无命中仍只留记忆卡和原来的空态。
   function memorySectionsHtml() {
-    if (memoryError) return C.section("记忆", countHint(regularStock()), C.emptyState("记忆加载失败", memoryError));
+    var toolbar = memoryToolbar();
+    if (memoryError) return C.section("记忆", countHint(regularStock()), toolbar + C.emptyState("记忆加载失败", memoryError));
     if (!memoryLoaded) return C.section("记忆", countHint(regularStock()), C.emptyState("正在加载记忆", ""));
     if (!MEMORIES.length) return C.section("记忆", countHint(0), C.emptyState("还没有记忆", "点上方按钮添加第一条"));
     var rows = MEMORIES.filter(function (item) {
       if (memTagFilter && (item.tags || []).indexOf(memTagFilter) === -1) return false;
       return true;
     });
-    if (!rows.length) return C.section("记忆", countHint(0), C.emptyState("没有符合筛选的记忆", "换个标签看看"));
+    if (!rows.length) return C.section("记忆", countHint(0), toolbar + C.emptyState("没有符合筛选的记忆", "换个标签看看"));
     var pinned = [];
     var rest = [];
     rows.forEach(function (item) {
@@ -295,14 +296,13 @@
     if (rest.length) restBody = memoryCardsHtml(rest);
     else if (memTagFilter) restBody = C.emptyState("没有符合筛选的记忆", "换个标签看看");
     else restBody = C.emptyState("没有未置顶的记忆", "取消置顶后会列在这里");
-    html += C.section("记忆", countHint(rest.length), restBody);
+    html += C.section("记忆", countHint(rest.length), toolbar + restBody);
     return html;
   }
 
   function render() {
     var memoryHtml =
       "<div class=\"stack\">" +
-      (activeTab === "memory" ? memoryToolbar() : "") +
       memorySectionsHtml() +
       C.section("冲突", "", C.emptyState("没有待合并的记忆", "同一作用域发生冲突时会列在这里")) +
       "<div id=\"memory-confirm\"></div>" +

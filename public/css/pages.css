@@ -396,6 +396,7 @@ img, svg, video, canvas { max-width: 100%; }
   .page-head { flex-direction: column; align-items: stretch; gap: 0; }
   .page-head-actions { margin-left: 0; margin-top: 12px; flex-wrap: nowrap; }
   .page-head-actions > button { flex: 1 1 0; min-width: 0; padding-left: 10px; padding-right: 10px; }
+  .page-head-actions > button.secondary, .page-head-actions > button.add-group-button { flex: 1 1 0; }
   .page-head .add-bar { width: 100%; }
   .page-head .add-bar .add-button { flex: 1 1 auto; width: auto; }
   .page-head .add-button,

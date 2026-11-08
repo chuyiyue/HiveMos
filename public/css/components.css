@@ -961,3 +961,9 @@ article.record .card-actions { margin-top: auto; }
   .record.agent-card .card-actions { display: grid; }
   .record.agent-card .card-actions > button { width: 100%; }
 }
+
+@media (max-width: 639px) {
+  .add-bar > button.add-button, .add-bar > button.add-group-button, .add-bar > button.secondary { flex: 1 1 0; min-width: 0; }
+}
+
+.section .tag-row { margin-bottom: 12px; }
