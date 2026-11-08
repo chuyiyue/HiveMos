@@ -830,9 +830,17 @@ function readString(value: unknown): string | null {
 
 function bearerToken(request: Request): string | null {
   const header = request.headers.get("authorization");
-  if (!header) return null;
-  const match = /^Bearer\s+(\S+)\s*$/i.exec(header);
-  return match?.[1] ?? null;
+  if (header) {
+    const match = /^Bearer\s+(\S+)\s*$/i.exec(header);
+    if (match?.[1]) return match[1];
+  }
+  // The panel hands out endpoint URLs with the token in the query string
+  // (.../mcp?token=...), so a bare URL is enough to configure a client.
+  // The Authorization header stays the primary channel and wins whenever
+  // it carries a usable Bearer token; the query value goes through the
+  // exact same authenticateAgent check as a header token.
+  const fromQuery = new URL(request.url).searchParams.get("token");
+  return fromQuery ? fromQuery : null;
 }
 
 function idOf(record: { id?: unknown }): unknown {
