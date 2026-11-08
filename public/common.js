@@ -15,6 +15,16 @@
     disabled: ["idle", "已停用"],
     synced: ["ok", "已同步"],
     stored: ["ok", "已保管"],
+    stopped: ["danger", "已停止"],
+    error: ["danger", "运行异常"],
+    creating: ["warn", "创建中"],
+    starting: ["warn", "启动中"],
+    stopping: ["warn", "停止中"],
+    suspending: ["warn", "暂停中"],
+    suspended: ["idle", "已暂停"],
+    resuming: ["warn", "恢复中"],
+    deleting: ["warn", "删除中"],
+    deleted: ["idle", "已删除"],
   };
 
   function escapeHtml(value) {
