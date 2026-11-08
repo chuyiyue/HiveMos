@@ -476,6 +476,8 @@
         (on ? " is-selected" : "") +
         '" role="option" aria-selected="' +
         (on ? "true" : "false") +
+        '" title="' +
+        escapeHtml(entry[0] + " · " + entry[2]) +
         '" data-perm-item="' +
         escapeHtml(entry[0]) +
         '"><span class="perm-item-text"><strong>' +
@@ -735,11 +737,14 @@
           return item[0] === key;
         });
         var hay = entry ? (entry[1] + " " + entry[0] + " " + entry[2]).toLowerCase() : key;
-        var hit = !needle || hay.indexOf(needle) !== -1;
+        var hit = !permDesired.has(key) && (!needle || hay.indexOf(needle) !== -1);
         btn.hidden = !hit;
         if (hit) shown += 1;
       });
-      if (els.empty) els.empty.hidden = shown > 0;
+      if (els.empty) {
+        els.empty.hidden = shown > 0;
+        if (shown === 0) els.empty.textContent = permDesired.size >= PERM_DOMAINS.length ? "已拥有全部权限" : "没有匹配的权限";
+      }
       var visible = visiblePermItems();
       if (
         permActiveKey &&
@@ -779,6 +784,8 @@
       interacted = true;
       if (permDesired.has(domain)) permDesired.delete(domain);
       else permDesired.add(domain);
+      var elsNow = permEls();
+      filterPermMenu(elsNow.search ? elsNow.search.value : "");
       syncPermUI();
     }
 
