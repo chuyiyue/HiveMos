@@ -1043,7 +1043,7 @@ interface CfBody {
 async function cfGetJson(token: string, url: string): Promise<CfBody> {
   let response: Response;
   try {
-    response = await fetch(url, { headers: { authorization: "Bearer " + token, accept: "application/json" } });
+    response = await fetch(url, { headers: { authorization: "Bearer " + token, accept: "application/json" }, signal: AbortSignal.timeout(8000) });
   } catch {
     throw new MachineError(502, "连接 Cloudflare 失败，请稍后重试");
   }
@@ -1096,7 +1096,7 @@ interface VercelBody {
 async function vercelGetJson(token: string, url: string): Promise<VercelBody> {
   let response: Response;
   try {
-    response = await fetch(url, { headers: { authorization: "Bearer " + token, accept: "application/json" } });
+    response = await fetch(url, { headers: { authorization: "Bearer " + token, accept: "application/json" }, signal: AbortSignal.timeout(8000) });
   } catch {
     throw new MachineError(502, "连接 Vercel 失败，请稍后重试");
   }
@@ -1168,6 +1168,7 @@ export async function getWorkerAccountStats(
     const end = new Date(now);
     const start = new Date(now - 24 * 3600 * 1000);
     const response = await fetch("https://api.cloudflare.com/client/v4/graphql", {
+      signal: AbortSignal.timeout(8000),
       method: "POST",
       headers: { authorization: "Bearer " + token, "content-type": "application/json" },
       body: JSON.stringify({
