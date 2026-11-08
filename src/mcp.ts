@@ -21,6 +21,14 @@ import {
   updateEvent,
 } from "./calendar";
 
+import {
+  getMachineForAgent,
+  listMachines,
+  MachineError,
+  machinePublic,
+  reportMachine,
+} from "./machines";
+
 const MAX_BODY_BYTES = 64 * 1024;
 
 const TOOLS = [
@@ -161,6 +169,44 @@ const TOOLS = [
   },
 ];
 
+  {
+    name: "machines_list",
+    description: "列出云主机板块的机器（服务器、云主机、Workers），可按 kind 只看一类",
+    inputSchema: {
+      type: "object",
+      properties: {
+        kind: { type: "string", description: "server、cloud 或 worker，缺省为全部" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "machines_get",
+    description: "按 machine_id 或 name 取一台机器的完整信息。成功时记一条获取审计",
+    inputSchema: {
+      type: "object",
+      properties: {
+        machine_id: { type: "string", description: "机器 id" },
+        name: { type: "string", description: "机器名称" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "machines_report",
+    description: "上报自己这台机器的状态与心跳：按 machine_id 或 name 定位，心跳时间记为当下，status 不传则保持不变",
+    inputSchema: {
+      type: "object",
+      properties: {
+        machine_id: { type: "string", description: "机器 id" },
+        name: { type: "string", description: "机器名称" },
+        status: { type: "string", description: "当前状态，如 running、paused、offline" },
+      },
+      additionalProperties: false,
+    },
+  },
+];
+
 // Every panel tool belongs to a permission domain (see PERMISSION_DOMAINS
 // in registry.ts). All current tools are registry-domain; future boards add
 // their own entries here.
@@ -175,6 +221,9 @@ const TOOL_DOMAINS: Record<string, string> = {
   calendar_create_event: "calendar",
   calendar_update_event: "calendar",
   calendar_delete_event: "calendar",
+  machines_list: "machines",
+  machines_get: "machines",
+  machines_report: "machines",
 };
 
 function domainOfTool(name: string): string | null {
@@ -277,6 +326,14 @@ async function callTool(request: Request, env: Env, id: unknown, params: unknown
     if (!fetched.ok) return toolResult(id, fetched.error, true);
     return toolResult(id, fetched.config);
   }
+  if (name.startsWith("machines_")) {
+    try {
+      return await callMachinesTool(env, id, name, record as Record<string, unknown>, auth.agentId);
+    } catch (error) {
+      if (error instanceof MachineError) return toolResult(id, error.message, true);
+      throw error;
+    }
+  }
   if (name.startsWith("calendar_")) {
     try {
       return await callCalendarTool(env, id, name, record as Record<string, unknown>, auth.agentId);
@@ -340,6 +397,34 @@ async function callCalendarTool(env: Env, id: unknown, name: string, args: Recor
     if (!eventId) return toolResult(id, "请提供 event_id", true);
     const result = await deleteEvent(env.DB, eventId, args, agentId, now);
     return toolResult(id, result);
+  }
+  return toolResult(id, "未知工具", true);
+}
+
+
+async function callMachinesTool(env: Env, id: unknown, name: string, args: Record<string, unknown>, agentId: string): Promise<Response> {
+  const now = Date.now();
+  if (name === "machines_list") {
+    const kind = argString(args, "kind");
+    if (kind !== undefined && kind !== "") {
+      if (kind !== "server" && kind !== "cloud" && kind !== "worker") return toolResult(id, "类型不正确", true);
+      const rows = await listMachines(env.DB, kind);
+      return toolResult(id, { machines: rows.map(machinePublic) });
+    }
+    const rows = await listMachines(env.DB, null);
+    return toolResult(id, { machines: rows.map(machinePublic) });
+  }
+  if (name === "machines_get") {
+    const machineId = argString(args, "machine_id") ?? "";
+    const machineName = argString(args, "name") ?? "";
+    if (!machineId.trim() && !machineName.trim()) return toolResult(id, "请提供 machine_id 或 name", true);
+    const row = await getMachineForAgent(env.DB, machineId.trim(), machineName.trim(), agentId, now);
+    if (!row) return toolResult(id, "机器不存在", true);
+    return toolResult(id, { machine: machinePublic(row) });
+  }
+  if (name === "machines_report") {
+    const updated = await reportMachine(env.DB, args, agentId, now);
+    return toolResult(id, { machine: machinePublic(updated) });
   }
   return toolResult(id, "未知工具", true);
 }
