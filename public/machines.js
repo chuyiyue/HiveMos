@@ -116,6 +116,7 @@
   }
 
   function openMachineManage(kind, item) {
+    if (kind === "worker") { openWorkerPanel(item, "account"); return; }
     var id = C.escapeHtml(item.id);
     function row(label, valueHtml) {
       return "<div><dt>" + label + "</dt><dd>" + valueHtml + "</dd></div>";
@@ -449,11 +450,16 @@
 
   function cardFor(uiKind, item) {
     if (uiKind === "worker") {
-      var facts = [["平台", item.platform === "vercel" ? "Vercel" : "Cloudflare"], ["版本", C.escapeHtml(item.version || "未记录")], ["更新时间", C.escapeHtml(C.formatMinute(item.updated_at) || "—")]];
+      var facts = [["平台", item.platform === "vercel" ? "Vercel" : "Cloudflare"]];
       if (item.platform === "vercel") {
         if (item.team_id) facts.push(["Team ID", C.escapeHtml(item.team_id)]);
-      } else if (item.cf_account_id) facts.push(["Cloudflare 账号", C.escapeHtml(item.cf_account_id)]);
-      if (item.api_token_tail) facts.push(["API 令牌", workerTokenHtml(item, activeTab === "workers")]);
+      } else {
+        facts.push(["Workers 总量", workerStatSpan(item, "workers")]);
+        facts.push(["Workers 用量", workerStatSpan(item, "requests")]);
+        facts.push(["D1 数据库", workerStatSpan(item, "d1")]);
+        facts.push(["域名数量", workerStatSpan(item, "zones")]);
+      }
+      facts.push(["更新时间", C.escapeHtml(C.formatMinute(item.updated_at) || "—")]);
       return card("worker", item, facts);
     }
     if (uiKind === "server") {
@@ -585,6 +591,7 @@
         render();
         refreshConnPanel();
         scheduleProbeRefresh();
+        fillWorkerStats();
       })
       .catch(function () {
         state.loaded = true;
@@ -2043,16 +2050,129 @@
   }
 
   // 查看 Workers：服务端用存好的令牌实时拉取，失败把 Cloudflare 的错误原样展示
-  function openWorkersDialog(item) {
+  // ---- Workers 账号面板：账号信息 + 资产页签（域名 / Workers / D1 / R2 / KV） ----
+  var workerStatsCache = {};
+  function fmtSize(bytes) {
+    var b = Number(bytes) || 0;
+    if (b >= 1024 * 1024) return (b / 1048576).toFixed(1).replace(/\.0$/, "") + " MB";
+    return (b > 0 ? Math.max(1, Math.round(b / 1024)) : 0) + " KB";
+  }
+  function workerStatSpan(item, metric) {
+    return "<span data-wstat=\"" + C.escapeHtml(item.id) + ":" + metric + "\">…</span>";
+  }
+  function workerStatText(stats, metric) {
+    if (!stats) return "—";
+    if (metric === "workers") return stats.workers_total == null ? "—" : stats.workers_total + " 个";
+    if (metric === "requests") return stats.requests_24h == null ? "—" : "近 24 小时 " + stats.requests_24h + " 次";
+    if (metric === "d1") return stats.d1_count == null ? "—" : stats.d1_count + " 个 · " + fmtSize(stats.d1_bytes);
+    if (metric === "zones") return stats.zones_total == null ? "—" : stats.zones_total + " 个";
+    return "—";
+  }
+  function paintWorkerStats(id) {
+    var cached = workerStatsCache[id];
+    if (cached === undefined || cached === "loading") return;
+    document.querySelectorAll("[data-wstat]").forEach(function (el) {
+      var parts = (el.getAttribute("data-wstat") || "").split(":");
+      if (parts[0] === id) el.textContent = workerStatText(cached, parts[1]);
+    });
+  }
+  function ensureWorkerStats(item) {
+    if (workerStatsCache[item.id] !== undefined) { paintWorkerStats(item.id); return; }
+    workerStatsCache[item.id] = "loading";
+    api("GET", "/api/machines/" + encodeURIComponent(item.id) + "/worker-stats")
+      .then(function (res) {
+        workerStatsCache[item.id] = res.data && res.data.ok ? res.data.stats : null;
+        paintWorkerStats(item.id);
+      })
+      .catch(function () { workerStatsCache[item.id] = null; paintWorkerStats(item.id); });
+  }
+  function fillWorkerStats() {
+    if (activeTab !== "workers") return;
+    state.items.forEach(function (item) {
+      if (item.kind === "worker" && (item.platform || "cloudflare") === "cloudflare") ensureWorkerStats(item);
+    });
+  }
+  function assetRecord(kind, entry) {
+    if (kind === "zones") return C.record({ id: entry.name, title: entry.name, facts: [["状态", C.escapeHtml(entry.status || "—")], ["套餐", C.escapeHtml(entry.plan || "—")]] });
+    if (kind === "d1") return C.record({ id: entry.uuid || entry.name, title: entry.name, facts: [["大小", fmtSize(entry.file_size)], ["创建时间", C.escapeHtml(entry.created_at ? String(entry.created_at).slice(0, 10) : "—")]] });
+    if (kind === "r2") return C.record({ id: entry.name, title: entry.name, facts: [["创建时间", C.escapeHtml(entry.created_at ? String(entry.created_at).slice(0, 10) : "—")], ["区域", C.escapeHtml(entry.location || "—")]] });
+    return C.record({ id: entry.id, title: entry.title || entry.id, facts: [["ID", "<span class=\"copy-text\" data-copy=\"" + C.escapeHtml(entry.id) + "\" data-label=\"" + C.escapeHtml(entry.id) + "\" title=\"点击复制\">" + C.escapeHtml(entry.id) + "</span>"]] });
+  }
+  function openWorkerPanel(item, startTab) {
+    var isVercel = (item.platform || "cloudflare") === "vercel";
+    var tabs = isVercel
+      ? [["account", "账号信息"], ["workers", "项目"]]
+      : [["account", "账号信息"], ["zones", "域名"], ["workers", "Workers"], ["d1", "D1"], ["r2", "R2"], ["kv", "KV"]];
+    var bar = tabs.map(function (t) {
+      return "<button type=\"button\" class=\"wp-tab\" data-wtab=\"" + t[0] + "\" aria-selected=\"" + (t[0] === startTab ? "true" : "false") + "\">" + t[1] + "</button>";
+    }).join("");
     var ctrl = C.openFormDialog({
-      title: item.name + (item.platform === "vercel" ? " 名下的项目" : " 名下的 Workers"),
-      size: "md",
-      bodyHtml: C.emptyState("正在读取", "马上就好"),
+      title: item.name,
+      size: "lg",
+      bodyHtml: "<div class=\"wp-tabs\" role=\"tablist\">" + bar + "</div><div class=\"wp-pane\"></div>",
       submitLabel: "关闭",
       onSubmit: function (c) { c.close(); },
     });
+    ctrl.dialog.addEventListener("click", handleClick);
+    var pane = ctrl.dialog.querySelector(".wp-pane");
+    function accountPane() {
+      var id = C.escapeHtml(item.id);
+      var facts =
+        "<div><dt>平台</dt><dd>" + (isVercel ? "Vercel" : "Cloudflare") + "</dd></div>" +
+        (isVercel
+          ? "<div><dt>Team ID</dt><dd>" + C.escapeHtml(item.team_id || "个人账号") + "</dd></div>"
+          : "<div><dt>Cloudflare 账号</dt><dd>" + C.escapeHtml(item.cf_account_id || "未填写") + "</dd></div>") +
+        "<div><dt>API 令牌</dt><dd>" + (item.api_token_tail ? workerTokenHtml(item, true) : "未填写") + "</dd></div>" +
+        "<div><dt>更新时间</dt><dd>" + C.escapeHtml(C.formatMinute(item.updated_at) || "—") + "</dd></div>";
+      var stats = "";
+      if (!isVercel) {
+        stats =
+          "<div class=\"manage-info-card\"><dl class=\"kv\">" +
+          "<div><dt>Workers 总量</dt><dd>" + workerStatSpan(item, "workers") + "</dd></div>" +
+          "<div><dt>Workers 用量</dt><dd>" + workerStatSpan(item, "requests") + "</dd></div>" +
+          "<div><dt>D1 数据库</dt><dd>" + workerStatSpan(item, "d1") + "</dd></div>" +
+          "<div><dt>域名数量</dt><dd>" + workerStatSpan(item, "zones") + "</dd></div>" +
+          "</dl></div>";
+      }
+      pane.innerHTML =
+        "<div class=\"manage-info-card\"><dl class=\"kv\">" + facts + "</dl></div>" + stats +
+        "<div class=\"manage-actions\">" +
+        "<button type=\"button\" class=\"secondary\" data-mact=\"group\" data-kind=\"worker\" data-id=\"" + id + "\">设置分组</button>" +
+        "<button type=\"button\" class=\"secondary\" data-mact=\"edit\" data-kind=\"worker\" data-id=\"" + id + "\">编辑</button>" +
+        "<button type=\"button\" class=\"danger\" data-confirm-delete data-mact=\"delete\" data-kind=\"worker\" data-id=\"" + id + "\">删除</button>" +
+        "</div>";
+      if (!isVercel) ensureWorkerStats(item);
+    }
+    function assetsPane(kind) {
+      pane.innerHTML = C.emptyState("正在读取", "马上就好");
+      api("GET", "/api/machines/" + encodeURIComponent(item.id) + "/worker-assets?kind=" + kind)
+        .then(function (res) {
+          if (!res.data || !res.data.ok) { pane.innerHTML = C.emptyState("读取失败", (res.data && res.data.error) || "请稍后重试"); return; }
+          var items = res.data.items || [];
+          if (!items.length) { pane.innerHTML = C.emptyState("暂无数据", "拉取于 " + (C.formatMinute(res.data.fetched_at) || "刚刚")); return; }
+          var rows = items.map(function (entry) { return assetRecord(kind, entry); }).join("");
+          pane.innerHTML = "<p class=\"subtle\">拉取于 " + C.escapeHtml(C.formatMinute(res.data.fetched_at) || "刚刚") + "，共 " + items.length + " 个</p>" + C.list(rows);
+        })
+        .catch(function () { pane.innerHTML = C.emptyState("读取失败", "网络异常，请重试"); });
+    }
+    function show(key) {
+      ctrl.dialog.querySelectorAll("[data-wtab]").forEach(function (b) {
+        b.setAttribute("aria-selected", b.getAttribute("data-wtab") === key ? "true" : "false");
+      });
+      if (key === "account") { accountPane(); return; }
+      if (key === "workers") { mountWorkersList(pane, item); return; }
+      assetsPane(key);
+    }
+    ctrl.dialog.addEventListener("click", function (event) {
+      var tab = event.target instanceof Element ? event.target.closest("[data-wtab]") : null;
+      if (tab) show(tab.getAttribute("data-wtab"));
+    });
+    show(startTab || "account");
+  }
+
+  function mountWorkersList(container, item) {
     if (!item.api_token_tail) {
-      ctrl.setBody(C.emptyState("还没有保存 API 令牌", item.platform === "vercel" ? "先在编辑里补上 API 令牌，再来查看名下项目" : "先在编辑里补上 Cloudflare 账号 ID 与 API 令牌，再来查看名下 Workers"));
+      container.innerHTML = C.emptyState("还没有保存 API 令牌", item.platform === "vercel" ? "先在编辑里补上 API 令牌，再来查看名下项目" : "先在编辑里补上 Cloudflare 账号 ID 与 API 令牌，再来查看名下 Workers");
       return;
     }
     var listState = { subdomain: "", accountId: item.cf_account_id || "", platform: item.platform || "cloudflare" };
@@ -2072,7 +2192,7 @@
       api("POST", "/api/machines/" + encodeURIComponent(item.id) + "/workers")
         .then(function (result) {
           if (!result.data || !result.data.ok) {
-            ctrl.setBody(C.emptyState("读取失败", (result.data && result.data.error) || "请稍后重试"));
+            container.innerHTML = (C.emptyState("读取失败", (result.data && result.data.error) || "请稍后重试"));
             return;
           }
           if (result.data.platform) listState.platform = result.data.platform;
@@ -2080,7 +2200,7 @@
           if (result.data.subdomain) listState.subdomain = result.data.subdomain;
           var workers = result.data.workers || [];
           if (!workers.length) {
-            ctrl.setBody(C.emptyState(item.platform === "vercel" ? "这个账号下还没有项目" : "这个账号下还没有 Workers", "拉取于 " + (C.formatMinute(result.data.fetched_at) || "刚刚")));
+            container.innerHTML = (C.emptyState(item.platform === "vercel" ? "这个账号下还没有项目" : "这个账号下还没有 Workers", "拉取于 " + (C.formatMinute(result.data.fetched_at) || "刚刚")));
             return;
           }
           var rows = workers.map(function (w) {
@@ -2088,15 +2208,15 @@
             var wfacts = w.meta ? [["框架", C.escapeHtml(w.meta)], ["更新时间", C.escapeHtml(modified)]] : [["更新时间", C.escapeHtml(modified)]];
             return C.record({ id: w.name, title: w.name, facts: wfacts, actions: workerActions(w) });
           }).join("");
-          ctrl.setBody(
+          container.innerHTML = (
             "<p class=\"subtle\">拉取于 " + C.escapeHtml(C.formatMinute(result.data.fetched_at) || "刚刚") + "，共 " + workers.length + " 个</p>" + C.list(rows)
           );
         })
         .catch(function () {
-          ctrl.setBody(C.emptyState("读取失败", "网络异常，请重试"));
+          container.innerHTML = (C.emptyState("读取失败", "网络异常，请重试"));
         });
     }
-    ctrl.dialog.addEventListener("click", function (event) {
+    container.addEventListener("click", function (event) {
       var target = event.target;
       if (!(target instanceof Element)) return;
       var btn = target.closest("[data-wact]");
@@ -2125,6 +2245,7 @@
           });
       }
     });
+    container.innerHTML = C.emptyState("正在读取", "马上就好");
     loadWorkers();
   }
 
@@ -2241,7 +2362,7 @@
         if (act === "probe") probeServer(found, mact);
         else if (act === "reveal") openRevealDialog(found);
         else if (act === "copyconfig") copyServerConfig(found, mact);
-        else if (act === "workers") openWorkersDialog(found);
+        else if (act === "workers") openWorkerPanel(found, "workers");
         else if (act === "group") openGroupMoveDialog(found);
         else if (act === "edit") {
           if (mkind === "server") openServerDialog(found);
