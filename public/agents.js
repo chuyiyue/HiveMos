@@ -104,9 +104,9 @@
         "<button type=\"button\" class=\"secondary\" data-action=\"copy-token\" data-id=\"" +
         C.escapeHtml(agent.id) +
         "\">复制密钥</button>" +
-        "<button type=\"button\" class=\"secondary\" data-action=\"rotate-token\" data-id=\"" +
+        "<button type=\"button\" class=\"secondary\" data-action=\"agent-perms\" data-id=\"" +
         C.escapeHtml(agent.id) +
-        "\">轮换密钥</button>" +
+        "\">设置权限</button>" +
         "<button type=\"button\" class=\"secondary\" data-action=\"manage-agent\" data-id=\"" +
         C.escapeHtml(agent.id) +
         "\" aria-haspopup=\"menu\">管理Agent</button>",
@@ -229,9 +229,8 @@
       else if (action === "copy-token") {
         var agentC = findAgent(id);
         if (agentC) copyToken(agentC, button);
-      } else if (action === "rotate-token") {
-        var agentR = findAgent(id);
-        if (agentR) rotateToken(agentR, button);
+      } else if (action === "agent-perms") {
+        if (findAgent(id)) openManage("agent:" + id, "perms");
       } else if (action === "manage-agent") {
         var agentM = findAgent(id);
         if (agentM) openAgentMenu(agentM, button);
@@ -667,9 +666,9 @@
         },
       },
       {
-        label: "设置权限",
+        label: "轮换密钥",
         onSelect: function () {
-          openManage("agent:" + agent.id, "perms");
+          rotateToken(agent, button);
         },
       },
     ];
