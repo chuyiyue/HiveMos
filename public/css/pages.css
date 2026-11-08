@@ -394,7 +394,7 @@ img, svg, video, canvas { max-width: 100%; }
 
 @media (max-width: 639px) {
   .page-head { flex-direction: column; align-items: stretch; gap: 0; }
-  .page-head-actions { margin-left: 0; margin-top: 12px; }
+  .page-head-actions { margin-left: 0; margin-top: 12px; flex-wrap: wrap; }
   .page-head-actions > button { flex: 1 1 auto; }
   .page-head-actions > button.secondary {
     flex: 0 0 auto;
