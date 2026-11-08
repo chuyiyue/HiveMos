@@ -638,9 +638,9 @@
       "</span> <button type=\"button\" class=\"copy-btn\" data-copy=\"" +
       escapeHtml(agent.id) +
       "\" data-label=\"复制\">复制</button></dd></div>" +
-      "<div><dt>接入地址</dt><dd><span class=\"mono\">" +
+      "<div><dt>接入地址</dt><dd><span class=\"mono\" data-agent-endpoint>" +
       escapeHtml(endpoint) +
-      "</span> <button type=\"button\" class=\"copy-btn\" data-copy=\"" +
+      "</span> <button type=\"button\" class=\"copy-btn\" data-agent-endpoint-copy data-copy=\"" +
       escapeHtml(endpoint) +
       "\" data-label=\"复制\">复制</button></dd></div>" +
       "</dl></div>" +
@@ -861,6 +861,30 @@
     function changed(message) {
       window.dispatchEvent(new CustomEvent("hivemos:sidebar-refresh"));
       if (typeof options.onChanged === "function") options.onChanged(message || "");
+    }
+
+    // Endpoint URL with the token appended: revealed once per open and
+    // swapped into the info head (both the visible text and what the
+    // copy button copies). When the token cannot be revealed (legacy
+    // agents without a retrievable token, or any failure) the plain
+    // address stays. After a rotation the old token is dead, so the row
+    // falls back to the plain address until the next open.
+    var endpointWithToken = null;
+    function applyEndpointToken() {
+      var url = endpointWithToken || mcpEndpoint();
+      var text = ctrl.bodyEl.querySelector("[data-agent-endpoint]");
+      if (text) text.textContent = url;
+      var copyBtn = ctrl.bodyEl.querySelector("[data-agent-endpoint-copy]");
+      if (copyBtn) copyBtn.setAttribute("data-copy", url);
+    }
+    function loadEndpointToken() {
+      agentApi("POST", "/api/agents/" + encodeURIComponent(agentId) + "/reveal-token")
+        .then(function (result) {
+          if (!result.data || result.data.ok !== true || !result.data.token) return;
+          endpointWithToken = mcpEndpoint() + "?token=" + encodeURIComponent(result.data.token);
+          applyEndpointToken();
+        })
+        .catch(function () {});
     }
 
     // ---- Permission picker (local pending state; one PATCH on save) ----
@@ -1132,6 +1156,7 @@
           ctrl.setTitle(fresh.name);
           ctrl.setBody(agentManageBody(fresh, groupNameOf(fresh), { recordsHtml: agentRecordsHtml, tab: currentTab }));
           syncPermUI();
+          applyEndpointToken();
         })
         .catch(function () {
           if (!silent) ctrl.setBody(emptyState("读取失败", "网络异常，请稍后重试"));
@@ -1748,6 +1773,8 @@
               return;
             }
             changed("已轮换令牌");
+            endpointWithToken = null;
+            applyEndpointToken();
             var resultDialog = openFormDialog({
               title: "新令牌",
               bodyHtml: "",
@@ -1957,6 +1984,7 @@
 
     var initialRefresh = refresh(seed ? { silent: true } : undefined);
     loadAgentRecords();
+    loadEndpointToken();
     return ctrl;
   }
 
