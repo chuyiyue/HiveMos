@@ -537,7 +537,7 @@
         escapeHtml(entry[1]) +
         '</strong><span class="perm-item-sub">' +
         escapeHtml(entry[0] + " · " + entry[2]) +
-        '</span></span><span class="perm-item-check" aria-hidden="true">✓</span></button>'
+        '</span></span></button>'
       );
     }).join("");
     return (
@@ -637,7 +637,7 @@
       "</dl></div>" +
       "<div class=\"page-tabs manage-tabs\" role=\"tablist\" aria-label=\"Agent 管理\">" +
       "<button type=\"button\" class=\"page-tab\" role=\"tab\" data-mtab=\"overview\" aria-selected=\"true\">概览</button>" +
-      "<button type=\"button\" class=\"page-tab\" role=\"tab\" data-mtab=\"perms\" aria-selected=\"false\">权限<span class=\"perm-dirty-dot\" data-perm-dirty hidden title=\"有未保存改动\"></span></button>" +
+      "<button type=\"button\" class=\"page-tab\" role=\"tab\" data-mtab=\"perms\" aria-selected=\"false\">权限</button>" +
       "<button type=\"button\" class=\"page-tab\" role=\"tab\" data-mtab=\"advanced\" aria-selected=\"false\">高级设置</button>" +
       "</div>" +
       "<div data-mpanel=\"overview\">" +
