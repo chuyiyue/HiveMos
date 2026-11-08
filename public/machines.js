@@ -157,7 +157,7 @@
     // 按钮排序：本机操作 → 来源连接 → 日常管理 → 删除类垫底
     var btns = "";
     if (kind === "server") {
-      btns += "<button type=\"button\" class=\"secondary\" data-mact=\"probe\" data-kind=\"server\" data-id=\"" + id + "\">测试连接</button>";
+      btns += "<button type=\"button\" class=\"secondary\" data-mact=\"probe\" data-kind=\"server\" data-id=\"" + id + "\">同步</button>";
       btns += "<button type=\"button\" class=\"secondary\" data-mact=\"reveal\" data-kind=\"server\" data-id=\"" + id + "\">查看 SSH 密码</button>";
     }
     if (kind === "worker") {
@@ -321,10 +321,12 @@
     var id = C.escapeHtml(item.id);
     var actions = "";
     if (kind === "server") {
-      actions += "<button type=\"button\" class=\"secondary\" data-mact=\"probe\" data-kind=\"server\" data-id=\"" + id + "\">测试连接</button>";
+      actions += "<button type=\"button\" class=\"secondary\" data-mact=\"probe\" data-kind=\"server\" data-id=\"" + id + "\">同步</button>";
       actions += "<button type=\"button\" class=\"secondary\" data-mact=\"copyconfig\" data-kind=\"server\" data-id=\"" + id + "\">复制配置</button>";
     } else if (kind === "worker") {
-      actions += "<button type=\"button\" class=\"secondary\" data-mact=\"workers\" data-kind=\"worker\" data-id=\"" + id + "\">" + (item.platform === "vercel" ? "查看项目" : "查看 Workers") + "</button>";
+      actions += "<button type=\"button\" class=\"secondary\" data-mact=\"wcopy\" data-kind=\"worker\" data-id=\"" + id + "\">复制配置</button>";
+      actions += "<button type=\"button\" class=\"secondary\" data-mact=\"edit\" data-kind=\"worker\" data-id=\"" + id + "\">编辑</button>";
+      actions += "<button type=\"button\" class=\"secondary\" data-mact=\"wsync\" data-kind=\"worker\" data-id=\"" + id + "\">同步</button>";
     } else if (actionsOverride !== undefined) {
       actions = actionsOverride;
     } else {
@@ -810,20 +812,32 @@
   function probeServer(item, btn) {
     if (btn) {
       btn.disabled = true;
-      btn.textContent = "正在测试…";
+      btn.textContent = "同步中…";
+    }
+    function restoreBtn() {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = "同步";
+      }
     }
     api("POST", "/api/machines/" + encodeURIComponent(item.id) + "/probe")
       .then(function (res) {
+        var probe = res.data && res.data.probe;
+        var ok = !!(res.data && res.data.ok && probe && probe.ok);
         return load().then(function () {
-          var failed = !res.data || !res.data.ok || (res.data.probe && !res.data.probe.ok);
-          if (failed) {
-            var fresh = null;
-            state.items.forEach(function (entry) { if (entry.id === item.id) fresh = entry; });
-            if (fresh) openMachineManage("server", fresh);
-          }
+          var fresh = null;
+          state.items.forEach(function (entry) { if (entry.id === item.id) fresh = entry; });
+          var name = deviceTitle(fresh || item);
+          if (ok) C.toast("同步完成：「" + name + "」运行中");
+          else C.toast("同步失败：「" + name + "」" + ((probe && probe.error) || (fresh && fresh.probe_error) || (res.data && res.data.error) || "连接失败"));
+          restoreBtn();
         });
       })
-      .catch(function () { load(); });
+      .catch(function () {
+        load();
+        C.toast("同步失败：「" + deviceTitle(item) + "」网络异常");
+        restoreBtn();
+      });
   }
 
   // 认证方式二选一：只渲染选中方式的输入框，另一个不出现在 DOM 里。
@@ -2097,9 +2111,9 @@
     });
   }
   function ensureWorkerStats(item) {
-    if (workerStatsCache[item.id] !== undefined) { paintWorkerStats(item.id); return; }
+    if (workerStatsCache[item.id] !== undefined) { paintWorkerStats(item.id); return Promise.resolve(); }
     workerStatsCache[item.id] = "loading";
-    api("GET", "/api/machines/" + encodeURIComponent(item.id) + "/worker-stats")
+    return api("GET", "/api/machines/" + encodeURIComponent(item.id) + "/worker-stats")
       .then(function (res) {
         workerStatsCache[item.id] = res.data && res.data.ok ? res.data.stats : null;
         paintWorkerStats(item.id);
@@ -2120,6 +2134,41 @@
     if (kind === "deployments") return C.record({ id: String(entry.name) + String(entry.created_at), title: entry.name || entry.url, facts: [["状态", C.escapeHtml(entry.state || "—")], ["时间", C.escapeHtml(entry.created_at ? String(entry.created_at).slice(0, 16).replace("T", " ") : "—")], ["地址", C.escapeHtml(entry.url || "—")]] });
     return C.record({ id: entry.id, title: entry.title || entry.id, facts: [["ID", "<span class=\"copy-text\" data-copy=\"" + C.escapeHtml(entry.id) + "\" data-label=\"" + C.escapeHtml(entry.id) + "\" title=\"点击复制\">" + C.escapeHtml(entry.id) + "</span>"]] });
   }
+  function copyWorkerConfig(item, btn) {
+    btn.disabled = true;
+    api("POST", "/api/machines/" + encodeURIComponent(item.id) + "/reveal")
+      .then(function (result) {
+        if (!result.data || !result.data.ok || !result.data.reveal || !result.data.reveal.secret) {
+          C.toast("还没有保存 API 令牌，未复制");
+          return;
+        }
+        var lines = [];
+        lines.push("名称：" + item.name);
+        if ((item.platform || "cloudflare") === "vercel") {
+          lines.push("平台：Vercel");
+          lines.push("Team ID：" + (item.team_id || "个人账号"));
+        } else {
+          lines.push("平台：Cloudflare");
+          lines.push("Cloudflare 账号：" + (item.cf_account_id || "未填写"));
+        }
+        lines.push("API 令牌：" + result.data.reveal.secret);
+        return C.copyText(lines.join("\n")).then(function () { C.toast("配置已复制"); });
+      })
+      .catch(function () { C.toast("复制失败，请稍后重试"); })
+      .then(function () { btn.disabled = false; });
+  }
+
+  function syncWorkerEntry(item, btn) {
+    btn.disabled = true;
+    btn.textContent = "同步中…";
+    delete workerStatsCache[item.id];
+    ensureWorkerStats(item).then(function () {
+      btn.disabled = false;
+      btn.textContent = "同步";
+      C.toast("「" + item.name + "」已同步最新用量");
+    });
+  }
+
   function openWorkerPanel(item, startTab) {
     var isVercel = (item.platform || "cloudflare") === "vercel";
     var tabs = isVercel
@@ -2384,6 +2433,8 @@
         else if (act === "reveal") openRevealDialog(found);
         else if (act === "copyconfig") copyServerConfig(found, mact);
         else if (act === "workers") openWorkerPanel(found, "workers");
+        else if (act === "wcopy") copyWorkerConfig(found, mact);
+        else if (act === "wsync") syncWorkerEntry(found, mact);
         else if (act === "group") openGroupMoveDialog(found);
         else if (act === "edit") {
           if (mkind === "server") openServerDialog(found);
