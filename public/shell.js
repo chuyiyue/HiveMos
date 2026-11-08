@@ -113,6 +113,18 @@
       state.className = "device-state";
       state.textContent = relativeSeenText(agent.last_seen_at);
       link.append(dot, svgIcon("icon-bot"), name, state);
+      link.addEventListener("click", function (event) {
+        event.preventDefault();
+        var common = window.HiveCommon;
+        if (common && typeof common.openAgentManage === "function") {
+          common.openAgentManage(agent.id, {
+            panel: true,
+            onChanged: function () {
+              loadSidebarAgents();
+            },
+          });
+        }
+      });
       item.append(link);
       if (agent.pinned) {
         var unpin = document.createElement("button");

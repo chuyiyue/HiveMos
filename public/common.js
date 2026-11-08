@@ -423,6 +423,10 @@
     );
   }
 
+  function closeCurrentOverlay() {
+    if (currentOverlay) currentOverlay.close();
+  }
+
   function openAgentManage(agentId, options) {
     options = options || {};
     var ctrl = (options.panel ? openSidePanel : openManageDialog)({
@@ -1073,6 +1077,7 @@
     openFormDialog: openFormDialog,
     openActionMenu: openActionMenu,
     openManageDialog: openManageDialog,
+    closeCurrentOverlay: closeCurrentOverlay,
     openSidePanel: openSidePanel,
     openAgentManage: openAgentManage,
     permDomains: PERM_DOMAINS,

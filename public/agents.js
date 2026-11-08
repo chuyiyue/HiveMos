@@ -9,15 +9,7 @@
   var C = window.HiveCommon;
 
   // Permission domains, mirroring PERMISSION_DOMAINS in src/registry.ts.
-  var PERM_DOMAINS = [
-    ["registry", "注册表", "MCP 注册表的搜索、列表与取配置"],
-    ["memory", "记忆", "记忆的读写与同步"],
-    ["soul", "Soul", "Soul 的读写与同步"],
-    ["tasks", "任务", "任务的查看与处理"],
-    ["calendar", "日历", "日程的查看与编辑"],
-    ["vault", "保险库", "保险库条目的取用"],
-    ["machines", "云主机", "云主机状态与操作"],
-  ];
+  var PERM_DOMAINS = C.permDomains;
 
   var state = {
     loading: true,
@@ -36,10 +28,6 @@
       items: [],
     },
   };
-
-  function pill(kind, label) {
-    return '<span class="status-indicator" data-status="' + kind + '">' + C.escapeHtml(label) + "</span>";
-  }
 
   function kv(label, html) {
     return "<div><dt>" + C.escapeHtml(label) + "</dt><dd>" + html + "</dd></div>";
@@ -75,28 +63,42 @@
     return perms.length + " / " + PERM_DOMAINS.length + "：" + labels.join("、");
   }
 
+  function pinCorner(agent) {
+    var pinned = !!agent.pinned_at;
+    return (
+      "<button type=\"button\" class=\"pin-btn\" data-action=\"pin\" data-id=\"" +
+      C.escapeHtml(agent.id) +
+      "\" aria-pressed=\"" +
+      (pinned ? "true" : "false") +
+      "\" title=\"" +
+      (pinned ? "取消固定" : "固定到侧边栏") +
+      "\" aria-label=\"" +
+      (pinned ? "取消固定" : "固定到侧边栏") +
+      "\"><svg class=\"icon\" viewBox=\"0 0 24 24\" aria-hidden=\"true\"><use href=\"/icons.svg#icon-pin\"/></svg></button>"
+    );
+  }
+
   function card(agent) {
     var seen = C.formatMinute(agent.last_seen_at);
     var active = agent.status === "active";
-    return (
-      '<article class="record" id="' +
-      C.escapeHtml(agent.id) +
-      '"><div class="record-main"><div class="record-title-row"><h3>' +
-      C.escapeHtml(agent.name) +
-      "</h3>" +
-      pill(active ? "ok" : "idle", active ? "已启用" : "已停用") +
-      '</div><div class="confirm-slot" data-confirm-for="' +
-      C.escapeHtml(agent.id) +
-      '"></div></div><dl class="kv">' +
-      kv("标识", '<span class="mono">' + C.escapeHtml(agent.id) + "</span>") +
-      kv("权限", C.escapeHtml(permText(agent))) +
-      kv("最近调用", C.escapeHtml(seen || "还没有调用")) +
-      kv("创建", C.escapeHtml(C.formatMinute(agent.created_at) || "未知")) +
-      "</dl>" +
-      C.expandPanel("agent:" + agent.id, agentExpandBody(agent)) +
-      C.expandToggle("agent:" + agent.id) +
-      "</article>"
-    );
+    return C.record({
+      id: agent.id,
+      icon: "bot",
+      title: agent.name,
+      status: active ? "enabled" : "disabled",
+      corner: pinCorner(agent),
+      facts: [
+        ["标识", "<span class=\"mono\">" + C.escapeHtml(agent.id) + "</span>"],
+        ["权限", C.escapeHtml(permText(agent))],
+        ["最近调用", C.escapeHtml(seen || "还没有调用")],
+        ["创建", C.escapeHtml(C.formatMinute(agent.created_at) || "未知")],
+      ],
+      actions:
+        "<button type=\"button\" class=\"secondary\" data-copy=\"" +
+        C.escapeHtml(agent.id) +
+        "\" data-label=\"复制标识\">复制标识</button>",
+      manage: "agent:" + agent.id,
+    });
   }
 
   function groupActions(group) {
@@ -190,7 +192,10 @@
     var page = document.getElementById("page");
     if (!page || bound) return;
     bound = true;
-    page.addEventListener("click", function (event) {
+    page.addEventListener("click", handleClick);
+  }
+
+  function handleClick(event) {
       var target = event.target;
       if (!(target instanceof Element)) return;
       var tab = target.closest(".page-tab");
@@ -198,22 +203,10 @@
         activateTab(tab.getAttribute("data-tab"));
         return;
       }
-      var permBtn = target.closest("[data-perm]");
-      if (permBtn) {
-        if (state.busy) return;
-        var permAgent = findAgent(permBtn.getAttribute("data-id") || "");
-        if (!permAgent) return;
-        var domain = permBtn.getAttribute("data-perm");
-        var next = new Set(permAgent.permissions || []);
-        if (next.has(domain)) next.delete(domain);
-        else next.add(domain);
-        permBtn.setAttribute("aria-checked", next.has(domain) ? "true" : "false");
-        var ordered = PERM_DOMAINS.map(function (entry) {
-          return entry[0];
-        }).filter(function (entry) {
-          return next.has(entry);
-        });
-        savePermissions(permAgent, ordered);
+      var zone = target.closest("[data-manage]");
+      if (zone) {
+        if (target.closest("button, a, input, select, textarea")) return;
+        openManage(zone.getAttribute("data-manage"));
         return;
       }
       var button = target.closest("[data-action]");
@@ -222,21 +215,9 @@
       var id = button.getAttribute("data-id") || "";
       if (action === "open-create") openCreate();
       else if (action === "add-group") openGroup();
-      else if (action === "rename") {
-        var agent = findAgent(id);
-        if (agent) openRename(agent);
-      } else if (action === "move") {
-        var agent2 = findAgent(id);
-        if (agent2) openMove(agent2);
-      } else if (action === "pin") {
+      else if (action === "pin") {
         var agent3 = findAgent(id);
         if (agent3) togglePin(agent3);
-      } else if (action === "rotate") {
-        var agent4 = findAgent(id);
-        if (agent4) rotate(agent4);
-      } else if (action === "disable") {
-        var agent5 = findAgent(id);
-        if (agent5) disable(agent5);
       } else if (action === "rename-group") {
         var group = findGroup(id);
         if (group) openRenameGroup(group);
@@ -258,7 +239,6 @@
         var appGroup2 = findAppGroup(id);
         if (appGroup2) deleteAppGroup(appGroup2);
       }
-    });
   }
 
   function api(method, url, body) {
@@ -494,84 +474,6 @@
     });
   }
 
-  // ---- 卡片展开区（就地展开面板，替代中央菜单） ----
-
-  function permRowsHtml(agent) {
-    var enabled = new Set(agent.permissions || []);
-    return PERM_DOMAINS.map(function (entry) {
-      var on = enabled.has(entry[0]);
-      return (
-        '<div class="perm-row"><div class="perm-meta"><strong>' +
-        C.escapeHtml(entry[1]) +
-        '</strong><span class="subtle">' +
-        C.escapeHtml(entry[0] + " · " + entry[2]) +
-        '</span></div><button type="button" class="switch" role="switch" aria-checked="' +
-        (on ? "true" : "false") +
-        '" data-perm="' +
-        C.escapeHtml(entry[0]) +
-        '" data-id="' +
-        C.escapeHtml(agent.id) +
-        '" aria-label="' +
-        C.escapeHtml(entry[1]) +
-        '"><span class="switch-knob"></span></button></div>'
-      );
-    }).join("");
-  }
-
-  function agentExpandBody(agent) {
-    var active = agent.status === "active";
-    var id = C.escapeHtml(agent.id);
-    var actions =
-      '<button type="button" class="secondary" data-action="rename" data-id="' + id + '">改名</button>' +
-      '<button type="button" class="secondary" data-action="move" data-id="' + id + '">移动分组</button>' +
-      '<button type="button" class="secondary" data-action="pin" data-id="' + id + '">' +
-      (agent.pinned_at ? "取消固定" : "固定到侧边栏") +
-      "</button>";
-    if (active) {
-      actions +=
-        '<button type="button" class="secondary" data-action="rotate" data-id="' + id + '">轮换令牌</button>' +
-        '<button type="button" class="danger" data-action="disable" data-id="' + id + '">停用</button>';
-    }
-    return (
-      '<p class="subtle expand-note">移动分组：当前在「' +
-      C.escapeHtml(groupNameOf(agent)) +
-      '」。轮换令牌后旧令牌立即失效</p>' +
-      C.expandActions(actions) +
-      '<h3 class="expand-subhead">系统功能权限</h3>' +
-      '<p class="subtle expand-note">这个 Agent 通过面板 MCP 能访问的系统功能，拨动开关立即生效</p>' +
-      '<div class="perm-list">' +
-      permRowsHtml(agent) +
-      "</div>"
-    );
-  }
-
-  function savePermissions(agent, perms) {
-    if (state.busy) return;
-    state.busy = true;
-    api("PATCH", "/api/agents/" + encodeURIComponent(agent.id), { permissions: perms })
-      .then(function (result) {
-        state.busy = false;
-        if (authRedirect(result.status)) return;
-        if (!result.data || result.data.ok !== true) {
-          state.notice = (result.data && result.data.error) || "权限没有保存，请重试";
-          state.noticeKind = "danger";
-          render();
-          return;
-        }
-        state.notice = "已保存权限";
-        state.noticeKind = "ok";
-        loadAll();
-      })
-      .catch(function () {
-        state.busy = false;
-        state.notice = "网络异常，请重试";
-        state.noticeKind = "danger";
-        render();
-      });
-  }
-
-  // ---- 卡片高级菜单 ----
-
   function togglePin(agent) {
     if (state.busy) return;
     state.busy = true;
@@ -596,148 +498,6 @@
         state.noticeKind = "danger";
         render();
       });
-  }
-
-  function groupNameOf(agent) {
-    if (!agent.group_id) return "未分组";
-    var group = findGroup(agent.group_id);
-    return group ? group.name : "未分组";
-  }
-
-  function openRename(agent) {
-    C.openFormDialog({
-      title: "改名",
-      bodyHtml:
-        "<label>名字" +
-        '<input data-field="name" name="name" maxlength="64" autocomplete="off" value="' +
-        C.escapeHtml(agent.name) +
-        '" /></label>',
-      submitLabel: "保存",
-      onSubmit: function (ctrl) {
-        var input = ctrl.form.querySelector('[data-field="name"]');
-        var name = input ? input.value.trim() : "";
-        if (!name) {
-          ctrl.setError("请填写设备名字");
-          return;
-        }
-        patchAgent(ctrl, agent.id, { name: name }, "已改名");
-      },
-    });
-  }
-
-  function openMove(agent) {
-    C.openFormDialog({
-      title: "移动分组",
-      bodyHtml: "<label>分组" + C.groupSelect("group_id", state.groups, agent.group_id || "") + "</label>",
-      submitLabel: "保存",
-      onSubmit: function (ctrl) {
-        var input = ctrl.form.querySelector('[data-field="group_id"]');
-        var groupId = input ? input.value : "";
-        patchAgent(ctrl, agent.id, { group_id: groupId || null }, "已移动分组");
-      },
-    });
-  }
-
-  function patchAgent(ctrl, id, body, okText) {
-    if (state.busy) return;
-    state.busy = true;
-    ctrl.setBusy(true);
-    api("PATCH", "/api/agents/" + encodeURIComponent(id), body)
-      .then(function (result) {
-        state.busy = false;
-        if (authRedirect(result.status)) return;
-        if (!result.data || result.data.ok !== true) {
-          ctrl.setBusy(false);
-          ctrl.setError((result.data && result.data.error) || "没有保存成功，请重试");
-          return;
-        }
-        state.notice = okText;
-        state.noticeKind = "ok";
-        ctrl.close();
-        loadAll();
-      })
-      .catch(function () {
-        state.busy = false;
-        ctrl.setBusy(false);
-        ctrl.setError("网络异常，请重试");
-      });
-  }
-
-  function rotate(agent) {
-    var anchor = confirmAnchor('[data-confirm-for="' + cssEscape(agent.id) + '"]');
-    C.askConfirm({
-      anchor: anchor,
-      title: "轮换令牌",
-      text: "确认轮换「" + agent.name + "」的令牌吗？旧令牌会立即失效",
-      confirmLabel: "轮换",
-      danger: true,
-    }).then(function (yes) {
-      if (!yes || state.busy) return;
-      state.busy = true;
-      api("POST", "/api/agents/" + encodeURIComponent(agent.id) + "/rotate")
-        .then(function (result) {
-          state.busy = false;
-          if (authRedirect(result.status)) return;
-          if (!result.data || result.data.ok !== true || !result.data.token) {
-            state.notice = (result.data && result.data.error) || "没有轮换成功，请重试";
-            state.noticeKind = "danger";
-            render();
-            return;
-          }
-          var ctrl = C.openFormDialog({
-            title: "新令牌",
-            bodyHtml: "",
-            submitLabel: "完成",
-            onSubmit: function (c) {
-              c.close();
-            },
-          });
-          ctrl.showResult(
-            "<p>新令牌只显示这一次。旧令牌已经失效，请立刻复制并换到设备上</p>" + C.copyLine(result.data.token, "复制令牌"),
-            "我已复制",
-          );
-        })
-        .catch(function () {
-          state.busy = false;
-          state.notice = "网络异常，请重试";
-          state.noticeKind = "danger";
-          render();
-        });
-    });
-  }
-
-  function disable(agent) {
-    var anchor = confirmAnchor('[data-confirm-for="' + cssEscape(agent.id) + '"]');
-    C.askConfirm({
-      anchor: anchor,
-      title: "停用设备",
-      text: "确认停用「" + agent.name + "」吗？停用后该令牌不能再调用注册表",
-      confirmLabel: "停用",
-      danger: true,
-    }).then(function (yes) {
-      if (!yes || state.busy) return;
-      state.busy = true;
-      api("DELETE", "/api/agents/" + encodeURIComponent(agent.id))
-        .then(function (result) {
-          state.busy = false;
-          if (authRedirect(result.status)) return;
-          if (!result.data || result.data.ok !== true) {
-            state.notice = (result.data && result.data.error) || "没有停用，请重试";
-            state.noticeKind = "danger";
-            render();
-            return;
-          }
-          state.notice = "已停用";
-          state.noticeKind = "ok";
-          loadAll();
-        })
-        .catch(function () {
-          state.busy = false;
-          state.notice = "网络异常，请重试";
-          state.noticeKind = "danger";
-          render();
-        });
-    });
   }
 
   // ---- 应用页签（条目走后端，分组页内，与 Agents 页签同一套骨架） ----
@@ -766,28 +526,64 @@
   }
 
   function appCard(item) {
+    var id = C.escapeHtml(item.id);
     return C.record({
       id: item.id,
+      icon: "layout",
       title: item.name,
-      lede: item.type,
+      pill: item.type || "",
       facts: [
-        ["类型", C.escapeHtml(item.type)],
         ["最近使用", C.escapeHtml(item.last_used || "还没有使用")],
         ["说明", C.escapeHtml(item.note || "无")],
       ],
-      expandKey: "app:" + item.id,
-      expandBody:
-        C.expandActions(
-          '<button type="button" class="secondary" data-action="app-edit" data-id="' +
-            C.escapeHtml(item.id) +
-            '">编辑</button><button type="button" class="danger" data-action="app-delete" data-id="' +
-            C.escapeHtml(item.id) +
-            '">删除</button>',
-        ) +
-        '<div class="confirm-slot" data-confirm-app-item="' +
-        C.escapeHtml(item.id) +
-        '"></div>',
+      actions:
+        "<button type=\"button\" class=\"secondary\" data-action=\"app-edit\" data-id=\"" + id + "\">编辑</button>",
+      manage: "app:" + item.id,
     });
+  }
+
+  // ---- 管理弹窗（点卡片信息区打开；Agent 走 common 的共用构建） ----
+
+  function openManage(key) {
+    if (!key) return;
+    var sep = key.indexOf(":");
+    var kind = key.slice(0, sep);
+    var id = key.slice(sep + 1);
+    if (kind === "agent") {
+      var agent = findAgent(id);
+      if (!agent) return;
+      C.openAgentManage(agent.id, {
+        onChanged: function (message) {
+          if (message) {
+            state.notice = message;
+            state.noticeKind = "ok";
+          }
+          loadAll();
+        },
+      });
+    } else if (kind === "app") {
+      var app = findApp(id);
+      if (app) openAppManage(app);
+    }
+  }
+
+  function openAppManage(item) {
+    var id = C.escapeHtml(item.id);
+    var ctrl = C.openManageDialog({
+      title: item.name,
+      bodyHtml:
+        "<dl class=\"kv\">" +
+        kv("类型", C.escapeHtml(item.type || "未注明类型")) +
+        kv("最近使用", C.escapeHtml(item.last_used || "还没有使用")) +
+        kv("说明", C.escapeHtml(item.note || "无")) +
+        "</dl>" +
+        "<div class=\"manage-actions\">" +
+        "<button type=\"button\" class=\"secondary\" data-action=\"app-edit\" data-id=\"" + id + "\">编辑</button>" +
+        "<button type=\"button\" class=\"danger\" data-action=\"app-delete\" data-id=\"" + id + "\">删除</button>" +
+        "</div>" +
+        "<div class=\"confirm-slot\" data-confirm-app-item=\"" + id + "\"></div>",
+    });
+    ctrl.dialog.addEventListener("click", handleClick);
   }
 
   function appGroupActions(group) {
@@ -970,6 +766,7 @@
             return entry.id !== item.id;
           });
           state.notice = "已删除";
+          C.closeCurrentOverlay();
           state.noticeKind = "ok";
           render();
         })
