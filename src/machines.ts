@@ -823,11 +823,12 @@ export async function probeMachineById(
     }
     await prepare(
       db,
-      "UPDATE machines SET name = ?, hostname = ?, os = ?, kernel = ?, arch = ?, host_fingerprint = ?, status = 'running', probe_status = 'ok', probe_at = ?, probe_error = '', last_heartbeat_at = ?, updated_at = ? WHERE id = ?",
+      "UPDATE machines SET name = ?, hostname = ?, os = ?, spec = ?, kernel = ?, arch = ?, host_fingerprint = ?, status = 'running', probe_status = 'ok', probe_at = ?, probe_error = '', last_heartbeat_at = ?, updated_at = ? WHERE id = ?",
       [
         name,
         result.hostname || row.hostname,
         result.os || row.os,
+        result.spec || row.spec,
         result.kernel,
         result.arch,
         result.fingerprint,

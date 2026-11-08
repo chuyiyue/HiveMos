@@ -33,6 +33,7 @@ export interface SshProbeResult {
   os: string;
   kernel: string;
   arch: string;
+  spec: string;
   fingerprint: string;
   hostKeyAlgo: string;
 }
@@ -47,7 +48,7 @@ export class SshProbeError extends Error {
 
 const CLIENT_VERSION = "SSH-2.0-HiveMosProbe_1.0";
 const PROBE_COMMAND =
-  'hostname; . /etc/os-release 2>/dev/null; echo "OS=${PRETTY_NAME:-}"; echo "K=$(uname -r)"; echo "A=$(uname -m)"';
+  'hostname; . /etc/os-release 2>/dev/null; echo "OS=${PRETTY_NAME:-}"; echo "K=$(uname -r)"; echo "A=$(uname -m)"; echo "CPU=$(nproc 2>/dev/null || grep -c ^processor /proc/cpuinfo 2>/dev/null)"; echo "MEM=$(grep MemTotal /proc/meminfo 2>/dev/null)"';
 const MAX_PACKET = 1024 * 1024;
 const MAX_OUTPUT = 128 * 1024;
 
@@ -1180,11 +1181,23 @@ function parseProbeOutput(output: string, fingerprint: string, hostKeyAlgo: stri
   let os = "";
   let kernel = "";
   let arch = "";
+  let cpu = 0;
+  let memKb = 0;
   for (const line of lines) {
     if (line.startsWith("OS=")) os = line.slice(3).replace(/^"|"$/g, "");
     else if (line.startsWith("K=")) kernel = line.slice(2);
     else if (line.startsWith("A=")) arch = line.slice(2);
-    else if (!hostname) hostname = line;
+    else if (line.startsWith("CPU=")) cpu = parseInt(line.slice(4), 10) || 0;
+    else if (line.startsWith("MEM=")) {
+      const digits = /(\d+)/.exec(line.slice(4));
+      memKb = digits ? parseInt(digits[1], 10) || 0 : 0;
+    } else if (!hostname) hostname = line;
   }
-  return { hostname, os, kernel, arch, fingerprint, hostKeyAlgo };
+  const parts: string[] = [];
+  if (cpu > 0) parts.push(cpu + " 核");
+  if (memKb > 0) {
+    const gib = memKb / 1048576;
+    parts.push((Number.isInteger(gib) ? String(gib) : gib.toFixed(1)) + " GB");
+  }
+  return { hostname, os, kernel, arch, spec: parts.join(" / "), fingerprint, hostKeyAlgo };
 }
