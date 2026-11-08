@@ -747,3 +747,86 @@ a.alert-row:hover { background: var(--surface-hover); }
   overflow-wrap: anywhere;
   margin: 0;
 }
+
+/* Avatar picker: right-hand footer group + unified save button. */
+.avatar-picker-right { display: inline-flex; align-items: center; gap: 8px; }
+.avatar-picker [data-avatar-save][hidden] { display: none; }
+
+/* Custom select: the native control stays as the data source, visually
+   hidden; a styled button + popover list carry the interaction. */
+.cs-native {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  min-height: 0 !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0 !important;
+  opacity: 0;
+  pointer-events: none;
+}
+.cs-wrap { position: relative; display: block; }
+.cs-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  min-height: 38px;
+  padding: 8px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.cs-btn:hover { border-color: var(--text-3); }
+.cs-btn:focus-visible, .cs-btn[aria-expanded="true"] { border-color: var(--accent); }
+.cs-btn:disabled { opacity: 0.55; cursor: default; }
+.cs-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cs-chevron { flex: none; width: 16px; height: 16px; color: var(--text-3); }
+.cs-wrap .cs-list {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 60;
+  min-width: 100%;
+  max-width: min(320px, 90vw);
+  max-height: 260px;
+  overflow-y: auto;
+  padding: 6px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  box-shadow: var(--shadow-2);
+}
+.cs-opt {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.cs-opt:hover { background: var(--bg-sunken); }
+.cs-opt.is-selected { background: var(--accent-soft); font-weight: 600; }
+.cs-opt:disabled { opacity: 0.5; cursor: default; }
+.cs-opt-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cs-check { flex: none; width: 16px; height: 16px; color: var(--accent); }
+.cs-empty { padding: 8px 10px; color: var(--text-3); font-size: var(--fs-sm); }
+/* The pager's compact size select keeps its inline, auto-width shape. */
+.pager-size .cs-wrap { display: inline-block; }
+.pager-size .cs-btn { width: auto; min-height: 32px; padding: 4px 8px; }
