@@ -1,12 +1,14 @@
 // Vault module (v1, panel-only): storage behind the vault board.
-// Only two things are secret — entry passwords and gateway keys. They are
-// stored AES-GCM sealed under the VAULT_KEY worker secret (envelope helpers
-// live in crypto.ts, same format as the TOTP seal). Names, urls, usernames,
-// notes and mailbox records are plain text by design for v1. List views
-// never expose a secret, only its last four characters (tail); reading one
-// goes through revealSecret, which writes a vault_access_log row first.
-// There is deliberately no MCP surface: agent access waits for the
-// key-lease design, and the vault permission domain stays reserved.
+// Secrets are entry passwords, gateway keys, and mailbox SMTP passwords.
+// They are stored AES-GCM sealed under the VAULT_KEY worker secret
+// (envelope helpers live in crypto.ts, same format as the TOTP seal).
+// Names, urls, usernames, notes and mailbox metadata (SMTP host, port,
+// security and user) are plain text. List views never expose a secret:
+// entries and gateways show only the last four characters (tail), emails
+// show smtp_secret_set. Reading one goes through revealSecret, which
+// writes a vault_access_log row first. There is deliberately no MCP
+// surface: agent access waits for the key-lease design, and the vault
+// permission domain stays reserved.
 
 import { decryptString, resolveContentKey, sealString } from "./crypto";
 import type { ContentKey } from "./crypto";
@@ -71,6 +73,11 @@ export interface EmailRow {
   purpose: string;
   portal: string;
   note: string;
+  smtp_host: string;
+  smtp_port: number | null;
+  smtp_security: string;
+  smtp_user: string;
+  smtp_secret: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -94,6 +101,9 @@ const MODELS_MAX = 60;
 const ADDRESS_MAX = 120;
 const PURPOSE_MAX = 40;
 const PORTAL_MAX = 80;
+const SMTP_HOST_MAX = 253;
+const SMTP_USER_MAX = 120;
+const SMTP_DEFAULT_PORT: Record<string, number> = { ssl: 465, starttls: 587, none: 25 };
 
 function optText(body: Record<string, unknown>, key: string, max: number, label: string): string | undefined {
   const value = body[key];
@@ -419,6 +429,11 @@ export function emailPublic(row: EmailRow): Record<string, unknown> {
     purpose: row.purpose,
     portal: row.portal,
     note: row.note,
+    smtp_host: row.smtp_host || "",
+    smtp_port: row.smtp_port == null ? null : row.smtp_port,
+    smtp_security: row.smtp_security || "",
+    smtp_user: row.smtp_user || "",
+    smtp_secret_set: !!row.smtp_secret,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -432,25 +447,152 @@ export async function listEmails(db: D1Database): Promise<EmailRow[]> {
   return rowsOf(await prepare(db, "SELECT * FROM emails ORDER BY created_at ASC, id ASC").all<EmailRow>());
 }
 
-export async function createEmail(db: D1Database, body: Record<string, unknown>, now: number): Promise<EmailRow> {
+// SMTP is one optional group. No smtp keys on update leaves the stored group
+// alone. An empty group (nothing filled) is "not configured" and is stored
+// as blanks. Filling the host turns the group on: security must be one of
+// ssl / starttls / none, an empty port falls back to 465 / 587 / 25, and an
+// empty user falls back to the mailbox address. A non-empty smtp_secret is
+// sealed; on edit an empty secret keeps the stored ciphertext.
+function smtpKeysPresent(body: Record<string, unknown>): boolean {
+  return (
+    body["smtp_host"] !== undefined ||
+    body["smtp_port"] !== undefined ||
+    body["smtp_security"] !== undefined ||
+    body["smtp_user"] !== undefined ||
+    body["smtp_secret"] !== undefined
+  );
+}
+
+function smtpValueFilled(value: unknown): boolean {
+  if (value === undefined || value === null) return false;
+  if (typeof value === "string") return value.trim() !== "";
+  return true;
+}
+
+function smtpGroupFilled(body: Record<string, unknown>): boolean {
+  return (
+    smtpValueFilled(body["smtp_host"]) ||
+    smtpValueFilled(body["smtp_port"]) ||
+    smtpValueFilled(body["smtp_security"]) ||
+    smtpValueFilled(body["smtp_user"]) ||
+    smtpValueFilled(body["smtp_secret"])
+  );
+}
+
+function smtpSecurityOf(value: unknown): string {
+  if (value === undefined || value === null || value === "") throw new VaultError("请选择加密方式");
+  if (typeof value !== "string") throw new VaultError("加密方式格式不正确");
+  const security = value.trim().toLowerCase();
+  if (!security) throw new VaultError("请选择加密方式");
+  if (security !== "ssl" && security !== "starttls" && security !== "none") throw new VaultError("加密方式不正确");
+  return security;
+}
+
+function smtpPortOf(value: unknown, security: string): number {
+  if (value === undefined || value === null || value === "") {
+    const fallback = SMTP_DEFAULT_PORT[security];
+    if (!fallback) throw new VaultError("请选择加密方式");
+    return fallback;
+  }
+  let port: number;
+  if (typeof value === "number") {
+    port = value;
+  } else if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      const fallback = SMTP_DEFAULT_PORT[security];
+      if (!fallback) throw new VaultError("请选择加密方式");
+      return fallback;
+    }
+    if (!/^[0-9]+$/.test(trimmed)) throw new VaultError("端口需为 1 到 65535 的整数");
+    port = Number(trimmed);
+  } else {
+    throw new VaultError("端口格式不正确");
+  }
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new VaultError("端口需为 1 到 65535 的整数");
+  return port;
+}
+
+interface SmtpWrite {
+  host: string;
+  port: number | null;
+  security: string;
+  user: string;
+  secretEnc: string | null;
+}
+
+async function resolveSmtp(env: Env, body: Record<string, unknown>, address: string, existing: EmailRow | null): Promise<SmtpWrite | null> {
+  if (!smtpKeysPresent(body)) return existing ? null : { host: "", port: null, security: "", user: "", secretEnc: null };
+  if (!smtpGroupFilled(body)) return { host: "", port: null, security: "", user: "", secretEnc: null };
+  const host = optText(body, "smtp_host", SMTP_HOST_MAX, "SMTP 服务器") ?? "";
+  if (!host) throw new VaultError("请填写 SMTP 服务器");
+  const security = smtpSecurityOf(body["smtp_security"]);
+  const port = smtpPortOf(body["smtp_port"], security);
+  const userText = optText(body, "smtp_user", SMTP_USER_MAX, "SMTP 用户名");
+  const user = userText ? userText : address;
+  let secretEnc = existing ? existing.smtp_secret : null;
+  const secret = body["smtp_secret"];
+  if (secret !== undefined && secret !== null) {
+    if (typeof secret !== "string") throw new VaultError("SMTP 密码格式不正确");
+    if (secret !== "") {
+      if (secret.length > SECRET_MAX) throw new VaultError("SMTP 密码太长了");
+      secretEnc = await sealSecret(env, secret);
+    }
+  }
+  return { host, port, security, user, secretEnc };
+}
+
+function applySmtp(row: EmailRow, smtp: SmtpWrite): void {
+  row.smtp_host = smtp.host;
+  row.smtp_port = smtp.port;
+  row.smtp_security = smtp.security;
+  row.smtp_user = smtp.user;
+  row.smtp_secret = smtp.secretEnc;
+}
+
+export async function createEmail(db: D1Database, env: Env, body: Record<string, unknown>, now: number): Promise<EmailRow> {
+  const address = reqText(body, "address", ADDRESS_MAX, "邮箱地址");
+  const purpose = optText(body, "purpose", PURPOSE_MAX, "用途") ?? "";
+  const portal = optText(body, "portal", PORTAL_MAX, "入口") ?? "";
+  const note = optText(body, "note", NOTE_MAX, "备注") ?? "";
+  const smtp = await resolveSmtp(env, body, address, null);
   const row: EmailRow = {
     id: newId("em"),
-    address: reqText(body, "address", ADDRESS_MAX, "邮箱地址"),
-    purpose: optText(body, "purpose", PURPOSE_MAX, "用途") ?? "",
-    portal: optText(body, "portal", PORTAL_MAX, "入口") ?? "",
-    note: optText(body, "note", NOTE_MAX, "备注") ?? "",
+    address,
+    purpose,
+    portal,
+    note,
+    smtp_host: "",
+    smtp_port: null,
+    smtp_security: "",
+    smtp_user: "",
+    smtp_secret: null,
     created_at: now,
     updated_at: now,
   };
+  if (smtp) applySmtp(row, smtp);
   await prepare(
     db,
-    "INSERT INTO emails (id, address, purpose, portal, note, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-    [row.id, row.address, row.purpose, row.portal, row.note, row.created_at, row.updated_at],
+    "INSERT INTO emails (id, address, purpose, portal, note, smtp_host, smtp_port, smtp_security, smtp_user, smtp_secret, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    [
+      row.id,
+      row.address,
+      row.purpose,
+      row.portal,
+      row.note,
+      row.smtp_host,
+      row.smtp_port,
+      row.smtp_security,
+      row.smtp_user,
+      row.smtp_secret,
+      row.created_at,
+      row.updated_at,
+    ],
   ).run();
   return row;
 }
 
-export async function updateEmail(db: D1Database, id: string, body: Record<string, unknown>, now: number): Promise<EmailRow> {
+export async function updateEmail(db: D1Database, env: Env, id: string, body: Record<string, unknown>, now: number): Promise<EmailRow> {
   const row = await getEmail(db, id);
   if (!row) throw new VaultError("邮箱不存在", 404);
   const address = optText(body, "address", ADDRESS_MAX, "邮箱地址");
@@ -464,11 +606,25 @@ export async function updateEmail(db: D1Database, id: string, body: Record<strin
   if (portal !== undefined) row.portal = portal;
   const note = optText(body, "note", NOTE_MAX, "备注");
   if (note !== undefined) row.note = note;
+  const smtp = await resolveSmtp(env, body, row.address, row);
+  if (smtp) applySmtp(row, smtp);
   row.updated_at = now;
   await prepare(
     db,
-    "UPDATE emails SET address = ?, purpose = ?, portal = ?, note = ?, updated_at = ? WHERE id = ?",
-    [row.address, row.purpose, row.portal, row.note, row.updated_at, row.id],
+    "UPDATE emails SET address = ?, purpose = ?, portal = ?, note = ?, smtp_host = ?, smtp_port = ?, smtp_security = ?, smtp_user = ?, smtp_secret = ?, updated_at = ? WHERE id = ?",
+    [
+      row.address,
+      row.purpose,
+      row.portal,
+      row.note,
+      row.smtp_host,
+      row.smtp_port,
+      row.smtp_security,
+      row.smtp_user,
+      row.smtp_secret,
+      row.updated_at,
+      row.id,
+    ],
   ).run();
   return row;
 }
@@ -490,7 +646,7 @@ export async function revealSecret(
 ): Promise<{ kind: string; id: string; name: string; value: string }> {
   const kind = body["kind"];
   const id = body["id"];
-  if (kind !== "entry" && kind !== "gateway") throw new VaultError("类型不正确");
+  if (kind !== "entry" && kind !== "gateway" && kind !== "email") throw new VaultError("类型不正确");
   if (typeof id !== "string" || !id) throw new VaultError("缺少 id");
   let name = "";
   let stored = "";
@@ -499,11 +655,16 @@ export async function revealSecret(
     if (!row) throw new VaultError("条目不存在", 404);
     name = row.name;
     stored = row.password_enc;
-  } else {
+  } else if (kind === "gateway") {
     const row = await getGateway(db, id);
     if (!row) throw new VaultError("网关不存在", 404);
     name = row.name;
     stored = row.key_enc;
+  } else {
+    const row = await getEmail(db, id);
+    if (!row) throw new VaultError("邮箱不存在", 404);
+    name = row.address;
+    stored = row.smtp_secret || "";
   }
   // Audit before plaintext is produced. A failed insert fails the reveal,
   // so the secret never leaves this function without a vault_access_log row.
@@ -522,7 +683,8 @@ export async function listAccessLog(db: D1Database, limit = 100): Promise<Access
       db,
       "SELECT l.id, l.target_kind, l.target_id, l.action, l.created_at, " +
         "CASE l.target_kind WHEN 'entry' THEN (SELECT name FROM vault_entries WHERE id = l.target_id) " +
-        "WHEN 'gateway' THEN (SELECT name FROM gateways WHERE id = l.target_id) END AS target_name " +
+        "WHEN 'gateway' THEN (SELECT name FROM gateways WHERE id = l.target_id) " +
+        "WHEN 'email' THEN (SELECT address FROM emails WHERE id = l.target_id) END AS target_name " +
         "FROM vault_access_log l ORDER BY l.created_at DESC, l.id DESC LIMIT ?",
       [limit],
     ).all<AccessLogRow>(),
