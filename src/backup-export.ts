@@ -3,9 +3,10 @@
 // 运行时之外的东西；scripts/backup-dryrun.mjs 用假 D1 直接跑同一段代码。
 //
 // 机密口径（硬线）：库里以 enc1: 密文保存的列（password_enc / key_enc /
-// token_enc / ssh_secret_enc / api_token_enc / config_enc）只导出密文本身，
-// 任何明文机密都不进包；不可逆的凭据摘要（token_hash、calendar_feed_tokens
-// 的 token_hash、totp_*、users.password_hash）一律不导出。
+// token_enc / ssh_secret_enc / api_token_enc / config_enc / secret_enc）
+// 只导出密文本身，任何明文机密都不进包；不可逆的凭据摘要（token_hash、
+// calendar_feed_tokens 的 token_hash、totp_*、users.password_hash、
+// vault_totp.secret_hash）一律不导出。
 //
 // 派生缓存（MCP 的 snapshot_json / embedding / content_hash）也是特意不导的，
 // 恢复时重新探活即可生成；导出包里只留可读的配置与元数据。
@@ -527,6 +528,30 @@ export async function buildBackupPackage(db: D1Database, now: number): Promise<B
     entity("vault_groups", `vault/groups/${segment(row["id"], "group")}.json`, row, ["id", "name", "created_at"]);
   }
 
+  // 验证码条目：secret_enc 只导 enc1: 密文（与条目密码同一口径）；secret_hash
+  // 是密钥的 SHA-256 摘要，按「不可逆凭据摘要一律不导」的政策排除。
+  const totpEntries = await rows(
+    db,
+    "SELECT id, issuer, account, secret_enc, algorithm, digits, period, icon, note, group_id, ai_read, created_at, updated_at FROM vault_totp ORDER BY id ASC",
+  );
+  for (const row of totpEntries) {
+    entity("vault_totp", `vault/totp/${segment(row["id"], "totp")}.json`, row, [
+      "id",
+      "issuer",
+      "account",
+      "secret_enc",
+      "algorithm",
+      "digits",
+      "period",
+      "icon",
+      "note",
+      "group_id",
+      "ai_read",
+      "created_at",
+      "updated_at",
+    ]);
+  }
+
   // ---- 系统设置（只导确定的配置项，不导运行时状态与账号哈希） -------------
   const metaKeys = ["sidebar_pin_limit", "cron_interval_hours", "backup_auto_enabled", "backup_target"];
   const metaRows = await rows(
@@ -603,6 +628,7 @@ export function backupSummary(counts: Record<string, number>): string {
     ["machines", "云主机"],
     ["groups", "分组"],
     ["vault_entries", "保险库条目"],
+    ["vault_totp", "验证码"],
   ];
   const parts: string[] = [];
   for (const [key, label] of order) {

@@ -3,8 +3,9 @@
 // 路由层只负责会话/跨站检查、请求体上限与操作日志。
 //
 // 机密口径与条目密码一致：secret_enc 是 VAULT_KEY 信封的 AES-GCM 密文
-// （sealSecret / openSecret 复用 vault.ts），列表只回公开字段与当前码，
-// 明文只能经 /api/vault/reveal（kind=totp）取出并先写一条访问日志。
+// （sealSecret / openSecret 复用 vault.ts），列表只回公开字段与当前码。
+// 密钥明文只有两条出路：/api/vault/reveal（kind=totp）与重验管理员密码的
+// 导出接口，两者都先写一条 vault_access_log（action 'reveal' / 'export'）。
 //
 // 判重只看 secret_hash：归一化密钥（base32 大写、无空格/横线/填充）的
 // SHA-256 十六进制。它不可逆推明文，也不进备份包，只用于「同一条密钥
@@ -12,7 +13,7 @@
 //
 // 分组复用 vault_groups 这张自有分组池，删除语义与 entries/gateways 一致。
 
-import { base64UrlToBytes, copyBytes, sha256Hex } from "./auth";
+import { base64UrlToBytes, bytesToBase64Url, copyBytes, sha256Hex } from "./auth";
 import type { D1Database, Env } from "./env";
 import { prepare } from "./registry";
 import { base32Decode, base32Encode, hotp, isTotpAlgorithm, type TotpAlgorithm } from "./totp";
@@ -200,6 +201,29 @@ export function parseOtpauthUri(uri: string): ParsedOtpauth {
   const digits = digitsOf(url.searchParams.get("digits"), DEFAULT_DIGITS);
   const period = periodOf(url.searchParams.get("period"), DEFAULT_PERIOD);
   return { issuer, account, secret, algorithm, digits, period };
+}
+
+// 导出用：与解析对称的生成器。Label 里的 issuer 与 account 都编码，
+// 与 Google Authenticator 的显示习惯一致。
+export function buildOtpauthUri(input: {
+  issuer: string;
+  account: string;
+  secret: string;
+  algorithm: string;
+  digits: number;
+  period: number;
+}): string {
+  const label = encodeURIComponent(
+    input.account ? `${input.issuer}:${input.account}` : input.issuer,
+  );
+  const params = new URLSearchParams({
+    secret: input.secret,
+    issuer: input.issuer,
+    algorithm: input.algorithm,
+    digits: String(input.digits),
+    period: String(input.period),
+  });
+  return `otpauth://totp/${label}?${params.toString()}`;
 }
 
 // ---- 字段合并（新增/修改） --------------------------------------------------
@@ -1101,4 +1125,212 @@ export async function confirmTotpImport(
 // never 认成别的格式。
 function rootLooksHivemos(root: JsonRecord): boolean {
   return root["app"] === "hivemos" || root["kind"] === "totp-export" || (root["encrypted"] === true && !!root["data"]);
+}
+
+// ---- 导出生成（阶段 4） -----------------------------------------------------
+//
+// 三种格式：hivemos（本系统 JSON，可再导回，encrypt=true 走口令信封）、aegis
+// （Aegis 明文 vault 结构，可被 Aegis 导入）、otpauth（每行一条链接）。
+// 导出内容带密钥明文，所以调用方必须先重输管理员密码再调这里；本函数只
+// 负责「读库 → 解密 → 拼文件」，不验密码、不写审计。
+
+export type TotpExportFormat = "hivemos" | "aegis" | "otpauth";
+
+export interface TotpExportOptions {
+  scope: "all" | "group";
+  groupId: string | null;
+  format: TotpExportFormat;
+  encrypt: boolean;
+  password: string | null;
+}
+
+export interface TotpExportResult {
+  filename: string;
+  content: string;
+  count: number;
+}
+
+function isExportFormat(value: unknown): value is TotpExportFormat {
+  return value === "hivemos" || value === "aegis" || value === "otpauth";
+}
+
+function pad(value: number): string {
+  return String(value).padStart(2, "0");
+}
+
+// 文件名带日期（UTC），同一天多次导出靠时间部分区分，避免覆盖上次下载。
+function exportFilename(format: TotpExportFormat, now: number): string {
+  const date = new Date(now);
+  const stamp = `${date.getUTCFullYear()}${pad(date.getUTCMonth() + 1)}${pad(date.getUTCDate())}-${pad(date.getUTCHours())}${pad(date.getUTCMinutes())}`;
+  if (format === "otpauth") return `hivemos-totp-${stamp}.txt`;
+  return `hivemos-${format}-${stamp}.json`;
+}
+
+async function groupNameMap(db: D1Database): Promise<Map<string, string>> {
+  const rows = rowsOf(await prepare(db, "SELECT id, name FROM vault_groups").all<{ id: string; name: string }>());
+  return new Map(rows.map((row) => [row.id, row.name]));
+}
+
+async function encryptExport(payload: JsonRecord, password: string, now: number): Promise<JsonRecord> {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const keyMaterial = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, [
+    "deriveBits",
+  ]);
+  const bits = await crypto.subtle.deriveBits(
+    { name: "PBKDF2", hash: "SHA-256", salt: copyBytes(salt), iterations: 100000 },
+    keyMaterial,
+    256,
+  );
+  const key = await crypto.subtle.importKey("raw", bits, "AES-GCM", false, ["encrypt"]);
+  const data = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv: copyBytes(iv) },
+    key,
+    new TextEncoder().encode(JSON.stringify(payload)),
+  );
+  return {
+    app: "hivemos",
+    kind: "totp-export",
+    version: 1,
+    exported_at: now,
+    encrypted: true,
+    kdf: "PBKDF2-SHA256",
+    iter: 100000,
+    salt: bytesToBase64Url(salt),
+    iv: bytesToBase64Url(iv),
+    data: bytesToBase64Url(new Uint8Array(data)),
+  };
+}
+
+export async function exportTotpEntries(
+  db: D1Database,
+  env: Env,
+  options: TotpExportOptions,
+  now: number,
+): Promise<TotpExportResult> {
+  if (!isExportFormat(options.format)) throw new VaultError("导出格式只支持 hivemos、aegis、otpauth");
+  if (options.scope !== "all" && options.scope !== "group") throw new VaultError("导出范围不正确");
+  if (options.scope === "group" && !options.groupId) throw new VaultError("按分组导出需要指定分组");
+  if (options.encrypt && options.format !== "hivemos") {
+    throw new VaultError("只有 HiveMos 格式支持口令加密");
+  }
+  if (options.encrypt && (!options.password || options.password.length < 8)) {
+    throw new VaultError("加密口令至少 8 个字符");
+  }
+  assertVaultKey(env);
+
+  const names = await groupNameMap(db);
+  const all = await listTotpEntries(db);
+  const rows =
+    options.scope === "group" ? all.filter((row) => row.group_id === options.groupId) : all;
+  if (rows.length === 0) throw new VaultError("没有可导出的验证码条目", 404);
+
+  // 一次解密成中间结构，三种格式都从它生成。
+  const entries: Array<{
+    issuer: string;
+    account: string;
+    secret: string;
+    algorithm: string;
+    digits: number;
+    period: number;
+    icon: string | null;
+    note: string;
+    groupId: string | null;
+    group: string | null;
+    aiRead: boolean;
+  }> = [];
+  for (const row of rows) {
+    entries.push({
+      issuer: row.issuer,
+      account: row.account,
+      secret: await openSecret(env, row.secret_enc),
+      algorithm: storedAlgorithm(row),
+      digits: row.digits,
+      period: row.period,
+      icon: row.icon,
+      note: row.note,
+      groupId: row.group_id,
+      group: row.group_id ? names.get(row.group_id) ?? null : null,
+      aiRead: row.ai_read !== 0,
+    });
+  }
+
+  let content: string;
+  if (options.format === "otpauth") {
+    content =
+      entries
+        .map((entry) =>
+          buildOtpauthUri({
+            issuer: entry.issuer,
+            account: entry.account,
+            secret: entry.secret,
+            algorithm: entry.algorithm,
+            digits: entry.digits,
+            period: entry.period,
+          }),
+        )
+        .join("\n") + "\n";
+  } else if (options.format === "aegis") {
+    // Aegis 明文导出结构：db.entries 里每条的 info 带密钥与参数，groups
+    // 用 uuid 名单。uuid 每次导出随机生成，不影响导入。
+    const groupUuids = new Map<string, string>();
+    const groups: Array<{ uuid: string; name: string }> = [];
+    for (const entry of entries) {
+      if (!entry.group || groupUuids.has(entry.group)) continue;
+      const uuid = crypto.randomUUID();
+      groupUuids.set(entry.group, uuid);
+      groups.push({ uuid, name: entry.group });
+    }
+    const aegisEntries = entries.map((entry) => {
+      const groupUuid = entry.group ? groupUuids.get(entry.group) : null;
+      return {
+        type: "totp",
+        uuid: crypto.randomUUID(),
+        name: entry.account,
+        issuer: entry.issuer,
+        note: entry.note,
+        icon: entry.icon,
+        info: {
+          secret: entry.secret,
+          algo: entry.algorithm,
+          digits: entry.digits,
+          period: entry.period,
+        },
+        groups: groupUuid ? [groupUuid] : [],
+      };
+    });
+    content =
+      JSON.stringify(
+        {
+          version: 1,
+          header: { slots: null, params: null },
+          db: { version: 1, entries: aegisEntries, groups },
+        },
+        null,
+        2,
+      ) + "\n";
+  } else {
+    const payload: JsonRecord = {
+      app: "hivemos",
+      kind: "totp-export",
+      version: 1,
+      exported_at: now,
+      entries: entries.map((entry) => ({
+        issuer: entry.issuer,
+        account: entry.account,
+        secret: entry.secret,
+        algorithm: entry.algorithm,
+        digits: entry.digits,
+        period: entry.period,
+        icon: entry.icon,
+        note: entry.note,
+        group: entry.group,
+        ai_read: entry.aiRead,
+      })),
+    };
+    const output = options.encrypt ? await encryptExport(payload, options.password ?? "", now) : payload;
+    content = JSON.stringify(output, null, 2) + "\n";
+  }
+
+  return { filename: exportFilename(options.format, now), content, count: entries.length };
 }

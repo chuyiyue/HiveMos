@@ -7,7 +7,17 @@
 // list carries public fields only, live codes come from /codes, and revealing
 // a secret goes through reveal (kind=totp) with the same audit row.
 
-import { isCrossSite, json, readJsonLimited } from "./http";
+import { isCrossSite, json, readJsonLimited, rejectsSensitiveWrite } from "./http";
+import { verifyPassword } from "./auth";
+import {
+  accountPasswordLimited,
+  clearAccountPasswordFailures,
+  findUserRecordById,
+  loginRetryAfterSeconds,
+  recordAccountPasswordFailure,
+} from "./accounts";
+import { prepare } from "./registry";
+import { requireAdminUser } from "./session";
 import type { Env, WaitCtx } from "./env";
 import {
   VaultError,
@@ -28,6 +38,7 @@ import {
   listEntries,
   listGateways,
   listGroups,
+  newId,
   updateGroup,
   revealSecret,
   updateEmail,
@@ -36,8 +47,11 @@ import {
   vaultKey,
 } from "./vault";
 import {
+  assertVaultKey,
   confirmTotpImport,
   createTotpEntry,
+  exportTotpEntries,
+  type TotpExportFormat,
   deleteTotpEntry,
   listTotpCodes,
   listTotpEntries,
@@ -77,6 +91,8 @@ export async function handleVaultRequest(request: Request, env: Env, ctx: WaitCt
     // 必须排在 :id 正则前面，否则 /import/preview 会被当成条目编号。
     if (path === "/api/vault/totp/import/preview") return await totpImportPreview(request, env);
     if (path === "/api/vault/totp/import/confirm") return await totpImportConfirm(request, env);
+    // 导出要重验当前密码，单独一段，不归 :id 正则。
+    if (path === "/api/vault/totp/export") return await totpExport(request, env);
     const totpOne = /^\/api\/vault\/totp\/([A-Za-z0-9_-]+)$/.exec(path);
     if (totpOne && totpOne[1]) return await totpOneHandler(request, env, totpOne[1]);
     return null;
@@ -459,4 +475,103 @@ async function totpOneHandler(request: Request, env: Env, id: string): Promise<R
     return json({ ok: true, entry: totpPublic(deleted) });
   }
   return json({ ok: false, error: "方法不允许" }, 405, { allow: "PATCH, DELETE" });
+}
+
+// ---- 验证码导出 -------------------------------------------------------------
+
+// 导出是敏感动作：面板要求重输当前密码，和登录/改进程共用同一套
+// login:account 失败预算（被盗会话不能在这里无限试口令）。
+
+type PasswordCheck = "ok" | "bad" | "limited" | "missing";
+
+async function checkCurrentPassword(env: Env, userId: string, password: string): Promise<PasswordCheck> {
+  const now = Date.now();
+  if (await accountPasswordLimited(env.DB, userId, now)) return "limited";
+  const record = await findUserRecordById(env.DB, userId);
+  if (!record) return "missing";
+  if (!(await verifyPassword(password, record.password_hash))) {
+    await recordAccountPasswordFailure(env.DB, userId, now);
+    return "bad";
+  }
+  await clearAccountPasswordFailures(env.DB, userId, now);
+  return "ok";
+}
+
+function passwordCheckResponse(status: Exclude<PasswordCheck, "ok">): Response {
+  if (status === "limited") {
+    return json({ ok: false, error: "尝试过多，请稍后再试" }, 429, {
+      "retry-after": String(loginRetryAfterSeconds(Date.now())),
+    });
+  }
+  if (status === "missing") return json({ ok: false, error: "未登录" }, 401);
+  return json({ ok: false, error: "当前密码不正确" }, 401);
+}
+
+async function totpExport(request: Request, env: Env): Promise<Response> {
+  if (request.method.toUpperCase() !== "POST") {
+    return json({ ok: false, error: "方法不允许" }, 405, { allow: "POST" });
+  }
+  const user = await requireAdminUser(request, env);
+  if (user instanceof Response) return user;
+  if (rejectsSensitiveWrite(request)) return json({ ok: false, error: "跨站请求被拒绝" }, 403);
+  const body = await readBody(request);
+  if (body instanceof Response) return body;
+
+  const currentPassword =
+    typeof body["currentPassword"] === "string"
+      ? body["currentPassword"]
+      : typeof body["current_password"] === "string"
+        ? body["current_password"]
+        : "";
+  if (!currentPassword) return json({ ok: false, error: "请填写当前密码" }, 400);
+  if (currentPassword.length > 256) {
+    return json({ ok: false, error: "当前密码需要 1 到 256 个字符" }, 400);
+  }
+  const check = await checkCurrentPassword(env, user.id, currentPassword);
+  if (check !== "ok") return passwordCheckResponse(check);
+
+  const scopeValue = body["scope"];
+  if (scopeValue !== undefined && scopeValue !== "all" && scopeValue !== "group") {
+    return json({ ok: false, error: "导出范围只能是 all 或 group" }, 400);
+  }
+  const scope: "all" | "group" = scopeValue === "group" ? "group" : "all";
+  const groupId = typeof body["group_id"] === "string" && body["group_id"] ? body["group_id"] : null;
+  if (scope === "group" && !groupId) return json({ ok: false, error: "请选择分组" }, 400);
+
+  const formatValue = body["format"] === undefined ? "hivemos" : body["format"];
+  if (formatValue !== "hivemos" && formatValue !== "aegis" && formatValue !== "otpauth") {
+    return json({ ok: false, error: "导出格式只支持 hivemos、aegis、otpauth" }, 400);
+  }
+  const format = formatValue as TotpExportFormat;
+  const encrypt = body["encrypt"] === true || body["encrypt"] === 1 || body["encrypt"] === "true";
+  const password = typeof body["password"] === "string" ? body["password"] : null;
+  if (encrypt && format !== "hivemos") {
+    return json({ ok: false, error: "只有 HiveMos 格式支持口令加密" }, 400);
+  }
+  if (encrypt && (!password || password.length < 8)) {
+    return json({ ok: false, error: "加密口令至少 8 个字符" }, 400);
+  }
+
+  const now = Date.now();
+  // 先确认 VAULT_KEY 可用再写审计，避免必然失败的导出也留一条“导出”记录。
+  assertVaultKey(env);
+  await prepare(
+    env.DB,
+    "INSERT INTO vault_access_log (id, target_kind, target_id, action, actor, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+    [newId("va"), "totp", scope === "group" ? groupId : "all", "export", null, now],
+  ).run();
+  const result = await exportTotpEntries(
+    env.DB,
+    env,
+    { scope, groupId, format, encrypt, password },
+    now,
+  );
+  await logOp(env.DB, {
+    actor: await panelActor(request, env),
+    module: "保险库",
+    action: "导出",
+    targetName: scope === "group" ? "验证码（分组）" : "验证码（全部）",
+    text: `导出了 ${result.count} 条验证码（${format}${encrypt ? "，口令加密" : ""}）`,
+  });
+  return json({ ok: true, filename: result.filename, content: result.content });
 }

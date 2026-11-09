@@ -17,7 +17,7 @@ const OUT = "/tmp/hivemos-backup-dryrun";
 const NOW = 1794096000000; // 2026-11-08T00:00:00Z，固定值让输出可复现
 
 const SEALED = "enc1:ZmFrZS1pdi0xMjM0.NGFiY2RlZmdoaWprbG1ub3A"; // 演示用密文
-const WRONG_PLAINTEXT = ["AGENT-TOKEN-PLAINTEXT", "hunter2", "ssh-plaintext-pass"];
+const WRONG_PLAINTEXT = ["AGENT-TOKEN-PLAINTEXT", "hunter2", "ssh-plaintext-pass", "JBSWY3DPEHPK3PXP"];
 
 const fixtures = {
   agents: [
@@ -131,6 +131,11 @@ const fixtures = {
     { id: "em_1", address: "royecc@outlook.com", purpose: "主邮箱", portal: "Outlook", note: "", created_at: 1793000000000, updated_at: 1793000000000 },
   ],
   vault_groups: [{ id: "vg_1", name: "模型", created_at: 1793000000000 }],
+  // 验证码条目：只看密文与参数，secret_hash 不在导出白名单里。
+  vault_totp: [
+    { id: "totp_1", issuer: "GitHub", account: "royecc", secret_enc: SEALED, secret_hash: "a".repeat(64), algorithm: "SHA1", digits: 6, period: 30, icon: "github", note: "主账号", group_id: "vg_1", ai_read: 1, created_at: 1793000000000, updated_at: 1793000000000 },
+    { id: "totp_2", issuer: "Microsoft", account: "me@outlook.com", secret_enc: SEALED, secret_hash: "b".repeat(64), algorithm: "SHA256", digits: 8, period: 60, icon: null, note: "", group_id: null, ai_read: 0, created_at: 1793100000000, updated_at: 1793100000000 },
+  ],
   schema_meta: [
     { key: "sidebar_pin_limit", value: "5" },
     { key: "cron_interval_hours", value: "6" },
@@ -216,6 +221,8 @@ const SECRET_KEYS = new Set([
   "token_hash",
   "totp_secret",
   "totp_pending_secret",
+  "secret_enc",
+  "secret_hash",
 ]);
 
 function scanSecrets(value, path, problems) {
@@ -269,6 +276,22 @@ const zipName = "hivemos-backup-20261108-000000.zip";
 writeFileSync(join(OUT, zipName), zip);
 
 const listing = walk(OUT).filter((path) => path !== zipName);
+
+// 验证码条目的自查：文件存在、密钥只有密文、摘要不外带。
+const totpFile = pkg.files.find((file) => file.path === "vault/totp/totp_1.json");
+if (!totpFile) problems.push("缺少 vault/totp/totp_1.json");
+else {
+  try {
+    const parsed = JSON.parse(totpFile.text);
+    if ("secret_hash" in parsed) problems.push("vault/totp 不应导出 secret_hash");
+    if (parsed.secret_enc !== SEALED) problems.push("vault/totp 的 secret_enc 不是密文原样");
+  } catch {
+    problems.push("vault/totp/totp_1.json 不是合法 JSON");
+  }
+}
+if ((pkg.manifest.counts.vault_totp ?? 0) !== 2) {
+  problems.push(`manifest 的 vault_totp 计数应为 2，实际 ${pkg.manifest.counts.vault_totp}`);
+}
 console.log(`导出包：${pkg.files.length} 个文件，源大小 ${pkg.source_bytes} 字节，zip ${zip.byteLength} 字节（store 无压缩）`);
 console.log(`manifest 计数：${JSON.stringify(pkg.manifest.counts)}`);
 console.log("\n包内文件清单：");
