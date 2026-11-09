@@ -581,14 +581,14 @@
       "<div class=\"stack\">" +
       entriesBody +
       C.section("访问记录", ACCESS ? String(ACCESS.length) + " 条" : "", accessBody) +
-      C.section("回收站", "", C.emptyState("回收站是空的", "删除的条目会在这里停留，方便核对末四位")) +
+      C.section("回收站", "", C.emptyState("回收站是空的", "")) +
       "</div>";
     var gatewayBody = gatewaysGroupedBody();
     var gatewayHtml =
       "<div class=\"stack\">" +
       gatewayBody +
-      C.section("模型路由", "", C.emptyState("还没有路由规则", "逻辑模型名映射到哪个网关的哪个模型，会列在这里")) +
-      C.section("用量", "", C.emptyState("还没有用量数据", "各网关的请求数与 token 用量会汇总到这里")) +
+      C.section("模型路由", "", C.emptyState("还没有路由规则", "")) +
+      C.section("用量", "", C.emptyState("还没有用量数据", "")) +
       "</div>";
     var emailBody = sectionBody("emails", EMAILS, "还没有邮箱", "点上方「添加邮箱」把第一个邮箱存进来", function (items) {
       return items.map(function (item) {
@@ -744,7 +744,7 @@
       "<label>名称<input name=\"name\" maxlength=\"60\" autocomplete=\"off\" value=\"" + C.escapeHtml(v.name) + "\" /></label>" +
       protoField(v.proto) +
       "<label>地址<input name=\"base\" maxlength=\"120\" autocomplete=\"off\" value=\"" + C.escapeHtml(v.base_url) + "\" /></label>" +
-      "<label>密钥<input name=\"key\" maxlength=\"200\" autocomplete=\"off\" /><p class=\"subtle field-hint\">" + (item ? "留空表示不修改" : "保存后显示在卡片上，点击即可复制") + "</p></label>" +
+      "<label>密钥<input name=\"key\" maxlength=\"200\" autocomplete=\"off\" />" + (item ? "<p class=\"subtle field-hint\">留空表示不修改</p>" : "") + "</label>" +
       "<label>分组" + C.groupSelect("group_id", GROUPS || [], v.group_id || "") + "</label>"
     );
   }
