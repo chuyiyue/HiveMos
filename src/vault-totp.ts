@@ -1210,7 +1210,7 @@ export async function exportTotpEntries(
 ): Promise<TotpExportResult> {
   if (!isExportFormat(options.format)) throw new VaultError("导出格式只支持 hivemos、aegis、otpauth");
   if (options.scope !== "all" && options.scope !== "group") throw new VaultError("导出范围不正确");
-  if (options.scope === "group" && !options.groupId) throw new VaultError("按分组导出需要指定分组");
+  // scope=group 且 groupId 为 null 表示只导未分组条目（面板 __none__ 口径）
   if (options.encrypt && options.format !== "hivemos") {
     throw new VaultError("只有 HiveMos 格式支持口令加密");
   }

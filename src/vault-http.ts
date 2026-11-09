@@ -536,7 +536,6 @@ async function totpExport(request: Request, env: Env): Promise<Response> {
   }
   const scope: "all" | "group" = scopeValue === "group" ? "group" : "all";
   const groupId = typeof body["group_id"] === "string" && body["group_id"] ? body["group_id"] : null;
-  if (scope === "group" && !groupId) return json({ ok: false, error: "请选择分组" }, 400);
 
   const formatValue = body["format"] === undefined ? "hivemos" : body["format"];
   if (formatValue !== "hivemos" && formatValue !== "aegis" && formatValue !== "otpauth") {
