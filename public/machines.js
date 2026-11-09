@@ -1,4 +1,4 @@
-/* 云计算资源四页签（服务器 / 云主机 / Workers / 网络节点）。前三页数据走 /api/machines。
+/* 云计算资源四页签（服务器 / 云主机 / 代理 / 边缘计算）。前三页数据走 /api/machines。
    状态、最近心跳是运行态字段（由 Agent 经 MCP 上报），表单里不出现；
    绑定是普通文本字段，随添加/编辑一起保存。
    二期接入：服务器改为极简录入（IP、用户名、密码或密钥二选一、备注），
@@ -565,7 +565,7 @@
       "</div>";
     var workerHtml =
       "<div class=\"stack\">" +
-      listSection("worker", "Workers", "个") +
+      listSection("worker", "边缘计算", "个") +
       "</div>";
     var nodesHtml = "<div class=\"stack\">" + nodesPanel() + "</div>";
     var head =
@@ -576,12 +576,12 @@
       '<button class="page-tab" type="button" role="tab" data-tab="hosts" aria-selected="' +
       (activeTab === "hosts" ? "true" : "false") +
       '">云主机</button>' +
-      '<button class="page-tab" type="button" role="tab" data-tab="workers" aria-selected="' +
-      (activeTab === "workers" ? "true" : "false") +
-      '">Workers</button>' +
       '<button class="page-tab" type="button" role="tab" data-tab="nodes" aria-selected="' +
       (activeTab === "nodes" ? "true" : "false") +
-      '">网络节点</button>' +
+      '">代理</button>' +
+      '<button class="page-tab" type="button" role="tab" data-tab="workers" aria-selected="' +
+      (activeTab === "workers" ? "true" : "false") +
+      '">边缘计算</button>' +
       "</div>" +
       '<div class="page-head-actions">' +
       (activeTab === "nodes"
@@ -614,7 +614,7 @@
       state.nodes = res.data.nodes || [];
       state.nodesError = "";
     } else {
-      state.nodesError = (res && res.data && res.data.error) || "网络节点读取失败";
+      state.nodesError = (res && res.data && res.data.error) || "代理读取失败";
     }
   }
 
@@ -646,7 +646,7 @@
       .catch(function () {
         state.loaded = true;
         state.loadError = "云主机数据读取失败";
-        if (!state.nodesLoaded) state.nodesError = "网络节点读取失败";
+        if (!state.nodesLoaded) state.nodesError = "代理读取失败";
         state.nodesLoaded = true;
         render();
       });
@@ -2551,13 +2551,13 @@
   }
 
   function nodesPanel() {
-    if (!state.nodesLoaded) return C.section("网络节点", "", C.emptyState("正在加载", ""));
-    if (state.nodesError) return C.section("网络节点", "", '<p class="callout danger" role="alert">' + C.escapeHtml(state.nodesError) + "</p>");
+    if (!state.nodesLoaded) return C.section("代理", "", C.emptyState("正在加载", ""));
+    if (state.nodesError) return C.section("代理", "", '<p class="callout danger" role="alert">' + C.escapeHtml(state.nodesError) + "</p>");
     var known = {};
     state.subscriptions.forEach(function (sub) { known[sub.id] = true; });
     var manual = state.nodes.filter(function (node) { return !node.subscription_id || !known[node.subscription_id]; });
     if (!state.subscriptions.length && !manual.length) {
-      return C.section("网络节点", "", C.emptyState("暂无内容", "点上方按钮添加"));
+      return C.section("代理", "", C.emptyState("暂无内容", "点上方按钮添加"));
     }
     var html = state.subscriptions.map(subscriptionSection).join("");
     if (manual.length) html += C.section("手动导入", manual.length + " 个", C.cardList(manual.map(nodeCard).join("")));
@@ -2568,14 +2568,14 @@
     return api("GET", "/api/nodes")
       .then(function (res) {
         if (!res.data || !res.data.ok) {
-          C.toast((res.data && res.data.error) || "网络节点读取失败", "danger");
+          C.toast((res.data && res.data.error) || "代理读取失败", "danger");
           return;
         }
         applyNodesPayload(res);
         render();
       })
       .catch(function () {
-        C.toast("网络节点读取失败", "danger");
+        C.toast("代理读取失败", "danger");
       });
   }
 
