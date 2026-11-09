@@ -3,7 +3,8 @@
 // pass the cross-site check here, same as memory-http. List responses only
 // ever carry the tail of a secret, or smtp_secret_set for a mailbox SMTP
 // password. Plaintext leaves through POST /api/vault/reveal, which writes
-// an access-log row. The TOTP tab (阶段 1/3/4) follows the same rules: its
+// an access-log row (and, after that gate, a best-effort oplog entry for the
+// system log's vault board). The TOTP tab (阶段 1/3/4) follows the same rules: its
 // list carries public fields only, live codes come from /codes, and revealing
 // a secret goes through reveal (kind=totp) with the same audit row.
 
@@ -33,7 +34,6 @@ import {
   entryPublic,
   gatewayPublic,
   groupPublic,
-  listAccessLog,
   listEmails,
   listEntries,
   listGateways,
@@ -83,7 +83,6 @@ export async function handleVaultRequest(request: Request, env: Env, ctx: WaitCt
     const groupOne = /^\/api\/vault\/groups\/([A-Za-z0-9_-]+)$/.exec(path);
     if (groupOne && groupOne[1]) return await groupOneHandler(request, env, groupOne[1]);
     if (path === "/api/vault/reveal") return await reveal(request, env);
-    if (path === "/api/vault/access-log") return await accessLog(request, env);
     // 验证码条目。codes 与 future import/export 路由必须排在 :id 正则前面。
     if (path === "/api/vault/totp") return await totpEntries(request, env);
     if (path === "/api/vault/totp/codes") return await totpCodes(request, env);
@@ -343,28 +342,13 @@ async function reveal(request: Request, env: Env): Promise<Response> {
   }
   const body = await readBody(request);
   if (body instanceof Response) return body;
-  const result = await revealSecret(env.DB, env, body, Date.now());
-  return json({ ok: true, reveal: result });
-}
-
-async function accessLog(request: Request, env: Env): Promise<Response> {
-  if (request.method.toUpperCase() !== "GET") {
-    return json({ ok: false, error: "方法不允许" }, 405, { allow: "GET" });
-  }
-  const rows = await listAccessLog(env.DB, 100);
-  return json({
-    ok: true,
-    access_log: rows.map((row) => ({
-      id: row.id,
-      target_kind: row.target_kind,
-      target_id: row.target_id,
-      target_name: row.target_name,
-      action: row.action,
-      // NULL = 面板操作；MCP 取码（阶段 6）才填 Agent 名。
-      actor: row.actor ?? null,
-      created_at: row.created_at,
-    })),
+  const result = await revealSecret(env.DB, env, body, Date.now(), {
+    panel: await panelActor(request, env),
+    // 面板路径没有 Agent 归属；阶段 6 的 MCP 调用会把名字填在这里
+    // （同时落进 vault_access_log.actor 和 oplog）。
+    agent: null,
   });
+  return json({ ok: true, reveal: result });
 }
 
 // ---- 验证码（TOTP） ---------------------------------------------------------
@@ -552,12 +536,27 @@ async function totpExport(request: Request, env: Env): Promise<Response> {
   }
 
   const now = Date.now();
+  // 日志的目标名：scope=group 时取分组名（分组刚被删就用「未知分组」兜底）
+  // scope=group 且 group_id 为空是面板的「未分组」口径。
+  let exportLabel = "全部";
+  let exportTargetId: string | null = null;
+  let exportTargetName = "验证码（全部）";
+  if (scope === "group") {
+    exportTargetId = groupId;
+    const groupRow = groupId
+      ? await prepare(env.DB, "SELECT name FROM vault_groups WHERE id = ?", [groupId]).first<{ name: string }>()
+      : null;
+    exportLabel = groupId ? groupRow?.name ?? "未知分组" : "未分组";
+    exportTargetName = `验证码（${exportLabel}）`;
+  }
   // 先确认 VAULT_KEY 可用再写审计，避免必然失败的导出也留一条“导出”记录。
+  // target_id 是 NOT NULL：未分组导出（面板 __none__ 口径）用 "__none__" 占位，
+  // 与 vault-totp.js 的分组筛选值一致，避免审计门本身报 NOT NULL 而失败。
   assertVaultKey(env);
   await prepare(
     env.DB,
     "INSERT INTO vault_access_log (id, target_kind, target_id, action, actor, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-    [newId("va"), "totp", scope === "group" ? groupId : "all", "export", null, now],
+    [newId("va"), "totp", scope === "group" ? groupId ?? "__none__" : "all", "export", null, now],
   ).run();
   const result = await exportTotpEntries(
     env.DB,
@@ -565,12 +564,16 @@ async function totpExport(request: Request, env: Env): Promise<Response> {
     { scope, groupId, format, encrypt, password },
     now,
   );
+  // 顺序与失败语义：审计门在上（写不进就不生成明文），oplog 写在门之后且
+  // 只有拿到 result 才知道条数；它只是统一展示面，写失败（logOp 自吞）不
+  // 阻断本次导出。审计事实源始终是 vault_access_log。
   await logOp(env.DB, {
     actor: await panelActor(request, env),
     module: "保险库",
     action: "导出",
-    targetName: scope === "group" ? "验证码（分组）" : "验证码（全部）",
-    text: `导出了 ${result.count} 条验证码（${format}${encrypt ? "，口令加密" : ""}）`,
+    targetId: exportTargetId,
+    targetName: exportTargetName,
+    text: `导出验证码 · ${exportLabel}（${result.count} 条）`,
   });
   return json({ ok: true, filename: result.filename, content: result.content });
 }

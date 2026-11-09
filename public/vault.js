@@ -12,13 +12,11 @@
   var GROUPS = null;
   var GATEWAYS = null;
   var EMAILS = null;
-  var ACCESS = null;
   var loadErrors = {};
   // 网关密钥明文缓存：ok 后不再重复 reveal，避免每次重绘都多写一条访问记录。
   var gatewayKeys = {};
   // 邮箱 SMTP 密码同样缓存，管理弹窗重复打开不再多写访问记录。
   var emailSecrets = {};
-  var accessRefreshTimer = null;
 
   function api(method, url, body) {
     var headers = { accept: "application/json" };
@@ -101,21 +99,6 @@
     });
   }
 
-  function loadAccess() {
-    return api("GET", "/api/vault/access-log").then(function (result) {
-      if (result.data && result.data.ok && Array.isArray(result.data.access_log)) {
-        ACCESS = result.data.access_log;
-        delete loadErrors.access;
-      } else {
-        loadErrors.access = (result.data && result.data.error) || "访问记录加载失败";
-      }
-      render();
-    }).catch(function () {
-      loadErrors.access = "访问记录加载失败";
-      render();
-    });
-  }
-
   function sectionBody(kind, items, emptyTitle, emptyText, renderItems) {
     if (loadErrors[kind]) return C.emptyState("加载失败", loadErrors[kind]);
     if (!items) return C.emptyState("正在加载", "马上就好");
@@ -173,7 +156,6 @@
       if (typeof value === "string") {
         gatewayKeys[id] = { status: "ok", value: value };
         paintGatewayKey(id);
-        refreshAccessSoon();
       } else {
         gatewayKeys[id] = { status: "error", value: "" };
         paintGatewayKey(id);
@@ -209,14 +191,6 @@
     paintGatewayKey(id);
   }
 
-  function refreshAccessSoon() {
-    if (accessRefreshTimer) clearTimeout(accessRefreshTimer);
-    accessRefreshTimer = setTimeout(function () {
-      accessRefreshTimer = null;
-      loadAccess();
-    }, 80);
-  }
-
   // 密码不预取。点「显示」才 reveal，成功后换成 copy-text；失败只提示，对话框其余部分不动。
   function entryPasswordFact(item) {
     var id = C.escapeHtml(item.id);
@@ -244,7 +218,6 @@
         return;
       }
       node.innerHTML = value ? copyValueHtml(value) : "已保存";
-      loadAccess();
     }).catch(function () {
       if (!node.isConnected) return;
       node.removeAttribute("data-revealing");
@@ -367,7 +340,6 @@
       if (typeof value === "string") {
         emailSecrets[id] = { status: "ok", value: value };
         paintEmailSecret(id);
-        refreshAccessSoon();
       } else {
         emailSecrets[id] = { status: "error", value: "" };
         paintEmailSecret(id);
@@ -565,22 +537,9 @@
 
   function render() {
     var entriesBody = entriesGroupedBody();
-    var accessBody = sectionBody("access", ACCESS, "还没有访问记录", "查看密码、网关密钥或邮箱 SMTP 密码后会在这里留下一条", function (items) {
-      return items.map(function (row) {
-        var what = row.target_kind === "entry" ? "查看密码" : row.target_kind === "email" ? "查看 SMTP 密码" : "查看密钥";
-        return C.record({
-          id: row.id,
-          icon: "eye",
-          title: row.target_name || row.target_id,
-          lede: what,
-          facts: [["时间", C.escapeHtml(C.formatMinute(row.created_at))]],
-        });
-      }).join("");
-    });
     var vaultHtml =
       "<div class=\"stack\">" +
       entriesBody +
-      C.section("访问记录", ACCESS ? String(ACCESS.length) + " 条" : "", accessBody) +
       C.section("回收站", "", C.emptyState("回收站是空的", "")) +
       "</div>";
     var gatewayBody = gatewaysGroupedBody();
@@ -926,7 +885,6 @@
           ["更新时间", C.escapeHtml(C.formatMinute(item.updated_at))],
         ],
       }));
-      loadAccess();
     }).catch(function () {
       ctrl.setBody(C.emptyState("读取失败", "网络异常，请重试"));
     });
@@ -1023,5 +981,4 @@
   loadEntries();
   loadGateways();
   loadEmails();
-  loadAccess();
 })();
