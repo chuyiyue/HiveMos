@@ -255,7 +255,7 @@
       '<input data-field="profileInput" name="username" type="text" maxlength="39" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="例如 octocat，可留空" value="' +
       C.escapeHtml(state.profileInput) +
       '" />' +
-      '<p class="subtle field-hint">仅用于显示与 GitHub 头像，不用于登录；留空则清除</p></label>' +
+      '<p class="subtle field-hint">仅用于显示，不用于登录；留空则清除</p></label>' +
       fieldError("profile-error", state.profileError) +
       '<div class="row-actions"><button type="submit"' +
       (state.busy ? " disabled" : "") +
@@ -357,7 +357,6 @@
   function codesBlock() {
     return (
       '<div class="inline-panel"><h3>保存恢复码</h3>' +
-      '<p class="subtle">每个恢复码只能使用一次。关闭后无法再次查看</p>' +
       '<p class="callout warn">恢复码只显示这一次。请保存到安全的地方；每个码只能用一次</p>' +
       '<pre class="recovery-codes">' +
       C.escapeHtml(state.recoveryCodes.join("\n")) +
@@ -374,9 +373,8 @@
     return (
       '<div class="inline-panel"><h3>' +
       C.escapeHtml(title) +
-      '</h3><p class="subtle">' +
-      C.escapeHtml(text) +
-      "</p>" +
+      "</h3>" +
+      (text ? '<p class="subtle">' + C.escapeHtml(text) + "</p>" : "") +
       "<label>当前密码" +
       '<input data-field="totpPassword" type="password" autocomplete="current-password" maxlength="256" value="' +
       C.escapeHtml(state.totpPassword) +
@@ -397,7 +395,7 @@
     if (state.totpPanel === "codes") return codesBlock();
     if (state.totpPanel === "setup") {
       return (
-        '<div class="inline-panel"><p class="subtle">在身份验证器里添加账户，然后输入它显示的 6 位验证码。若无法扫码，请手动输入下面的密钥</p>' +
+        '<div class="inline-panel"><p class="subtle">在身份验证器里添加账户，然后输入它显示的 6 位验证码</p>' +
         '<p class="subtle">密钥</p>' +
         secretLine(state.totpSecret) +
         '<p class="subtle">或使用这个链接添加账户</p>' +
@@ -414,12 +412,12 @@
       );
     }
     if (state.totpPanel === "disable") {
-      return factorPanel("关闭两步验证", "需要当前密码，再加一个验证器验证码或未使用的恢复码", "关闭两步验证");
+      return factorPanel("关闭两步验证", "", "关闭两步验证");
     }
     if (state.totpPanel === "recovery") {
       return factorPanel(
         "重新生成恢复码",
-        "需要当前密码，再加一个验证器验证码或未使用的恢复码。旧恢复码会立即作废",
+        "旧恢复码会立即作废",
         "生成新的恢复码",
       );
     }
@@ -696,11 +694,11 @@
       '<form id="features-form" class="stack" novalidate>' +
       '<div class="feature-cols">' +
       '<div class="stack feature-item"><h3>定时任务频率</h3>' +
-      '<p class="subtle">控制日历镜像同步、连接状态检查、工具快照刷新与机器保活的实际执行间隔，系统每小时检查一次，未到间隔不执行</p>' +
+      '<p class="subtle">系统每小时检查一次，未到间隔不执行</p>' +
       cronSegment() +
       "</div>" +
       '<div class="stack feature-item"><h3>侧边栏自动展示上限</h3>' +
-      '<p class="subtle">侧边栏自动填充的 Agent 数量上限，固定的 Agent 不受影响，范围 1 到 20</p>' +
+      '<p class="subtle">固定的 Agent 不受影响，范围 1 到 20</p>' +
       '<label>展示上限<input data-field="pinLimitInput" name="pinLimitInput" type="number" min="1" max="20" step="1" inputmode="numeric" value="' +
       C.escapeHtml(state.pinLimitInput) +
       '" /></label>' +
@@ -895,7 +893,6 @@
     var tokenPlaceholder = target && target.has_token ? "留空表示不修改" : "粘贴访问令牌";
     return (
       '<div class="stack feature-item"><h3>GitHub 仓库</h3>' +
-      '<p class="subtle">备份会作为提交推送到仓库的指定分支</p>' +
       '<label>仓库 owner<input data-field="ghOwner" name="ghOwner" type="text" maxlength="100" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="例如 octocat" value="' +
       C.escapeHtml(state.ghOwner) +
       '" /></label>' +
@@ -936,7 +933,6 @@
     var passwordPlaceholder = target && target.has_password ? "留空表示不修改" : "粘贴密码";
     return (
       '<div class="stack feature-item"><h3>WebDAV 网盘</h3>' +
-      '<p class="subtle">备份会打包成 zip 上传到指定目录</p>' +
       '<label>服务器地址<input data-field="wdBase" name="wdBase" type="url" maxlength="400" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="https://example.com/dav" value="' +
       C.escapeHtml(state.wdBase) +
       '" /></label>' +
@@ -1038,7 +1034,7 @@
     return (
       '<form id="backup-auto-form" class="stack inline-panel" novalidate>' +
       "<h3>自动备份</h3>" +
-      '<p class="subtle">自动备份跟随「定时任务频率」，距上次成功备份达到间隔后在下一次定时任务里执行</p>' +
+      '<p class="subtle">自动备份跟随「定时任务频率」，达到间隔后在下一次定时任务里执行</p>' +
       '<div class="perm-row"><div class="perm-meta"><strong>自动备份</strong><span class="subtle">' +
       (state.backupAuto ? "已开启" : "已关闭") +
       '</span></div><button type="button" class="switch" role="switch" aria-checked="' +

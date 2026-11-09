@@ -297,7 +297,7 @@
     var restBody;
     if (rest.length) restBody = memoryCardsHtml(rest);
     else if (memTagFilter) restBody = C.emptyState("没有符合筛选的记忆", "换个标签看看");
-    else restBody = C.emptyState("没有未置顶的记忆", "取消置顶后会列在这里");
+    else restBody = C.emptyState("没有未置顶的记忆", "");
     html += C.section("记忆", countHint(rest.length), toolbar + restBody);
     return html;
   }
@@ -306,7 +306,7 @@
     var memoryHtml =
       "<div class=\"stack\">" +
       memorySectionsHtml() +
-      C.section("冲突", "", C.emptyState("没有待合并的记忆", "同一作用域发生冲突时会列在这里")) +
+      C.section("冲突", "", C.emptyState("没有待合并的记忆", "")) +
       "<div id=\"memory-confirm\"></div>" +
       "</div>";
     var soulCards = SOULS.map(function (item) {
@@ -327,7 +327,7 @@
       });
     }).join("");
     var soulBody = !soulsLoaded
-      ? C.emptyState("正在加载 Soul", "马上就好")
+      ? C.emptyState("正在加载 Soul", "")
       : SOULS.length
         ? C.cardList(soulCards)
         : C.emptyState("还没有 Soul", "给 Agent 添加人格定义后会列在这里");
@@ -353,7 +353,6 @@
       "</div></div>";
     C.mount(
       C.layout(
-        "",
         head +
           "<div data-panel=\"memory\"" + (activeTab === "memory" ? "" : " hidden") + ">" + memoryHtml + "</div>" +
           "<div data-panel=\"soul\"" + (activeTab === "soul" ? "" : " hidden") + ">" + soulHtml + "</div>"

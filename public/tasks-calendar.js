@@ -516,7 +516,7 @@
 
   function feedsHtml() {
     var addButton = '<button type="button" class="secondary" data-action="add-feed">新建订阅</button>';
-    if (!cal.feeds.length) return C.section("订阅链接", "给手机或电脑日历用的只读订阅地址", C.emptyState("还没有订阅链接", "新建一条后，把地址填进设备日历的订阅日历里就能看到全部日程"), addButton);
+    if (!cal.feeds.length) return C.section("订阅链接", "", C.emptyState("还没有订阅链接", "新建一条后，把地址填进设备日历的订阅日历里就能看到全部日程"), addButton);
     var rows = cal.feeds.map(function (feed) {
       var scope = feed.calendar_id ? (calById(feed.calendar_id) ? calById(feed.calendar_id).name : "指定日历") : "全部日历";
       return C.record({
@@ -843,7 +843,7 @@
       bodyHtml:
         "<label>设备名称<input name=\"name\" maxlength=\"80\" autocomplete=\"off\" placeholder=\"例如 我的 iPhone\" /></label>" +
         "<label>范围<select name=\"calendar_id\">" + options + "</select></label>" +
-        "<p class=\"subtle\">链接里的令牌就是凭证，只在创建时显示一次；哪台设备丢了就吊销哪条。刷新间隔由设备日历决定，不是实时同步</p>",
+        "<p class=\"subtle\">链接里的令牌就是凭证，只在创建时显示一次；哪台设备丢了就吊销哪条</p>",
       submitLabel: "创建",
       onSubmit: function (c) {
         var name = val(c, "name");
@@ -926,7 +926,6 @@
 
     C.mount(
       C.layout(
-        "",
         head +
           "<div data-panel=\"tasks\"" + (activeTab === "tasks" ? "" : " hidden") + ">" + tasksHtml + "</div>" +
           "<div data-panel=\"calendar\"" + (activeTab === "calendar" ? "" : " hidden") + ">" + calendarHtml() + "</div>"

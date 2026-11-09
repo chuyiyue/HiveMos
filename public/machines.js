@@ -535,7 +535,7 @@
   }
 
   function listSection(uiKind, title, unit) {
-    if (!state.loaded) return C.section(title, "", C.emptyState("正在加载", "正在读取云主机数据"));
+    if (!state.loaded) return C.section(title, "", C.emptyState("正在加载", ""));
     if (state.loadError) return C.section(title, "", '<p class="callout danger" role="alert">' + C.escapeHtml(state.loadError) + "</p>");
     return C.groupedSections({
       groups: state.groups,
@@ -559,7 +559,7 @@
     var hostHtml =
       "<div class=\"stack\">" +
       listSection("host", "云主机", "台") +
-      C.section("已释放", "", C.emptyState("没有已释放的云主机", "释放后的实例会留在这里，直到记录被清掉")) +
+      C.section("已释放", "", C.emptyState("没有已释放的云主机", "")) +
       "</div>";
     var workerHtml =
       "<div class=\"stack\">" +
@@ -596,7 +596,6 @@
       "</div></div>";
     C.mount(
       C.layout(
-        "",
         head +
           "<div data-panel=\"servers\"" + (activeTab === "servers" ? "" : " hidden") + ">" + serverHtml + "</div>" +
           "<div data-panel=\"hosts\"" + (activeTab === "hosts" ? "" : " hidden") + ">" + hostHtml + "</div>" +
@@ -1179,7 +1178,7 @@
     var ctrl = C.openManageDialog({
       title: "端口转发",
       size: "md",
-      bodyHtml: '<div data-ports-body>' + C.emptyState("正在读取", "稍等片刻") + "</div>",
+      bodyHtml: '<div data-ports-body>' + C.emptyState("正在读取", "") + "</div>",
     });
     var bodyEl = ctrl.bodyEl.querySelector("[data-ports-body]");
     function renderPorts(data) {
@@ -1202,7 +1201,7 @@
               );
             })
             .join("")
-        : C.emptyState("还没有公开的端口", "把机器上的服务端口公开后，会生成一个公网地址");
+        : C.emptyState("还没有公开的端口", "");
       bodyEl.innerHTML =
         (data.enabled === false ? '<p class="callout danger">这台机器的公网端口功能未开启</p>' : "") +
         rows +
@@ -1306,7 +1305,7 @@
           (policy.last_result
             ? '<p class="subtle">上次检查：' + C.escapeHtml(policy.last_result) + (policy.last_checked_at ? " · " + C.escapeHtml(C.formatMinute(policy.last_checked_at) || "") : "") + "</p>"
             : "") +
-          '<p class="subtle">保活时段内机器被停机或暂停时会自动拉起；定时检查随 Cron 一起生效，目前手动同步连接时也会顺带检查一次</p>',
+          '<p class="subtle">保活时段内机器被停机或暂停时会自动拉起</p>',
         submitLabel: "保存",
         onSubmit: function (form) {
           syncWindowInputs();
@@ -1380,7 +1379,7 @@
     var ctrl = C.openManageDialog({
       title: "快照",
       size: "md",
-      bodyHtml: "<div data-snap-body>" + C.emptyState("正在读取", "稍等片刻") + "</div>",
+      bodyHtml: "<div data-snap-body>" + C.emptyState("正在读取", "") + "</div>",
     });
     var bodyEl = ctrl.bodyEl.querySelector("[data-snap-body]");
     function sourceName(snap) {
@@ -1728,12 +1727,12 @@
 
   function connDevicesHtml() {
     if (!connPanelState) return "";
-    if (connPanelState.devicesLoading && !connPanelState.devices) return C.emptyState("正在读取设备", "向服务商拉取最新列表");
+    if (connPanelState.devicesLoading && !connPanelState.devices) return C.emptyState("正在读取设备", "");
     if (connPanelState.devicesError && !(connPanelState.devices && connPanelState.devices.length)) {
       return '<p class="callout danger" role="alert">' + C.escapeHtml(connPanelState.devicesError) + "</p>";
     }
     var devices = connPanelState.devices || [];
-    if (!devices.length) return C.emptyState("服务商那边没有设备", "这个账号下还没有可接入的主机");
+    if (!devices.length) return C.emptyState("服务商那边没有设备", "");
     var pending = devices.filter(function (device) { return !device.imported; }).length;
     var rows = devices
       .map(function (device) {
@@ -1795,13 +1794,12 @@
       '<label>连接名称<input name="name" maxlength="60" autocomplete="off" value="' +
       C.escapeHtml(conn.name) +
       '" /></label>' +
-      '<p class="subtle">这个名称显示在云主机卡片的来源徽章上</p>' +
       '<div class="manage-actions"><button type="submit">保存名称</button></div>' +
       "</form>" +
       '<h3 class="manage-subhead">更新凭据</h3>' +
       '<form data-conn-cred novalidate>' +
       credentialFields(conn.provider) +
-      '<p class="subtle">填写新的配置。保存前会拉取一次设备列表，通过后才替换现有凭据</p>' +
+      '<p class="subtle">保存前会拉取一次设备列表，通过后才替换现有凭据</p>' +
       '<div class="manage-actions"><button type="submit">保存凭据</button></div>' +
       "</form>" +
       '<h3 class="manage-subhead">名下设备</h3>' +
@@ -1838,7 +1836,7 @@
       (selected ? " has-detail" : "") +
       '"><div>' +
       connCardsHtml() +
-      (selected ? "" : '<p class="subtle">点一张连接卡片，可以改名、更新凭据、接入设备，也可以测试、同步或删除</p>') +
+      (selected ? "" : "") +
       "</div>" +
       (selected ? connDetailHtml(selected) : "") +
       "</div>"
@@ -2207,7 +2205,7 @@
   function openRevealDialog(item) {
     var ctrl = C.openFormDialog({
       title: "查看 SSH 密码",
-      bodyHtml: C.emptyState("正在读取", "马上就好"),
+      bodyHtml: C.emptyState("正在读取", ""),
       submitLabel: "关闭",
       onSubmit: function (c) { c.close(); },
     });
@@ -2368,7 +2366,7 @@
       ensureWorkerStats(item);
     }
     function assetsPane(kind) {
-      pane.innerHTML = C.emptyState("正在读取", "马上就好");
+      pane.innerHTML = C.emptyState("正在读取", "");
       api("GET", "/api/machines/" + encodeURIComponent(item.id) + "/worker-assets?kind=" + kind)
         .then(function (res) {
           if (!res.data || !res.data.ok) { pane.innerHTML = C.emptyState("读取失败", (res.data && res.data.error) || "请稍后重试"); return; }
@@ -2469,7 +2467,7 @@
           });
       }
     });
-    container.innerHTML = C.emptyState("正在读取", "马上就好");
+    container.innerHTML = C.emptyState("正在读取", "");
     loadWorkers();
   }
 
@@ -2551,7 +2549,7 @@
   }
 
   function nodesPanel() {
-    if (!state.nodesLoaded) return C.section("网络节点", "", C.emptyState("正在加载", "正在读取网络节点"));
+    if (!state.nodesLoaded) return C.section("网络节点", "", C.emptyState("正在加载", ""));
     if (state.nodesError) return C.section("网络节点", "", '<p class="callout danger" role="alert">' + C.escapeHtml(state.nodesError) + "</p>");
     var known = {};
     state.subscriptions.forEach(function (sub) { known[sub.id] = true; });

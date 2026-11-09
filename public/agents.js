@@ -168,7 +168,6 @@
       "</div></div>";
     C.mount(
       C.layout(
-        "",
         head +
           '<div data-panel="agents"' +
           (state.activeTab === "agents" ? "" : " hidden") +
@@ -324,7 +323,7 @@
       bodyHtml:
         "<label>名字" +
         '<input data-field="name" name="name" maxlength="64" autocomplete="off" />' +
-        '<p class="subtle field-hint">密钥会加密保存，之后可以在卡片上点「复制密钥」随时复制</p></label>' +
+        '</label>' +
         "<label>分组" +
         C.groupSelect("group_id", state.groups, "") +
         "</label>",
@@ -364,7 +363,7 @@
         }
         state.notice = "";
         ctrl.showResult(
-          "<p>这是新 Agent 的密钥，请复制并配置到 Agent 上；之后也可以在卡片上点「复制密钥」再复制</p>" + C.copyLine(result.data.agent.token || "", "复制令牌"),
+          "<p>这是新 Agent 的密钥，请复制并配置到 Agent 上</p>" + C.copyLine(result.data.agent.token || "", "复制令牌"),
           "我已复制",
         );
       })
