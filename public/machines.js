@@ -713,7 +713,7 @@
       "<label>说明<input name=\"lede\" maxlength=\"60\" autocomplete=\"off\" placeholder=\"例如 本控制面\" value=\"" + C.escapeHtml(v.description || "") + "\" /></label>" +
       "<div class=\"auth-type\"><span>平台</span>" +
       "<div class=\"page-tabs auth-tabs\" role=\"tablist\" aria-label=\"平台\">" +
-      "<button type=\"button\" class=\"page-tab\" role=\"tab\" data-wplatform=\"cloudflare\" aria-selected=\"" + (platform === "cloudflare" ? "true" : "false") + "\"" + (item ? " disabled" : "") + ">Cloudflare Workers</button>" +
+      "<button type=\"button\" class=\"page-tab\" role=\"tab\" data-wplatform=\"cloudflare\" aria-selected=\"" + (platform === "cloudflare" ? "true" : "false") + "\"" + (item ? " disabled" : "") + ">Workers</button>" +
       "<button type=\"button\" class=\"page-tab\" role=\"tab\" data-wplatform=\"vercel\" aria-selected=\"" + (platform === "vercel" ? "true" : "false") + "\"" + (item ? " disabled" : "") + ">Vercel</button>" +
       "</div>" +
       "<input type=\"hidden\" name=\"platform\" value=\"" + platform + "\" />" +
