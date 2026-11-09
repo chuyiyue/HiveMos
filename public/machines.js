@@ -591,7 +591,7 @@
         ? '<button type="button" class="secondary" data-nhead="test-all"' + (state.nodesBusy ? " disabled" : "") + '>全部测活</button>' +
           '<button type="button" class="secondary" data-nhead="import">导入节点</button>' +
           '<button type="button" class="add-button" data-nhead="add">添加订阅</button>'
-        : (activeTab === "hosts" ? '<button type="button" class="secondary add-group-button" data-providers>服务商管理</button>' : "") +
+        : (activeTab === "hosts" ? '<button type="button" class="secondary add-group-button" data-providers>服务商</button>' : "") +
           '<button type="button" class="secondary add-group-button" data-add-group>添加分组</button>' +
           (activeTab === "servers"
             ? '<button type="button" class="add-button" data-add="server">添加服务器</button>'
