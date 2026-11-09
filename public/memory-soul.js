@@ -773,6 +773,18 @@
     return text.length > 120 ? text.slice(0, 120) + "…" : text;
   }
 
+  // 老接口回包没有 status 时按已生效处理
+  function versionStatusOf(v) {
+    return v && typeof v.status === "string" && v.status ? v.status : "active";
+  }
+
+  function versionStatusHtml(v) {
+    var status = versionStatusOf(v);
+    if (status === "pending") return C.badge("待批准", "warn");
+    if (status === "rejected") return C.badge("已拒绝", "danger");
+    return "";
+  }
+
   function rememberHistory(state) {
     soulHistoryCache[state.item.id] = {
       versions: (state.versions || []).map(function (v) { return Object.assign({}, v); }),
@@ -807,6 +819,7 @@
     var version = String(v.version);
     var current = v.version === ctx.currentVersion;
     var only = ctx.total <= 1;
+    var live = versionStatusOf(v) === "active";
     var html = "";
     if (ctx.renaming === v.version) {
       html +=
@@ -826,6 +839,10 @@
         "</div></div>";
     }
     var buttons = "";
+    if (versionStatusOf(v) === "pending") {
+      buttons += '<button type="button" data-ver-act="approve" data-version="' + version + '">批准</button>';
+      buttons += '<button type="button" class="secondary" data-ver-act="reject" data-version="' + version + '">拒绝</button>';
+    }
     if (ctx.renaming !== v.version) {
       buttons += '<button type="button" class="secondary" data-ver-act="rename" data-version="' + version + '">改名</button>';
     }
@@ -842,7 +859,7 @@
       '"' +
       (ctx.index === ctx.total - 1 ? " disabled" : "") +
       ">下移</button>";
-    if (!current) {
+    if (!current && live) {
       buttons += '<button type="button" class="secondary" data-ver-act="rollback" data-version="' + version + '">回滚到此版</button>';
     }
     if (current || only) {
@@ -868,6 +885,7 @@
       className: "soul-version",
       title: versionTitle(v),
       pill: current ? "当前版本" : "",
+      statusHtml: versionStatusHtml(v),
       lede: versionExcerpt(v.content),
       facts: facts,
       actions: versionActions(v, ctx),
@@ -1071,6 +1089,56 @@
       });
   }
 
+  function approveVersion(ctrl, state, version) {
+    if (state.busy) return;
+    state.busy = true;
+    soulApi("POST", versionPath(state.item.id, version) + "/approve")
+      .then(function (res) {
+        state.busy = false;
+        if (!ctrl.dialog.open) return;
+        if (res.status === 200 && res.data && res.data.soul) {
+          state.currentVersion = res.data.soul.version;
+          state.item = Object.assign({}, state.item, {
+            version: res.data.soul.version,
+            content: res.data.soul.content,
+            updated_at: res.data.soul.updated_at,
+          });
+          state.renaming = null;
+          state.status = { text: "已批准，当前版本是 v" + res.data.soul.version, error: false };
+          C.toast("已批准 v" + version);
+          loadSouls();
+          fetchHistory(ctrl, state);
+          return;
+        }
+        setHistoryStatus(ctrl, state, C.explain(res.data && res.data.error, "批准失败，请重试"), true);
+      })
+      .catch(function () {
+        state.busy = false;
+        setHistoryStatus(ctrl, state, "网络异常，请重试", true);
+      });
+  }
+
+  function rejectVersion(ctrl, state, version) {
+    if (state.busy) return;
+    state.busy = true;
+    soulApi("POST", versionPath(state.item.id, version) + "/reject")
+      .then(function (res) {
+        state.busy = false;
+        if (!ctrl.dialog.open) return;
+        if (res.status === 200 && res.data && res.data.ok) {
+          state.status = { text: "已拒绝 v" + version, error: false };
+          C.toast("已拒绝 v" + version);
+          fetchHistory(ctrl, state);
+          return;
+        }
+        setHistoryStatus(ctrl, state, C.explain(res.data && res.data.error, "拒绝失败，请重试"), true);
+      })
+      .catch(function () {
+        state.busy = false;
+        setHistoryStatus(ctrl, state, "网络异常，请重试", true);
+      });
+  }
+
   function deleteVersion(ctrl, state, version) {
     if (state.busy) return;
     if (state.versions && state.versions.length <= 1) {
@@ -1129,6 +1197,8 @@
     else if (act === "down") moveVersion(ctrl, state, version, "down");
     else if (act === "rollback") rollbackVersion(ctrl, state, version);
     else if (act === "delete") deleteVersion(ctrl, state, version);
+    else if (act === "approve") approveVersion(ctrl, state, version);
+    else if (act === "reject") rejectVersion(ctrl, state, version);
   }
 
   function openSoulHistory(item) {

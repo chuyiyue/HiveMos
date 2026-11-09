@@ -13,8 +13,10 @@ import {
   recordSoulRead,
   soulDetail,
   soulSummary,
+  soulVersionStatus,
   upsertSoulByName,
 } from "./soul";
+import { logOp } from "./oplog";
 import {
   CalError,
   calendarPublic,
@@ -279,7 +281,7 @@ const TOOLS = [
   },
   {
     name: "soul_get",
-    description: "按 Agent 名取 Soul 全文，返回当前版本号；传 version 可取某个历史版本。读取会记审计",
+    description: "按 Agent 名取 Soul 全文，只返回已生效的当前版本号；传 version 可取某个已生效的历史版本。读取会记审计",
     inputSchema: {
       type: "object",
       properties: {
@@ -292,12 +294,16 @@ const TOOLS = [
   },
   {
     name: "soul_update",
-    description: "写入某个 Agent 的 Soul 新版全文，版本号自动递增并留历史。该 Agent 还没有 Soul 时自动新建",
+    description: "写入自己的 Soul 新版全文。新版本先进待批准草稿，管理员在面板批准后才生效。该 Agent 还没有 Soul 时自动新建。默认只能写自己的 Soul，代写他人需要 soul_write_any 权限",
     inputSchema: {
       type: "object",
       properties: {
-        agent_name: { type: "string", description: "Agent 名" },
+        agent_name: { type: "string", description: "Agent 名，必须是令牌对应的 Agent 自己" },
         content: { type: "string", description: "Soul 全文" },
+        expected_version: {
+          type: "number",
+          description: "可选。当前生效版本号；与服务器不一致时返回 409，避免覆盖没看过的版本",
+        },
       },
       required: ["agent_name", "content"],
       additionalProperties: false,
@@ -592,9 +598,14 @@ async function callTool(request: Request, env: Env, id: unknown, params: unknown
   }
   if (name.startsWith("soul_")) {
     try {
-      return await callSoulTool(env, id, name, record as Record<string, unknown>, auth.agentId);
+      return await callSoulTool(env, id, name, record as Record<string, unknown>, auth);
     } catch (error) {
-      if (error instanceof SoulError) return toolResult(id, error.message, true);
+      // Version conflicts (expected_version or a lost UNIQUE race) keep their
+      // 409 on the wire; ordinary tool errors stay tool results as before.
+      if (error instanceof SoulError) {
+        if (error.status === 409) return rpcError(id, -32002, error.message, 409);
+        return toolResult(id, error.message, true);
+      }
       throw error;
     }
   }
@@ -646,7 +657,13 @@ function argString(args: Record<string, unknown>, key: string): string | undefin
   return typeof value === "string" ? value : undefined;
 }
 
-async function callSoulTool(env: Env, id: unknown, name: string, args: Record<string, unknown>, agentId: string): Promise<Response> {
+async function callSoulTool(
+  env: Env,
+  id: unknown,
+  name: string,
+  args: Record<string, unknown>,
+  auth: { agentId: string; agentName: string; permissions: string[] },
+): Promise<Response> {
   const now = Date.now();
   if (name === "soul_list") {
     const souls = await listSouls(env.DB);
@@ -660,8 +677,12 @@ async function callSoulTool(env: Env, id: unknown, name: string, args: Record<st
     const wanted = typeof args.version === "number" ? args.version : null;
     if (wanted !== null) {
       const versionRow = await getVersion(env.DB, row.id, wanted);
-      if (!versionRow) return toolResult(id, "这个版本不存在", true);
-      await recordSoulRead(env.DB, row, agentId, versionRow.version, now);
+      // Pending and rejected rows are drafts: an agent must never read one
+      // as if it were the persona currently in force.
+      if (!versionRow || soulVersionStatus(versionRow) !== "active") {
+        return toolResult(id, "这个版本不存在或尚未生效", true);
+      }
+      await recordSoulRead(env.DB, row, auth.agentId, versionRow.version, now);
       return toolResult(id, {
         agent_name: row.agent_name,
         version: versionRow.version,
@@ -669,11 +690,44 @@ async function callSoulTool(env: Env, id: unknown, name: string, args: Record<st
         created_at: versionRow.created_at,
       });
     }
-    await recordSoulRead(env.DB, row, agentId, row.version, now);
+    if (row.version < 1) return toolResult(id, "这个 Agent 还没有生效的 Soul，草稿待管理员批准", true);
+    await recordSoulRead(env.DB, row, auth.agentId, row.version, now);
     return toolResult(id, soulDetail(row));
   }
   if (name === "soul_update") {
-    const updated = await upsertSoulByName(env.DB, args.agent_name, args.content, agentId, "mcp", now);
+    const requested = argString(args, "agent_name");
+    if (!requested || !requested.trim()) return toolResult(id, "请提供 agent_name", true);
+    // Identity comes from the bearer, not the argument: an agent may only
+    // write its own soul unless an administrator granted soul_write_any.
+    if (requested.trim() !== auth.agentName && !auth.permissions.includes("soul_write_any")) {
+      return rpcError(id, -32003, "只能写自己的 Soul；要代写其他 Agent 的 Soul，需要 soul_write_any 权限", 403);
+    }
+    const expectedVersion = args.expected_version == null ? null : args.expected_version;
+    const updated = await upsertSoulByName(
+      env.DB,
+      args.agent_name,
+      args.content,
+      expectedVersion,
+      auth.agentId,
+      "mcp",
+      now,
+    );
+    if (updated.pending_version) {
+      await logOp(env.DB, {
+        actor: auth.agentName,
+        module: "Soul",
+        action: "草稿",
+        targetId: updated.id,
+        targetName: updated.agent_name,
+        text: `Agent ${auth.agentName} 提交了 Soul（${updated.agent_name}）的待批准草稿 v${updated.pending_version}`,
+      });
+      return toolResult(id, {
+        ...soulDetail(updated),
+        status: updated.pending_status,
+        pending_version: updated.pending_version,
+        note: "新版本已作为草稿保存，管理员批准后才会成为当前版本",
+      });
+    }
     return toolResult(id, soulDetail(updated));
   }
   return toolResult(id, "未知工具", true);
