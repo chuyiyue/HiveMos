@@ -105,8 +105,12 @@
 
   var ALERT_TONES = {
     calendar_sync: { tone: "danger", icon: "calendar", href: "tasks-calendar.html#calendar" },
+    backup_failed: { tone: "danger", icon: "settings", href: "/settings.html" },
     task_stale: { tone: "warn", icon: "tasks", href: "tasks-calendar.html#tasks" },
+    backup_never: { tone: "warn", icon: "settings", href: "/settings.html" },
+    backup_auto_invalid: { tone: "warn", icon: "settings", href: "/settings.html" },
     agent_disabled: { tone: "info", icon: "bot", href: "agents.html" },
+    backup_ok: { tone: "info", icon: "settings", href: "/settings.html" },
   };
   var ALERT_ORDER = { danger: 0, warn: 1, info: 2 };
   function alertList(alerts) {
