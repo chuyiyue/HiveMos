@@ -22,6 +22,90 @@
   // 活动填充其后，这里只负责渲染。拉不到时整区隐藏，不挡其他功能。
   var sidebarAgents = [];
 
+  // A page held open across a deployment can keep running old script in a
+  // mobile WebView. Remember the server build in this tab; when a later
+  // check sees it move, refresh once so the page picks up matching assets.
+  var BUILD_KEY = "hm_build";
+  var BUILD_RELOADS_KEY = "hm_build_reloads";
+  var BUILD_RELOAD_WINDOW_MS = 10 * 60 * 1000;
+  var buildCheckInFlight = false;
+  var buildReloading = false;
+
+  function buildStorageGet(key) {
+    try {
+      return window.sessionStorage.getItem(key);
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function buildStorageSet(key, value) {
+    try {
+      window.sessionStorage.setItem(key, value);
+    } catch (error) {
+      // Storage can be unavailable in restricted WebViews; checks stay inert.
+    }
+  }
+
+  function recentBuildReloads(now) {
+    var parsed;
+    try {
+      parsed = JSON.parse(buildStorageGet(BUILD_RELOADS_KEY) || "[]");
+    } catch (error) {
+      parsed = [];
+    }
+    if (!Array.isArray(parsed)) parsed = [];
+    return parsed.filter(function (time) {
+      return Number.isFinite(time) && now - time >= 0 && now - time < BUILD_RELOAD_WINDOW_MS;
+    });
+  }
+
+  function checkBuild() {
+    if (buildCheckInFlight || buildReloading || typeof window.fetch !== "function") return;
+    buildCheckInFlight = true;
+    window
+      .fetch("/api/version", {
+        cache: "no-store",
+        credentials: "same-origin",
+        headers: { accept: "application/json" },
+      })
+      .then(function (response) {
+        if (!response.ok) throw new Error("version check failed");
+        return response.json();
+      })
+      .then(function (data) {
+        var build = data && typeof data.build === "string" ? data.build : "";
+        if (!build || build === "dev") return;
+        var known = buildStorageGet(BUILD_KEY);
+        if (!known) {
+          buildStorageSet(BUILD_KEY, build);
+          return;
+        }
+        if (known === build) return;
+        var now = Date.now();
+        var reloads = recentBuildReloads(now);
+        buildStorageSet(BUILD_RELOADS_KEY, JSON.stringify(reloads));
+        if (reloads.length >= 2) return;
+        reloads.push(now);
+        buildStorageSet(BUILD_RELOADS_KEY, JSON.stringify(reloads));
+        buildStorageSet(BUILD_KEY, build);
+        buildReloading = true;
+        window.location.reload();
+      })
+      .catch(function () {
+        // A failed check says nothing about the deployment; try a later one.
+      })
+      .finally(function () {
+        buildCheckInFlight = false;
+      });
+  }
+
+  document.addEventListener("visibilitychange", function () {
+    if (!document.hidden) checkBuild();
+  });
+  window.addEventListener("pageshow", checkBuild);
+  checkBuild();
+
   function canonicalPath(pathname) {
     var path = pathname || "/";
     if (path.length > 1 && path.endsWith("/")) path = path.slice(0, -1);
