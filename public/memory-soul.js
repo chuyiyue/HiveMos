@@ -346,8 +346,8 @@
       "</div>" +
       '<div class="page-head-actions">' +
       (activeTab === "memory"
-        ? '<button type="button" class="secondary" data-mem-act="tag-all">AI 补全标签</button>' +
-          '<button type="button" class="secondary" data-mem-act="merge-tags">合并近义标签</button>' +
+        ? '<button type="button" class="secondary" data-mem-act=\"tag-all\">补全</button>' +
+          '<button type="button" class="secondary" data-mem-act=\"merge-tags\">合并</button>' +
           '<button type="button" class="add-button" data-add="memory">添加记忆</button>'
         : '<button type="button" class="add-button" data-add="soul">添加 Soul</button>') +
       "</div></div>";
