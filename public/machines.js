@@ -179,8 +179,9 @@
       title: kind === "worker" ? item.name : deviceTitle(item),
       bodyHtml:
         C.manageInfoHead({
-          icon: kind === "server" ? undefined : kind === "worker" ? (item.platform === "vercel" ? "vercel" : "cloudflare") : "monitor",
-          iconHtml: kind === "server" ? serverIconBtnHtml(item) : undefined,
+          iconHtml: kind === "server"
+            ? serverIconBtnHtml(item)
+            : HMIcons.svg(kind === "worker" ? (item.platform === "vercel" ? "icon-vercel" : "icon-cloudflare") : "icon-monitor", "icon record-icon"),
           title: kind === "worker" ? item.name : deviceTitle(item),
           sub:
             kindLabel +
@@ -251,7 +252,7 @@
 
   function serverIconHtml(item) {
     var id = serverIconId(item);
-    return C.iconSvg(id ? "os-" + id : "monitor");
+    return HMIcons.svg(id ? "icon-os-" + id : "icon-monitor", "icon record-icon");
   }
 
   function serverIconBtnHtml(item) {
@@ -274,7 +275,7 @@
         "\" data-os-icon=\"" +
         pair[0] +
         "\">" +
-        C.iconSvg("os-" + pair[0]) +
+        HMIcons.svg("icon-os-" + pair[0], "icon record-icon") +
         "<span>" +
         pair[1] +
         "</span></button>"
@@ -291,7 +292,7 @@
       "<button type=\"button\" class=\"os-icon-auto" +
       (manual ? "" : " is-active") +
       "\" data-os-icon=\"__auto__\">" +
-      C.iconSvg(autoId ? "os-" + autoId : "monitor") +
+      HMIcons.svg(autoId ? "icon-os-" + autoId : "icon-monitor", "icon record-icon") +
       "<span>跟随系统（自动）</span></button>";
     var ctrl = C.openManageDialog({ title: "系统图标", size: "sm", bodyHtml: body });
     ctrl.dialog.addEventListener("click", function (event) {
@@ -342,8 +343,9 @@
     }
     return C.record({
       id: item.id,
-      icon: kind === "server" ? undefined : kind === "worker" ? (item.platform === "vercel" ? "vercel" : "cloudflare") : "monitor",
-      iconHtml: kind === "server" ? serverIconHtml(item) : undefined,
+      iconHtml: kind === "server"
+        ? serverIconHtml(item)
+        : HMIcons.svg(kind === "worker" ? (item.platform === "vercel" ? "icon-vercel" : "icon-cloudflare") : "icon-monitor", "icon record-icon"),
       title: kind === "worker" ? item.name : deviceTitle(item),
       pill: kind === "worker" ? (item.platform === "vercel" ? "Vercel" : "Cloudflare") : kind === "host" ? connName(item) || undefined : undefined,
       pillHtml: kind === "server" ? serverBadgeHtml(item) : undefined,
