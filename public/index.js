@@ -381,7 +381,7 @@
     sizeKey: "hivemos-oplog-size",
     chips: [
       ["all", "全部"],
-      ["agents", "Agents 与应用"],
+      ["agents", "Agents"],
       ["mcp-skills", "MCP 与 Skills"],
       ["machines", "云计算资源"],
       ["memory-soul", "记忆与 Soul"],

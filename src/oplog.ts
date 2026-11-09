@@ -15,7 +15,7 @@ import { readCookie } from "./http";
 // 系统日志的筛选口径：按系统板块整合（与左侧导航的功能名一致），一个
 // 板块包含若干个日志模块。前端 chips 用板块 key，后端据此展开模块集合。
 export const OPLOG_BOARDS = [
-  { key: "agents", label: "Agents 与应用", modules: ["Agent", "应用"] },
+  { key: "agents", label: "Agents", modules: ["Agent", "应用"] },
   { key: "mcp-skills", label: "MCP 与 Skills", modules: ["MCP", "Skills", "API"] },
   { key: "machines", label: "云计算资源", modules: ["云主机", "网络节点"] },
   { key: "memory-soul", label: "记忆与 Soul", modules: ["记忆", "Soul"] },

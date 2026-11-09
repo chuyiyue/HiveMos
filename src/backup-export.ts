@@ -115,7 +115,7 @@ export async function buildBackupPackage(db: D1Database, now: number): Promise<B
 
   add("README.md", PACKAGE_README);
 
-  // ---- Agents 与应用 -------------------------------------------------------
+  // ---- Agents -------------------------------------------------------
   const agents = await rows(
     db,
     "SELECT id, name, status, group_id, permissions, pinned_at, last_seen_at, avatar_icon, avatar_url, call_count, token_enc, created_at FROM agents ORDER BY id ASC",
