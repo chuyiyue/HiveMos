@@ -31,13 +31,13 @@ export async function handleNodesRequest(request: Request, env: Env, ctx: WaitCt
   if (path === "/api/proxy/import") return importNodes(request, env);
   if (path === "/api/proxy/test-all") return testAll(request, env);
   if (path === "/api/proxy/subscriptions") return subscriptionCollection(request, env);
-  const subAction = /^\/api\/nodes\/subscriptions\/([A-Za-z0-9_-]+)\/(sync|reveal)$/.exec(path);
+  const subAction = /^\/api\/proxy\/subscriptions\/([A-Za-z0-9_-]+)\/(sync|reveal)$/.exec(path);
   if (subAction && subAction[1] && subAction[2]) return subscriptionAction(request, env, subAction[1], subAction[2]);
-  const subOne = /^\/api\/nodes\/subscriptions\/([A-Za-z0-9_-]+)$/.exec(path);
+  const subOne = /^\/api\/proxy\/subscriptions\/([A-Za-z0-9_-]+)$/.exec(path);
   if (subOne && subOne[1]) return subscriptionOne(request, env, subOne[1]);
-  const nodeAction = /^\/api\/nodes\/([A-Za-z0-9_-]+)\/(test|copy)$/.exec(path);
+  const nodeAction = /^\/api\/proxy\/([A-Za-z0-9_-]+)\/(test|copy)$/.exec(path);
   if (nodeAction && nodeAction[1] && nodeAction[2]) return nodeActionRun(request, env, nodeAction[1], nodeAction[2]);
-  const nodeOne = /^\/api\/nodes\/([A-Za-z0-9_-]+)$/.exec(path);
+  const nodeOne = /^\/api\/proxy\/([A-Za-z0-9_-]+)$/.exec(path);
   if (nodeOne && nodeOne[1]) return nodeOne(request, env, nodeOne[1]);
   return null;
 }
