@@ -15,6 +15,7 @@ import {
   syncSubscription,
   testAllNodes,
   testNode,
+  updateNodeNote,
   updateSubscription,
 } from "./nodes";
 import { logOp, panelActor } from "./oplog";
@@ -237,7 +238,26 @@ async function nodeActionRun(request: Request, env: Env, id: string, action: str
 }
 
 async function nodeOne(request: Request, env: Env, id: string): Promise<Response> {
-  if (request.method.toUpperCase() !== "DELETE") return methodNotAllowed("DELETE");
+  const method = request.method.toUpperCase();
+  if (method === "PATCH") {
+    const gate = await mutationGate(request);
+    if (gate) return gate;
+    const body = await readBody(request, MAX_JSON_BYTES);
+    if (!body.ok) return body.response;
+    return wrap(async () => {
+      const updated = await updateNodeNote(env.DB, id, { note: body.value.note }, Date.now());
+      await logOp(env.DB, {
+        actor: await panelActor(request, env),
+        module: MODULE,
+        action: "修改",
+        targetId: id,
+        targetName: updated.name,
+        text: updated.note ? `给节点「${updated.name}」设置了备注` : `清除了节点「${updated.name}」的备注`,
+      });
+      return json({ ok: true, node: updated });
+    });
+  }
+  if (method !== "DELETE") return methodNotAllowed("PATCH, DELETE");
   const gate = await mutationGate(request);
   if (gate) return gate;
   return wrap(async () => {

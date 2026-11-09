@@ -2524,17 +2524,22 @@
 
   function nodeCard(node) {
     var id = C.escapeHtml(node.id);
+    var facts = [
+      ["服务器", nodeServerFact(node)],
+      ["测活", nodeTestFact(node)],
+    ];
+    if (node.note) {
+      facts.push(["备注", '<span class="fact-note" title="' + C.escapeHtml(node.note) + '">' + C.escapeHtml(node.note) + "</span>"]);
+    }
     var actions =
       '<button type="button" class="secondary" data-nact="test" data-id="' + id + '">测活</button>' +
+      '<button type="button" class="secondary" data-nact="note" data-id="' + id + '">备注</button>' +
       '<button type="button" class="secondary" data-nact="copy" data-id="' + id + '">复制链接</button>' +
       '<button type="button" class="danger" data-confirm-delete data-nact="delete" data-id="' + id + '">删除</button>';
     return C.record({
       title: node.name || "未命名",
       pill: node.protocol || "",
-      facts: [
-        ["服务器", nodeServerFact(node)],
-        ["测活", nodeTestFact(node)],
-      ],
+      facts: facts,
       actions: actions,
     });
   }
@@ -2811,6 +2816,36 @@
       });
   }
 
+  function openNodeNoteDialog(node) {
+    C.openFormDialog({
+      title: "节点备注",
+      submitLabel: "保存",
+      bodyHtml:
+        '<label>备注<input name="note" maxlength="200" autocomplete="off" value="' + C.escapeHtml(node.note || "") + '" placeholder="例如 落地线路" /></label>',
+      onSubmit: function (ctrl) {
+        var note = val(ctrl, "note").trim();
+        ctrl.setBusy(true);
+        api("PATCH", "/api/proxy/" + encodeURIComponent(node.id), { note: note })
+          .then(function (res) {
+            ctrl.setBusy(false);
+            if (!res.data || !res.data.ok || !res.data.node) {
+              ctrl.setError((res.data && res.data.error) || "保存失败，请重试");
+              return;
+            }
+            var fresh = res.data.node;
+            state.nodes = state.nodes.map(function (item) { return item.id === fresh.id ? fresh : item; });
+            ctrl.close();
+            C.toast(note ? "备注已保存" : "备注已清除");
+            render();
+          })
+          .catch(function () {
+            ctrl.setBusy(false);
+            ctrl.setError("保存失败，请重试");
+          });
+      },
+    });
+  }
+
   var page = document.getElementById("page");
   page.addEventListener("click", handleClick);
 
@@ -2872,6 +2907,7 @@
       var nactName = nact.getAttribute("data-nact");
       if (nactFound && nactName === "test") testOneNode(nactFound, nact);
       else if (nactFound && nactName === "copy") copyNodeLink(nactFound, nact);
+      else if (nactFound && nactName === "note") openNodeNoteDialog(nactFound);
       else if (nactFound && nactName === "delete") deleteOneNode(nactFound, nact);
       return;
     }
