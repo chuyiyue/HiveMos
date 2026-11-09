@@ -21,7 +21,7 @@
 import { prepare } from "./registry";
 import type { D1Database } from "./env";
 import type { ContentKey } from "./crypto";
-import { MachineError, machinePublic, openMachineSecret, readGroupId, sealMachineSecret, type PublicMachine } from "./machines";
+import { MachineError, lookupRegionByIp, machinePublic, openMachineSecret, readGroupId, sealMachineSecret, type PublicMachine } from "./machines";
 
 export interface ProviderDevice {
   remoteId: string;
@@ -32,6 +32,7 @@ export interface ProviderDevice {
   spec: string;
   ip: string;
   region?: string;
+  template?: string; // provider template id, e.g. InstaBox "android"
 }
 
 export type ProviderConfig = Record<string, string>;
@@ -198,6 +199,136 @@ export async function fetchProviderDevices(provider: string, config: ProviderCon
 // account's boxes (GET /v1/machines, cursor-paginated). Boxes have no
 // public IP or OS in the API view — name, state and spec are what syncs.
 
+// ---- InstaBox exec probe (OS / arch / egress IP) ----
+// The API view has no OS and no IP, so sync probes imported boxes itself with
+// one exec per running box: POST /v1/machines/:id/exec (X-API-Key, plain
+// JSON request {cmd, timeoutSeconds}, blocking JSON reply {stdout, stderr,
+// exitCode, timedOut, truncated}; needs the machines:write scope). The script
+// prints a single JSON line. Login-profile banners are tolerated: only the
+// last JSON-looking line counts. Everything degrades to "" — the caller then
+// keeps whatever an earlier probe stored.
+const PROBE_EXEC_TIMEOUT_SECONDS = 15;
+const PROBE_EXEC_DEADLINE_MS = 20000;
+
+const INSTABOX_PROBE_CMD = `os=
+if [ -r /etc/os-release ]; then
+  os=$(sed -n 's/^PRETTY_NAME=//p' /etc/os-release | head -n 1 | tr -d '"')
+fi
+arch=$(uname -m 2>/dev/null)
+ip=
+for url in https://ipinfo.io/ip https://ifconfig.me/ip https://icanhazip.com; do
+  ip=$(curl -fsS --max-time 5 "$url" 2>/dev/null | tr -d '[:space:]')
+  if [ -n "$ip" ]; then break; fi
+done
+printf '{"os":"%s","arch":"%s","ip":"%s"}\\n' "$os" "$arch" "$ip"`;
+
+interface CloudProbe {
+  os: string;
+  arch: string;
+  ip: string;
+  region: string;
+  error: string;
+}
+
+async function instaboxExec(config: ProviderConfig, remoteId: string, cmd: string): Promise<{ stdout: string; exitCode: number; timedOut: boolean }> {
+  const base = (config["endpoint"] || "https://api.instabox.sh").replace(/\/+$/, "");
+  let response: Response;
+  try {
+    response = await fetch(base + "/v1/machines/" + encodeURIComponent(remoteId) + "/exec", {
+      method: "POST",
+      headers: { "X-API-Key": config["apiKey"] ?? "", accept: "application/json", "content-type": "application/json" },
+      body: JSON.stringify({ cmd, timeoutSeconds: PROBE_EXEC_TIMEOUT_SECONDS }),
+      // Exec blocks until the command exits; the outer deadline is the hard
+      // stop, so a stuck connection can never hold a whole connection sync.
+      signal: AbortSignal.timeout(PROBE_EXEC_DEADLINE_MS),
+    });
+  } catch {
+    throw new MachineError(502, "探测连接失败或超时");
+  }
+  const body = (await response.json().catch(() => null)) as {
+    stdout?: unknown;
+    exitCode?: unknown;
+    timedOut?: unknown;
+    error?: { code?: string };
+  } | null;
+  if (!response.ok) {
+    const code = body?.error?.code;
+    if (response.status === 401 || response.status === 403) {
+      throw new MachineError(502, code === "missing_scope" ? "API 密钥缺少执行命令权限（需要 machines:write）" : "API 密钥不正确或无权限");
+    }
+    if (response.status === 409) throw new MachineError(502, "机器不在运行中，无法探测");
+    if (response.status === 429) throw new MachineError(502, "请求过于频繁，请稍后重试");
+    throw new MachineError(502, "InstaBox 返回异常（HTTP " + response.status + "）");
+  }
+  if (!body || typeof body.stdout !== "string") throw new MachineError(502, "InstaBox 返回了无法识别的响应");
+  return {
+    stdout: body.stdout,
+    exitCode: typeof body.exitCode === "number" ? body.exitCode : 0,
+    timedOut: body.timedOut === true,
+  };
+}
+
+function probeJsonLine(stdout: string): Record<string, unknown> | null {
+  const lines = stdout.split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].trim();
+    if (!line.startsWith("{") || !line.endsWith("}")) continue;
+    try {
+      const parsed = JSON.parse(line) as unknown;
+      if (parsed && typeof parsed === "object") return parsed as Record<string, unknown>;
+    } catch {
+      // Not the probe line (banner noise); keep walking up.
+    }
+  }
+  return null;
+}
+
+// Never throws: a failed probe becomes an `error` string so sync can record
+// probe_status / probe_at / probe_error without touching the stored values.
+async function instaboxProbeDevice(config: ProviderConfig, remoteId: string): Promise<CloudProbe> {
+  const text = (value: unknown): string => (typeof value === "string" ? value.trim() : "");
+  const failed = (error: string): CloudProbe => ({ os: "", arch: "", ip: "", region: "", error });
+  try {
+    const result = await instaboxExec(config, remoteId, INSTABOX_PROBE_CMD);
+    if (result.timedOut) return failed("探测超时，保留上次结果");
+    const line = probeJsonLine(result.stdout);
+    if (!line) return failed(result.exitCode !== 0 ? "探测脚本执行失败（退出码 " + result.exitCode + "）" : "探测没有返回可识别的结果");
+    const probe: CloudProbe = { os: text(line.os), arch: text(line.arch), ip: text(line.ip), region: "", error: "" };
+    // Country name resolved on the Worker, through the very lookup the server
+    // probe uses (ip-api, keyless) so 所在地 carries the same value shape: an
+    // English country name (e.g. "United States") the card turns into flag +
+    // Chinese label. Done here, not in the box, so it also works when the box
+    // has no outbound HTTP left.
+    probe.region = probe.ip ? await lookupRegionByIp(probe.ip) : "";
+    return probe;
+  } catch (error) {
+    return failed(error instanceof MachineError ? error.message : "探测失败，请稍后重试");
+  }
+}
+
+// android 模板的镜像没有 /etc/os-release: OS falls back to the provider
+// template name ("Android"), and whatever else the script got still lands.
+function templateOsLabel(template: string | undefined): string {
+  const id = (template ?? "").trim();
+  if (!id) return "";
+  const known: Record<string, string> = { android: "Android", omarchy: "Omarchy", "agent-browser": "Agent Browser", ci: "CI" };
+  return known[id.toLowerCase()] ?? id;
+}
+
+// Success writes the probe fields; an empty probe value keeps the stored one
+// (NULLIF + COALESCE), and a failure only moves the probe bookkeeping.
+async function saveCloudProbe(db: D1Database, machineId: string, probe: CloudProbe, osFallback: string, now: number): Promise<void> {
+  if (probe.error) {
+    await prepare(db, "UPDATE machines SET probe_status = 'error', probe_at = ?, probe_error = ?, updated_at = ? WHERE id = ?", [now, probe.error, now, machineId]).run();
+    return;
+  }
+  await prepare(
+    db,
+    "UPDATE machines SET os = COALESCE(NULLIF(?, ''), os), arch = COALESCE(NULLIF(?, ''), arch), ip = COALESCE(NULLIF(?, ''), ip), region = COALESCE(NULLIF(?, ''), region), probe_status = 'ok', probe_at = ?, probe_error = '', updated_at = ? WHERE id = ?",
+    [probe.os || osFallback, probe.arch, probe.ip, probe.region, now, now, machineId],
+  ).run();
+}
+
 async function instaboxFetch(config: ProviderConfig, path: string): Promise<unknown> {
   const base = (config["endpoint"] || "https://api.instabox.sh").replace(/\/+$/, "");
   let response: Response;
@@ -250,6 +381,7 @@ async function instaboxListDevices(config: ProviderConfig): Promise<ProviderDevi
       const vcpus = Number(spec.vcpus) || 0;
       const memGiB = (Number(spec.memMiB) || 0) / 1024;
       const state = String(raw.state ?? "");
+      const template = (raw.template ?? {}) as Record<string, unknown>;
       devices.push({
         remoteId: String(raw.id ?? ""),
         name: String(raw.name ?? raw.id ?? ""),
@@ -259,6 +391,7 @@ async function instaboxListDevices(config: ProviderConfig): Promise<ProviderDevi
         spec: vcpus || memGiB ? vcpus + " 核 / " + (Number.isInteger(memGiB) ? String(memGiB) : memGiB.toFixed(1)) + " GB" : "",
         ip: "",
         region: instaboxRegionOf(raw),
+        template: typeof template.id === "string" ? template.id.trim() : "",
       });
     }
     if (!data.nextCursor) break;
@@ -800,6 +933,40 @@ export async function importConnectionDevices(
   return { machines, skipped };
 }
 
+// Writes one imported device's provider-side fields. os / ip go through
+// NULLIF + COALESCE on purpose: a provider that reports neither (InstaBox)
+// must not wipe what the exec probe discovered on an earlier sync, and a
+// suspended box keeps its last result too.
+async function applyProviderDevice(db: D1Database, machineId: string, remote: ProviderDevice, fallbackRegion: string, now: number): Promise<void> {
+  await prepare(db, "UPDATE machines SET name = ?, os = COALESCE(NULLIF(?, ''), os), spec = ?, ip = COALESCE(NULLIF(?, ''), ip), status = ?, remote_name = ?, remote_state = ?, region = ?, last_sync_at = ?, updated_at = ? WHERE id = ?", [
+    remote.name,
+    remote.os,
+    remote.spec,
+    remote.ip,
+    remote.status,
+    remote.name,
+    remote.state ?? null,
+    remote.region || fallbackRegion,
+    now,
+    now,
+    machineId,
+  ]).run();
+}
+
+// Probe trigger — the only place sync probes. Imported boxes only, providers
+// with an exec channel only (InstaBox today), and only while the provider
+// reports the box running: suspended / stopped boxes are skipped and keep
+// their last result. One connection syncs its boxes one by one, never in
+// parallel. InstaBox's normalized "running" also covers starting / resuming /
+// creating, which exec would answer with 409, so the raw state must be
+// exactly "running" too.
+async function probeProviderDevice(db: D1Database, provider: string, config: ProviderConfig, device: ProviderDevice, machineId: string, now: number): Promise<void> {
+  if (provider !== "instabox") return;
+  if (device.status !== "running" || (device.state ?? "") !== "running" || !device.remoteId) return;
+  const probe = await instaboxProbeDevice(config, device.remoteId);
+  await saveCloudProbe(db, machineId, probe, templateOsLabel(device.template), now);
+}
+
 export async function syncOneMachine(db: D1Database, key: ContentKey, machineId: string, now: number): Promise<{ missing: boolean }> {
   const machine = await db
     .prepare("SELECT id, connection_id, remote_id, region FROM machines WHERE id = ?")
@@ -823,19 +990,8 @@ export async function syncOneMachine(db: D1Database, key: ContentKey, machineId:
     await prepare(db, "UPDATE machines SET last_sync_at = ?, updated_at = ? WHERE id = ?", [now, now, machineId]).run();
     return { missing: true };
   }
-  await prepare(db, "UPDATE machines SET name = ?, os = ?, spec = ?, ip = ?, status = ?, remote_name = ?, remote_state = ?, region = ?, last_sync_at = ?, updated_at = ? WHERE id = ?", [
-    remote.name,
-    remote.os,
-    remote.spec,
-    remote.ip,
-    remote.status,
-    remote.name,
-    remote.state ?? null,
-    remote.region || machine.region,
-    now,
-    now,
-    machineId,
-  ]).run();
+  await applyProviderDevice(db, machineId, remote, machine.region, now);
+  await probeProviderDevice(db, conn.provider, config, remote, machineId, now);
   return { missing: false };
 }
 
@@ -866,19 +1022,8 @@ export async function syncConnection(db: D1Database, key: ContentKey, id: string
     // The display name is auto-fetched: sync keeps machines.name equal to
     // the remote name. A user-set note (machines.note) is what personalizes
     // the card title instead, and sync never touches it.
-    await prepare(db, "UPDATE machines SET name = ?, os = ?, spec = ?, ip = ?, status = ?, remote_name = ?, remote_state = ?, region = ?, last_sync_at = ?, updated_at = ? WHERE id = ?", [
-      remote.name,
-      remote.os,
-      remote.spec,
-      remote.ip,
-      remote.status,
-      remote.name,
-      remote.state ?? null,
-      remote.region || local.region,
-      now,
-      now,
-      local.id,
-    ]).run();
+    await applyProviderDevice(db, local.id, remote, local.region, now);
+    await probeProviderDevice(db, row.provider, config, remote, local.id, now);
     updated++;
   }
   return { updated, missing, devices };
