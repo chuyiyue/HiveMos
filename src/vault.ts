@@ -16,11 +16,16 @@
 // needs — ai_read per entry and an actor column on vault_access_log — and
 // the panel paths leave actor NULL; stage 6 fills it in when agents are
 // allowed to read codes.
+//
+// vault_access_log 只是审计事实源：读取记录的展示已归入系统日志（oplog
+// 的「保险库」board，见 revealSecret 里的 logOp 与 src/oplog.ts）。本表不再
+// 有自己的前端视图，也不再对外提供查询接口。
 
 import { decryptString, resolveContentKey, sealString } from "./crypto";
 import type { ContentKey } from "./crypto";
 import { prepare } from "./registry";
 import type { D1Database, Env } from "./env";
+import { logOp } from "./oplog";
 
 export class VaultError extends Error {
   status: number;
@@ -92,16 +97,6 @@ export interface EmailRow {
   smtp_secret: string | null;
   created_at: number;
   updated_at: number;
-}
-
-export interface AccessLogRow {
-  id: string;
-  target_kind: string;
-  target_id: string;
-  target_name: string | null;
-  action: string;
-  actor: string | null;
-  created_at: number;
 }
 
 export const NAME_MAX = 60;
@@ -685,11 +680,34 @@ export async function deleteEmail(db: D1Database, id: string): Promise<EmailRow>
 
 // ---- reveal + access log ----------------------------------------------------
 
+// 一次读取的归属口径：审计事实源（vault_access_log）与展示面（oplog）用
+// 同一份信息，两者分开写。
+export interface RevealActor {
+  // 面板请求的管理员名（panelActor 的口径），只用于 oplog。
+  panel: string;
+  // vault_access_log.actor：面板路径为 null；阶段 6 的 MCP/Agent 调用填
+  // Agent 名。非空时同一个名字也进 oplog 的 actor 与文案。
+  agent: string | null;
+}
+
+const REVEAL_LABELS = {
+  entry: "查看条目密码",
+  gateway: "查看网关密钥",
+  email: "查看邮箱 SMTP 密码",
+  totp: "查看验证码密钥",
+} as const;
+
+function revealLogText(kind: keyof typeof REVEAL_LABELS, name: string, agent: string | null): string {
+  const base = `${REVEAL_LABELS[kind]} · ${name}`;
+  return agent ? `${base}（Agent ${agent}）` : base;
+}
+
 export async function revealSecret(
   db: D1Database,
   env: Env,
   body: Record<string, unknown>,
   now: number,
+  actor: RevealActor = { panel: "管理员", agent: null },
 ): Promise<{ kind: string; id: string; name: string; value: string }> {
   const kind = body["kind"];
   const id = body["id"];
@@ -727,28 +745,26 @@ export async function revealSecret(
   }
   // Audit before plaintext is produced. A failed insert fails the reveal,
   // so the secret never leaves this function without a vault_access_log row.
-  // actor stays NULL: panel reads are not attributed to an agent yet.
+  // actor stays NULL for panel reads; stage 6 (MCP) passes the agent name.
+  // 空串/空白当作「没有 Agent」，与审计表「actor 非空才算 Agent」一致。
+  const agentName = actor.agent?.trim() || null;
   await prepare(
     db,
     "INSERT INTO vault_access_log (id, target_kind, target_id, action, actor, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-    [newId("va"), kind, id, "reveal", null, now],
+    [newId("va"), kind, id, "reveal", agentName, now],
   ).run();
+  // 顺序与失败语义：审计门在上，写不进就不返回明文；oplog 写在门之后，
+  // 只是统一展示面（系统日志的「保险库」board），logOp 自己吞掉失败，
+  // 写不进也不阻断本次 reveal。审计事实源始终是 vault_access_log。
+  // 目标名直接复用上面查到的行，不再为日志多查一次库。
+  await logOp(db, {
+    actor: agentName ?? actor.panel,
+    module: "保险库",
+    action: "查看",
+    targetId: id,
+    targetName: name,
+    text: revealLogText(kind, name, agentName),
+  });
   const value = await openSecret(env, stored);
   return { kind, id, name, value };
-}
-
-export async function listAccessLog(db: D1Database, limit = 100): Promise<AccessLogRow[]> {
-  const rows = rowsOf(
-    await prepare(
-      db,
-      "SELECT l.id, l.target_kind, l.target_id, l.action, l.actor, l.created_at, " +
-        "CASE l.target_kind WHEN 'entry' THEN (SELECT name FROM vault_entries WHERE id = l.target_id) " +
-        "WHEN 'gateway' THEN (SELECT name FROM gateways WHERE id = l.target_id) " +
-        "WHEN 'totp' THEN (SELECT issuer FROM vault_totp WHERE id = l.target_id) " +
-        "WHEN 'email' THEN (SELECT address FROM emails WHERE id = l.target_id) END AS target_name " +
-        "FROM vault_access_log l ORDER BY l.created_at DESC, l.id DESC LIMIT ?",
-      [limit],
-    ).all<AccessLogRow>(),
-  );
-  return rows;
 }
