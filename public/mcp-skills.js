@@ -295,7 +295,7 @@
 
   function detailHtml(server) {
     if (!server) {
-      return C.section("详情", "", C.emptyState("还没有选中条目", "点列表里的查看，展开端点、配置和工具快照"));
+      return C.section("详情", "", C.emptyState("还没有选中条目", ""));
     }
     var meta = snapshotMeta(server);
     var time = C.formatMinute(server.snapshot_at) || "尚无";
@@ -331,7 +331,7 @@
           })
           .join("") +
         "</ul>"
-      : C.emptyState("还没有获取记录", "Agent 调用 mcp_get 之后会出现在这里");
+      : C.emptyState("还没有获取记录", "");
     return (
       '<section class="panel" id="mcp-detail"><div class="section-head"><h2>' +
       C.escapeHtml(server.title) +
@@ -507,7 +507,7 @@
     return (
       '<div class="stack">' +
       groupedHtml("skills", state.groups, store.items, skillsCard, "点上方「添加技能」登记第一个") +
-      C.section("待审核", "", C.emptyState("没有待审核的技能", "新提交的技能会先出现在这里")) +
+      C.section("待审核", "", C.emptyState("没有待审核的技能", "")) +
       "</div>"
     );
   }
@@ -554,7 +554,7 @@
 
   function render() {
     var body = noticeHtml();
-    if (state.loading) body += C.section("服务", "", C.emptyState("正在读取", "稍等片刻"));
+    if (state.loading) body += C.section("服务", "", C.emptyState("正在读取", ""));
     else if (state.loadError) body += C.section("服务", "", '<p class="callout danger" role="alert">' + C.escapeHtml(state.loadError) + "</p>");
     else {
       body += groupedHtml("mcp", state.groups, state.servers, card, "点上方「添加条目」登记第一条");
@@ -744,7 +744,7 @@
     var ctrl = C.openFormDialog({
       title: "手填快照",
       bodyHtml:
-        '<p class="subtle field-hint">把 tools/list 的 JSON 贴在这里。stdio 不能自动探活</p>' +
+        '<p class="subtle field-hint">stdio 不能自动探活</p>' +
         '<textarea data-field="snapshotText" rows="8">' +
         C.escapeHtml(state.snapshotText) +
         "</textarea>",
