@@ -622,3 +622,205 @@ img, svg, video, canvas { max-width: 100%; }
   .page-tabs { width: 100%; flex-wrap: nowrap; }
   .page-tab { flex: 1 1 0; min-width: 0; white-space: nowrap; padding-left: 6px; padding-right: 6px; text-align: center; }
 }
+
+/* 保险库「验证码」页签：卡片只留图标、名称账号、验证码、倒计时圆环。
+   陶土橙只用于主按钮、选中分组与最后 5 秒状态；颜色全部取现有变量。 */
+.totp-wrap { display: grid; gap: 12px; }
+.totp-banner {
+  margin: 0;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--warn-bg);
+  font-size: var(--fs-sm);
+}
+.totp-banner.is-danger { background: var(--danger-bg); }
+.totp-toolbar { display: flex; gap: 8px; flex-wrap: wrap; }
+.totp-search { flex: 1 1 200px; min-width: 0; }
+.totp-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.totp-chip {
+  padding: 5px 12px;
+  border-radius: var(--r-pill);
+  background: var(--bg-sunken);
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+}
+.totp-chip[aria-pressed="true"] { background: var(--accent-button); color: var(--on-accent); }
+.totp-grid { display: grid; gap: 12px; grid-template-columns: 1fr; }
+@media (min-width: 640px) { .totp-grid { grid-template-columns: repeat(2, 1fr); } }
+@media (min-width: 1024px) { .totp-grid { grid-template-columns: repeat(3, 1fr); } }
+.totp-card {
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  padding: 14px 16px;
+}
+.totp-card.is-danger { background: var(--accent-soft); }
+.totp-card-main { display: grid; gap: 10px; outline: none; border-radius: var(--r-md); }
+.totp-card-main:focus-visible { box-shadow: 0 0 0 3px var(--focus-ring); }
+.totp-card-top { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.totp-icon {
+  flex: none;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--bg-sunken);
+  color: var(--text-2);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+.totp-icon-svg { width: 20px; height: 20px; fill: currentColor; display: block; }
+.totp-letter {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 17px;
+}
+.totp-letter-in { width: 100%; height: 100%; }
+.totp-name { flex: 1 1 auto; min-width: 0; }
+.totp-name h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.totp-name p {
+  margin: 2px 0 0;
+  color: var(--text-3);
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.totp-ring { position: relative; flex: none; width: 38px; height: 38px; }
+.totp-ring svg { width: 38px; height: 38px; transform: rotate(-90deg); display: block; }
+.totp-ring circle { fill: none; stroke-width: 3; }
+.totp-ring-bg { stroke: var(--border); }
+.totp-ring-arc { stroke: var(--text-3); stroke-linecap: round; stroke-dasharray: 100; transition: stroke-dashoffset 0.2s linear; }
+.totp-card.is-danger .totp-ring-arc { stroke: var(--accent); }
+.totp-ring-secs {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+.totp-codes { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.totp-code {
+  padding: 0;
+  background: none;
+  border: none;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  color: var(--text);
+  cursor: pointer;
+}
+.totp-next { color: var(--text-3); font-size: var(--fs-sm); font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+.totp-card.is-danger .totp-next { color: var(--text); font-weight: 700; }
+.totp-retry { justify-self: start; }
+.totp-empty-actions { display: flex; gap: 8px; justify-content: center; margin-top: 10px; flex-wrap: wrap; }
+.totp-form-icon-row { display: flex; align-items: center; gap: 10px; }
+.totp-icon-btn {
+  padding: 2px;
+  border-radius: 50%;
+  background: none;
+  border: 1px solid var(--border);
+  line-height: 0;
+}
+.totp-preview { min-height: 1.2em; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+.totp-more { display: grid; gap: 12px; }
+.totp-switch-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.totp-secret-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.totp-secret-row .copy-text { max-width: 220px; }
+.totp-icon-search { width: 100%; margin-bottom: 10px; }
+.totp-icon-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(72px, 1fr)); gap: 8px; max-height: 320px; overflow: auto; }
+.totp-icon-tile {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  padding: 10px 4px;
+  border-radius: var(--r-md);
+  background: var(--bg-sunken);
+  color: var(--text-2);
+  font-size: 12px;
+}
+.totp-icon-tile .totp-letter { width: 20px; height: 20px; font-size: 12px; }
+@media (max-width: 639px) {
+  .totp-toolbar { flex-wrap: nowrap; }
+  .totp-code { font-size: 22px; }
+}
+
+/* 保险库「验证码」批2：扫码与导入导出 */
+.totp-scan-frame {
+  position: relative;
+  border-radius: var(--r-md);
+  background: var(--bg-sunken);
+  overflow: hidden;
+  aspect-ratio: 4 / 3;
+}
+.totp-scan-frame video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.totp-scan-fallback {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-3);
+}
+.totp-scan-fallback[hidden] { display: none; }
+.totp-scan-actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.totp-scan-paste { display: grid; gap: 8px; margin-top: 10px; }
+.totp-scan-paste[hidden] { display: none; }
+.totp-scan-added { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+.totp-scan-chip {
+  padding: 4px 10px;
+  border-radius: var(--r-pill);
+  background: var(--ok-bg);
+  color: var(--success-text);
+  font-size: var(--fs-sm);
+}
+.totp-io-tabs { margin-bottom: 12px; }
+.totp-drop {
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r-md);
+  padding: 18px 12px;
+  text-align: center;
+  color: var(--text-3);
+  cursor: pointer;
+  margin-bottom: 12px;
+}
+.totp-drop.is-over { background: var(--accent-soft); color: var(--accent-text); }
+.totp-io-actions { display: flex; justify-content: flex-end; margin-top: 12px; }
+.totp-import-list { display: grid; gap: 6px; margin-top: 12px; }
+.totp-import-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  color: var(--text);
+  text-align: left;
+  font-size: var(--fs-sm);
+}
+.totp-import-row[aria-pressed="false"] { opacity: 0.55; }
+.totp-import-row.is-off { opacity: 0.55; cursor: default; }
+.totp-import-check { color: var(--accent-text); font-weight: 700; flex: none; }
+.totp-import-unsupported-title { margin: 14px 0 0; }
