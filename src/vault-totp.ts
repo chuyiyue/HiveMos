@@ -12,7 +12,7 @@
 //
 // 分组复用 vault_groups 这张自有分组池，删除语义与 entries/gateways 一致。
 
-import { sha256Hex } from "./auth";
+import { base64UrlToBytes, copyBytes, sha256Hex } from "./auth";
 import type { D1Database, Env } from "./env";
 import { prepare } from "./registry";
 import { base32Decode, base32Encode, hotp, isTotpAlgorithm, type TotpAlgorithm } from "./totp";
@@ -466,4 +466,639 @@ export async function listTotpCodes(db: D1Database, env: Env, now: number): Prom
     });
   }
   return entries;
+}
+
+// ---- 导入解析（阶段 3） -----------------------------------------------------
+//
+// 五种格式共用一条流水线：先解码成「原始条目」（issuer/account/secret/参数
+// + 可选的 problem），再逐条走与新增相同的校验（resolveFields），最后按
+// secret_hash 标判重。只有通过校验的条目进 entries（含密钥，供确认回传）；
+// items 是给面板看的逐条口径（含 supported/reason/duplicate）。
+//
+// 只收 TOTP：HOTP / Steam / MD5 在解析阶段就写 problem，预览里显示为
+// supported:false 并给出原因，确认导入时不会被写进库。
+
+export const TOTP_MAX_IMPORT_BYTES = 512 * 1024;
+
+export interface ImportItem {
+  index: number;
+  issuer: string;
+  account: string;
+  algorithm: string;
+  digits: number;
+  period: number;
+  duplicate: boolean;
+  supported: boolean;
+  reason?: string;
+}
+
+export interface ImportEntry {
+  index: number;
+  issuer: string;
+  account: string;
+  secret: string;
+  algorithm: string;
+  digits: number;
+  period: number;
+  icon: string | null;
+  note: string;
+  group: string | null;
+  ai_read: boolean;
+}
+
+export interface ImportPreview {
+  format: string;
+  items: ImportItem[];
+  entries: ImportEntry[];
+}
+
+// 原始条目：解析阶段拿到的一切。problem 表示「已确定不支持」，但 issuer/
+// account 仍然带出来，预览里能看见是哪一条被跳过。
+interface RawEntry {
+  issuer: string;
+  account: string;
+  secret: string;
+  algorithm: string;
+  digits: number;
+  period: number;
+  icon: string | null;
+  note: string;
+  group: string | null;
+  aiRead: boolean;
+  problem?: string;
+}
+
+function rawEntry(partial: Partial<RawEntry> = {}): RawEntry {
+  return {
+    issuer: partial.issuer ?? "",
+    account: partial.account ?? "",
+    secret: partial.secret ?? "",
+    algorithm: partial.algorithm ?? DEFAULT_ALGORITHM,
+    digits: partial.digits ?? DEFAULT_DIGITS,
+    period: partial.period ?? DEFAULT_PERIOD,
+    icon: partial.icon ?? null,
+    note: partial.note ?? "",
+    group: partial.group ?? null,
+    aiRead: partial.aiRead ?? true,
+    problem: partial.problem,
+  };
+}
+
+function decodeBase64(value: string): Uint8Array | null {
+  const cleaned = value.replace(/\s/g, "").replace(/=+$/g, "");
+  if (!cleaned) return null;
+  return base64UrlToBytes(cleaned.replaceAll("+", "-").replaceAll("/", "_"));
+}
+
+function textOf(bytes: Uint8Array): string {
+  return new TextDecoder().decode(bytes);
+}
+
+// ---- 最小 protobuf 解码（Google Authenticator 迁移链接） -------------------
+//
+// otpauth-migration://offline?data=… 的 data 是 MigrationPayload 的 protobuf。
+// 只需要 varint 与 length-delimited 两种 wire type，手写解析避免引入依赖。
+
+interface ProtoField {
+  field: number;
+  wire: number;
+  varint: number;
+  bytes: Uint8Array | null;
+}
+
+function readVarint(bytes: Uint8Array, offset: number): { value: number; offset: number } | null {
+  let value = 0;
+  let shift = 0;
+  let index = offset;
+  while (index < bytes.length) {
+    const byte = bytes[index++] ?? 0;
+    value += (byte & 0x7f) * 2 ** shift;
+    if ((byte & 0x80) === 0) return { value, offset: index };
+    shift += 7;
+    if (shift > 49) return null;
+  }
+  return null;
+}
+
+function parseProto(bytes: Uint8Array): ProtoField[] | null {
+  const fields: ProtoField[] = [];
+  let offset = 0;
+  while (offset < bytes.length) {
+    const head = readVarint(bytes, offset);
+    if (!head) return null;
+    offset = head.offset;
+    const field = Math.floor(head.value / 8);
+    const wire = head.value & 7;
+    if (field <= 0) return null;
+    if (wire === 0) {
+      const value = readVarint(bytes, offset);
+      if (!value) return null;
+      fields.push({ field, wire, varint: value.value, bytes: null });
+      offset = value.offset;
+    } else if (wire === 2) {
+      const length = readVarint(bytes, offset);
+      if (!length) return null;
+      const end = length.offset + length.value;
+      if (end > bytes.length) return null;
+      fields.push({ field, wire, varint: 0, bytes: bytes.subarray(length.offset, end) });
+      offset = end;
+    } else if (wire === 5) {
+      offset += 4;
+      if (offset > bytes.length) return null;
+    } else if (wire === 1) {
+      offset += 8;
+      if (offset > bytes.length) return null;
+    } else {
+      return null;
+    }
+  }
+  return fields;
+}
+
+function firstBytes(fields: ProtoField[], field: number): Uint8Array | null {
+  for (const item of fields) if (item.field === field && item.wire === 2) return item.bytes;
+  return null;
+}
+
+function firstVarint(fields: ProtoField[], field: number): number | null {
+  for (const item of fields) if (item.field === field && item.wire === 0) return item.varint;
+  return null;
+}
+
+function migrationAlgorithm(value: number | null): string {
+  // Google 迁移负载的 Algorithm 枚举：1=SHA1 2=SHA256 3=SHA512 4=MD5
+  if (value === 2) return "SHA256";
+  if (value === 3) return "SHA512";
+  if (value === 4) return "MD5";
+  return "SHA1";
+}
+
+function migrationDigits(value: number | null): number {
+  // DigitCount 枚举：1=6 位 2=8 位；缺省按 6 位。
+  return value === 2 ? 8 : 6;
+}
+
+function parseMigration(uri: string): { format: string; entries: RawEntry[] } {
+  let url: URL;
+  try {
+    url = new URL(uri.trim());
+  } catch {
+    throw new VaultError("迁移链接无法解析");
+  }
+  if (url.protocol !== "otpauth-migration:") throw new VaultError("不是 Google Authenticator 迁移链接");
+  // 查询串里的 '+' 未编码时会被解成空格，这里还原（base64 标准字母表）。
+  const rawData = (url.searchParams.get("data") ?? "").replace(/ /g, "+");
+  const payload = decodeBase64(rawData);
+  if (!payload) throw new VaultError("迁移链接里的数据无法解码（base64 不完整）");
+  const fields = parseProto(payload);
+  if (!fields) throw new VaultError("迁移负载不是有效的 protobuf");
+  const entries: RawEntry[] = [];
+  for (const item of fields) {
+    if (item.field !== 1 || item.wire !== 2 || !item.bytes) continue;
+    const params = parseProto(item.bytes);
+    if (!params) throw new VaultError("迁移负载里的条目无法解析");
+    const secretBytes = firstBytes(params, 1);
+    const name = textOf(firstBytes(params, 2) ?? new Uint8Array()).trim();
+    const issuer = textOf(firstBytes(params, 3) ?? new Uint8Array()).trim();
+    const algorithm = migrationAlgorithm(firstVarint(params, 4));
+    const type = firstVarint(params, 6);
+    const entry = rawEntry({
+      issuer: issuer || name,
+      account: issuer ? name : "",
+      secret: secretBytes ? base32Encode(secretBytes) : "",
+      algorithm,
+      digits: migrationDigits(firstVarint(params, 5)),
+      period: DEFAULT_PERIOD,
+      icon: null,
+      note: "",
+    });
+    if (type === 1) entry.problem = "目前只支持 TOTP（该条为 HOTP）";
+    else if (algorithm === "MD5") entry.problem = "不支持 MD5 算法的验证码";
+    entries.push(entry);
+  }
+  if (entries.length === 0) throw new VaultError("迁移链接里没有验证码条目");
+  return { format: "otpauth-migration", entries };
+}
+
+// ---- otpauth 链接文本 ------------------------------------------------------
+
+function parseOtpauthLines(content: string): { format: string; entries: RawEntry[] } {
+  const entries: RawEntry[] = [];
+  for (const line of content.split(/\r?\n/)) {
+    const text = line.trim();
+    if (!text) continue;
+    if (!/^otpauth:\/\//i.test(text)) {
+      entries.push(rawEntry({ problem: "这一行不是 otpauth 链接" }));
+      continue;
+    }
+    try {
+      const parsed = parseOtpauthUri(text);
+      entries.push(rawEntry({ ...parsed, note: "" }));
+    } catch (error) {
+      // 解析失败的链接也留一条，reason 用解析器给出的原因（HOTP/Steam/
+      // 位数越界等都在这里体现）。
+      const reason = error instanceof VaultError ? error.message : "链接无法解析";
+      entries.push(rawEntry({ problem: reason }));
+    }
+  }
+  if (entries.length === 0) throw new VaultError("文件里没有 otpauth 链接");
+  return { format: "otpauth", entries };
+}
+
+// ---- Aegis 明文 JSON -------------------------------------------------------
+
+interface JsonRecord {
+  [key: string]: unknown;
+}
+
+function isRecord(value: unknown): value is JsonRecord {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function stringOf(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function numberOf(value: unknown, fallback: number): number {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && /^\d+$/.test(value.trim())) return Number(value.trim());
+  return fallback;
+}
+
+function parseAegis(root: JsonRecord): { format: string; entries: RawEntry[] } {
+  const db = root["db"];
+  if (!isRecord(db) || !Array.isArray(db["entries"])) throw new VaultError("不是 Aegis 明文备份");
+  const groupNames = new Map<string, string>();
+  if (Array.isArray(db["groups"])) {
+    for (const group of db["groups"]) {
+      if (isRecord(group) && typeof group["uuid"] === "string") groupNames.set(group["uuid"], stringOf(group["name"]));
+    }
+  }
+  const entries: RawEntry[] = [];
+  for (const item of db["entries"]) {
+    if (!isRecord(item)) continue;
+    const type = stringOf(item["type"]).toLowerCase();
+    const info = isRecord(item["info"]) ? item["info"] : {};
+    const groups = Array.isArray(item["groups"]) ? item["groups"].filter((v) => typeof v === "string") : [];
+    const groupName = groups.length > 0 ? groupNames.get(groups[0] as string) ?? null : null;
+    const algorithm = stringOf(info["algo"]) || stringOf(item["algo"]) || "SHA1";
+    const entry = rawEntry({
+      issuer: stringOf(item["issuer"]).trim() || stringOf(item["name"]).trim(),
+      account: stringOf(item["issuer"]).trim() ? stringOf(item["name"]).trim() : "",
+      secret: stringOf(info["secret"]) || stringOf(item["secret"]),
+      algorithm: algorithm.toUpperCase(),
+      digits: numberOf(info["digits"], 6),
+      period: numberOf(info["period"], 30),
+      icon: stringOf(item["icon"]) || null,
+      note: stringOf(item["note"]),
+      group: groupName,
+    });
+    if (type && type !== "totp") entry.problem = `目前只支持 TOTP（该条为 ${type.toUpperCase() === "STEAM" ? "Steam 令牌" : type.toUpperCase()}）`;
+    else if (entry.algorithm === "MD5") entry.problem = "不支持 MD5 算法的验证码";
+    entries.push(entry);
+  }
+  if (entries.length === 0) throw new VaultError("Aegis 备份里没有验证码条目");
+  return { format: "aegis", entries };
+}
+
+// ---- 2FAS 明文 JSON --------------------------------------------------------
+//
+// 2FAS v4 明文导出：{schemaVersion, services:[{name, otp:{link|label, account,
+// issuer, secret, algorithm, digits, period, tokenType}}], groups:[…]}。
+// 加密导出把 services 换成一个 base64 字符串，这里直接报「已加密」。
+
+function parse2Fas(root: JsonRecord): { format: string; entries: RawEntry[] } {
+  const services = root["services"];
+  if (!Array.isArray(services)) throw new VaultError("2FAS 备份已加密或格式不支持（services 不是明文列表）");
+  const entries: RawEntry[] = [];
+  for (const service of services) {
+    if (!isRecord(service)) continue;
+    const otp = isRecord(service["otp"]) ? service["otp"] : {};
+    const tokenType = stringOf(otp["tokenType"]).toUpperCase();
+    const link = stringOf(otp["link"]);
+    if (link) {
+      try {
+        const parsed = parseOtpauthUri(link);
+        const entry = rawEntry({
+          ...parsed,
+          note: stringOf(service["note"]),
+          icon: stringOf(service["icon"]) || null,
+        });
+        if (tokenType && tokenType !== "TOTP") entry.problem = `目前只支持 TOTP（该条为 ${tokenType}）`;
+        entries.push(entry);
+        continue;
+      } catch (error) {
+        const reason = error instanceof VaultError ? error.message : "链接无法解析";
+        const entry = rawEntry({
+          issuer: stringOf(otp["issuer"]) || stringOf(otp["label"]) || stringOf(service["name"]),
+          account: stringOf(otp["accountName"]),
+          secret: stringOf(otp["secret"]),
+          algorithm: stringOf(otp["algorithm"]) || "SHA1",
+          digits: numberOf(otp["digits"], 6),
+          period: numberOf(otp["period"], 30),
+          note: stringOf(service["note"]),
+          problem: reason,
+        });
+        entries.push(entry);
+        continue;
+      }
+    }
+    const entry = rawEntry({
+      issuer: stringOf(otp["issuer"]) || stringOf(otp["label"]) || stringOf(service["name"]),
+      account: stringOf(otp["accountName"]),
+      secret: stringOf(otp["secret"]),
+      algorithm: (stringOf(otp["algorithm"]) || "SHA1").toUpperCase(),
+      digits: numberOf(otp["digits"], 6),
+      period: numberOf(otp["period"], 30),
+      note: stringOf(service["note"]),
+      icon: stringOf(service["icon"]) || null,
+    });
+    if (tokenType && tokenType !== "TOTP") entry.problem = `目前只支持 TOTP（该条为 ${tokenType}）`;
+    else if (entry.algorithm === "MD5") entry.problem = "不支持 MD5 算法的验证码";
+    entries.push(entry);
+  }
+  if (entries.length === 0) throw new VaultError("2FAS 备份里没有验证码条目");
+  return { format: "2fas", entries };
+}
+
+// ---- HiveMos JSON（明文或口令加密信封） ------------------------------------
+
+function parseHivemos(root: JsonRecord): { format: string; entries: RawEntry[] } {
+  const list = root["entries"];
+  if (!Array.isArray(list)) throw new VaultError("不是 HiveMos 验证码导出文件");
+  const entries: RawEntry[] = [];
+  for (const item of list) {
+    if (!isRecord(item)) continue;
+    entries.push(
+      rawEntry({
+        issuer: stringOf(item["issuer"]),
+        account: stringOf(item["account"]),
+        secret: stringOf(item["secret"]),
+        algorithm: (stringOf(item["algorithm"]) || "SHA1").toUpperCase(),
+        digits: numberOf(item["digits"], 6),
+        period: numberOf(item["period"], 30),
+        icon: stringOf(item["icon"]) || null,
+        note: stringOf(item["note"]),
+        // 导出里 group 是组名；导入时按同名分组回挂，找不到就回未分组。
+        group: stringOf(item["group"]) || null,
+        aiRead: item["ai_read"] === undefined ? true : item["ai_read"] === true || item["ai_read"] === 1,
+      }),
+    );
+  }
+  if (entries.length === 0) throw new VaultError("HiveMos 导出文件里没有验证码条目");
+  return { format: "hivemos", entries };
+}
+
+// 口令加密信封：{encrypted:true, kdf:"PBKDF2-SHA256", iter, salt, iv, data}
+// salt/iv/data 用 base64url（与 auth.ts 的编码一致），AES-GCM 整体加密。
+async function decryptHivemosEnvelope(root: JsonRecord, password: string): Promise<JsonRecord> {
+  const kdf = stringOf(root["kdf"]);
+  if (kdf && kdf !== "PBKDF2-SHA256") throw new VaultError(`不支持的加密方式：${kdf}`);
+  const iterations = numberOf(root["iter"], 100000);
+  if (iterations < 10000 || iterations > 1000000) throw new VaultError("导出文件的加密参数不合法");
+  const salt = base64UrlToBytes(stringOf(root["salt"]));
+  const iv = base64UrlToBytes(stringOf(root["iv"]));
+  const data = base64UrlToBytes(stringOf(root["data"]));
+  if (!salt || salt.byteLength < 8 || !iv || iv.byteLength !== 12 || !data) {
+    throw new VaultError("导出文件的加密信封不完整");
+  }
+  const keyMaterial = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, [
+    "deriveBits",
+  ]);
+  const bits = await crypto.subtle.deriveBits(
+    { name: "PBKDF2", hash: "SHA-256", salt: copyBytes(salt), iterations },
+    keyMaterial,
+    256,
+  );
+  const key = await crypto.subtle.importKey("raw", bits, { name: "AES-GCM" }, false, ["decrypt"]);
+  let plain: ArrayBuffer;
+  try {
+    plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: copyBytes(iv) }, key, copyBytes(data));
+  } catch {
+    throw new VaultError("口令不正确，或导出文件已损坏");
+  }
+  try {
+    const parsed: unknown = JSON.parse(new TextDecoder().decode(plain));
+    if (!isRecord(parsed)) throw new Error("not an object");
+    return parsed;
+  } catch {
+    throw new VaultError("加密信封里的内容不是有效的导出 JSON");
+  }
+}
+
+// ---- 预览 / 确认 ------------------------------------------------------------
+
+async function existingFingerprints(db: D1Database): Promise<Set<string>> {
+  const rows = rowsOf(await prepare(db, "SELECT secret_hash FROM vault_totp").all<{ secret_hash: string }>());
+  return new Set(rows.map((row) => row.secret_hash));
+}
+
+// preview：自动识别格式 → 逐条校验 → 标判重/不支持，返回 items（口径）与
+// entries（含密钥的完整结果，确认时原样回传）。
+export async function previewTotpImport(
+  db: D1Database,
+  content: string,
+  password?: string,
+): Promise<ImportPreview> {
+  const text = content.trim();
+  if (!text) throw new VaultError("导入内容为空");
+  if (text.length > TOTP_MAX_IMPORT_BYTES) throw new VaultError("导入内容超过 512 KB", 413);
+
+  let parsed: { format: string; entries: RawEntry[] };
+  if (/^otpauth-migration:\/\//i.test(text)) {
+    parsed = parseMigration(text);
+  } else {
+    let json: unknown = null;
+    let jsonOk = false;
+    if (text.startsWith("{")) {
+      try {
+        json = JSON.parse(text);
+        jsonOk = true;
+      } catch {
+        throw new VaultError("JSON 无法解析");
+      }
+    }
+    if (jsonOk && isRecord(json)) {
+      if (rootLooksHivemos(json)) {
+        if (json["encrypted"] === true) {
+          if (!password) throw new VaultError("该导出文件已加密，请填写导出时设置的口令");
+          parsed = parseHivemos(await decryptHivemosEnvelope(json, password));
+        } else {
+          parsed = parseHivemos(json);
+        }
+      } else if (isRecord(json["db"]) && Array.isArray((json["db"] as JsonRecord)["entries"])) {
+        parsed = parseAegis(json);
+      } else if (Array.isArray(json["services"])) {
+        parsed = parse2Fas(json);
+      } else {
+        throw new VaultError("无法识别的备份格式（既不是 HiveMos、Aegis 也不是 2FAS）");
+      }
+    } else if (text.includes("otpauth://")) {
+      parsed = parseOtpauthLines(text);
+    } else {
+      throw new VaultError("无法识别的导入格式");
+    }
+  }
+
+  if (parsed.entries.length > TOTP_MAX_ENTRIES) {
+    throw new VaultError(`备份里有 ${parsed.entries.length} 条验证码，超过上限 ${TOTP_MAX_ENTRIES}`, 400);
+  }
+
+  const existing = await existingFingerprints(db);
+  const items: ImportItem[] = [];
+  const entries: ImportEntry[] = [];
+  for (let index = 0; index < parsed.entries.length; index += 1) {
+    const raw = parsed.entries[index]!;
+    const base = {
+      index,
+      issuer: raw.issuer,
+      account: raw.account,
+      algorithm: raw.problem ? raw.algorithm : "SHA1",
+      digits: raw.digits,
+      period: raw.period,
+    };
+    if (raw.problem) {
+      items.push({ ...base, algorithm: raw.algorithm, duplicate: false, supported: false, reason: raw.problem });
+      continue;
+    }
+    try {
+      const fields = await resolveFields(
+        db,
+        {
+          issuer: raw.issuer,
+          account: raw.account,
+          secret: raw.secret,
+          algorithm: raw.algorithm,
+          digits: raw.digits,
+          period: raw.period,
+          icon: raw.icon,
+          note: raw.note,
+          ai_read: raw.aiRead,
+        },
+        null,
+      );
+      if (!fields.secret) throw new VaultError("缺少密钥");
+      const duplicate = existing.has(await secretFingerprint(fields.secret));
+      items.push({ ...base, algorithm: fields.algorithm, digits: fields.digits, period: fields.period, duplicate, supported: true });
+      entries.push({
+        index,
+        issuer: fields.issuer,
+        account: fields.account,
+        secret: fields.secret,
+        algorithm: fields.algorithm,
+        digits: fields.digits,
+        period: fields.period,
+        icon: fields.icon,
+        note: fields.note,
+        group: raw.group,
+        ai_read: fields.aiRead,
+      });
+    } catch (error) {
+      const reason = error instanceof VaultError ? error.message : "条目无法解析";
+      items.push({ ...base, duplicate: false, supported: false, reason });
+    }
+  }
+  return { format: parsed.format, items, entries };
+}
+
+async function groupIdByName(db: D1Database, name: string | null): Promise<string | null> {
+  if (!name) return null;
+  const row = await prepare(db, "SELECT id FROM vault_groups WHERE name = ? LIMIT 1", [name]).first<{ id: string }>();
+  return row?.id ?? null;
+}
+
+// confirm：逐条判重跳过（已有 secret_hash、校验不过、超出 500 条都记 skipped），
+// 返回导入/跳过条数。失败原因不再逐条返回，面板用预览里的口径解释。
+export async function confirmTotpImport(
+  db: D1Database,
+  env: Env,
+  entries: unknown,
+  now: number,
+): Promise<{ imported: number; skipped: number }> {
+  if (!Array.isArray(entries)) throw new VaultError("导入条目格式不正确");
+  const existing = await existingFingerprints(db);
+  let count = await countTotpEntries(db);
+  let imported = 0;
+  let skipped = 0;
+  for (const item of entries) {
+    if (!isRecord(item)) {
+      skipped += 1;
+      continue;
+    }
+    let fields: TotpFields;
+    try {
+      const groupName = stringOf(item["group"]);
+      fields = await resolveFields(
+        db,
+        {
+          issuer: item["issuer"],
+          account: item["account"],
+          secret: item["secret"],
+          algorithm: item["algorithm"],
+          digits: item["digits"],
+          period: item["period"],
+          icon: item["icon"],
+          note: item["note"],
+          group_id: await groupIdByName(db, groupName || null),
+          ai_read: item["ai_read"],
+        },
+        null,
+      );
+      if (!fields.secret) throw new VaultError("缺少密钥");
+    } catch {
+      skipped += 1;
+      continue;
+    }
+    const hash = await secretFingerprint(fields.secret);
+    if (existing.has(hash) || count >= TOTP_MAX_ENTRIES) {
+      skipped += 1;
+      continue;
+    }
+    const row: VaultTotpRow = {
+      id: newId("totp"),
+      issuer: fields.issuer,
+      account: fields.account,
+      secret_enc: await sealSecret(env, fields.secret),
+      secret_hash: hash,
+      algorithm: fields.algorithm,
+      digits: fields.digits,
+      period: fields.period,
+      icon: fields.icon,
+      note: fields.note,
+      group_id: fields.groupId ?? null,
+      ai_read: fields.aiRead ? 1 : 0,
+      created_at: now,
+      updated_at: now,
+    };
+    await prepare(
+      db,
+      "INSERT INTO vault_totp (id, issuer, account, secret_enc, secret_hash, algorithm, digits, period, icon, note, group_id, ai_read, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      [
+        row.id,
+        row.issuer,
+        row.account,
+        row.secret_enc,
+        row.secret_hash,
+        row.algorithm,
+        row.digits,
+        row.period,
+        row.icon,
+        row.note,
+        row.group_id,
+        row.ai_read,
+        row.created_at,
+        row.updated_at,
+      ],
+    ).run();
+    existing.add(hash);
+    count += 1;
+    imported += 1;
+  }
+  return { imported, skipped };
+}
+
+// 判定的公共入口：`app:"hivemos"` / `kind:"totp-export"` 二选一即可，都对
+// never 认成别的格式。
+function rootLooksHivemos(root: JsonRecord): boolean {
+  return root["app"] === "hivemos" || root["kind"] === "totp-export" || (root["encrypted"] === true && !!root["data"]);
 }

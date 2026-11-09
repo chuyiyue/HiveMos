@@ -36,10 +36,13 @@ import {
   vaultKey,
 } from "./vault";
 import {
+  confirmTotpImport,
   createTotpEntry,
   deleteTotpEntry,
   listTotpCodes,
   listTotpEntries,
+  previewTotpImport,
+  TOTP_MAX_IMPORT_BYTES,
   totpPublic,
   updateTotpEntry,
 } from "./vault-totp";
@@ -70,6 +73,10 @@ export async function handleVaultRequest(request: Request, env: Env, ctx: WaitCt
     // 验证码条目。codes 与 future import/export 路由必须排在 :id 正则前面。
     if (path === "/api/vault/totp") return await totpEntries(request, env);
     if (path === "/api/vault/totp/codes") return await totpCodes(request, env);
+    // 导入两段式：preview 只解析不改库，confirm 回传预览里的 entries 才落库。
+    // 必须排在 :id 正则前面，否则 /import/preview 会被当成条目编号。
+    if (path === "/api/vault/totp/import/preview") return await totpImportPreview(request, env);
+    if (path === "/api/vault/totp/import/confirm") return await totpImportConfirm(request, env);
     const totpOne = /^\/api\/vault\/totp\/([A-Za-z0-9_-]+)$/.exec(path);
     if (totpOne && totpOne[1]) return await totpOneHandler(request, env, totpOne[1]);
     return null;
@@ -85,6 +92,16 @@ export async function handleVaultRequest(request: Request, env: Env, ctx: WaitCt
 
 async function readBody(request: Request): Promise<Record<string, unknown> | Response> {
   const parsed = await readJsonLimited(request, MAX_BODY_BYTES);
+  if (!parsed.ok) return json({ ok: false, error: parsed.error }, parsed.status);
+  if (!parsed.value || typeof parsed.value !== "object" || Array.isArray(parsed.value)) {
+    return json({ ok: false, error: "请求体格式不正确" }, 400);
+  }
+  return parsed.value as Record<string, unknown>;
+}
+
+// 导入接口的请求体上限放宽到 512 KB（与解析层一致），其余接口仍是 64 KB。
+async function readBodyLimited(request: Request, maxBytes: number): Promise<Record<string, unknown> | Response> {
+  const parsed = await readJsonLimited(request, maxBytes);
   if (!parsed.ok) return json({ ok: false, error: parsed.error }, parsed.status);
   if (!parsed.value || typeof parsed.value !== "object" || Array.isArray(parsed.value)) {
     return json({ ok: false, error: "请求体格式不正确" }, 400);
@@ -376,6 +393,41 @@ async function totpCodes(request: Request, env: Env): Promise<Response> {
   const entries = await listTotpCodes(env.DB, env, now);
   // json() 已经带 cache-control: no-store：验证码不能被任何缓存留住。
   return json({ ok: true, serverNow: now, entries });
+}
+
+// 导入预览：文件内容整段放在 content 里（512 KB 上限与解析层一致），加密
+// 导出再带 password。返回 items（逐条口径）+ entries（含密钥，确认时原样
+// 回传）。这是唯一会把明文密钥发回浏览器的接口，前提是管理员会话 + 同源；
+// json() 自带 no-store。
+async function totpImportPreview(request: Request, env: Env): Promise<Response> {
+  if (request.method.toUpperCase() !== "POST") {
+    return json({ ok: false, error: "方法不允许" }, 405, { allow: "POST" });
+  }
+  const body = await readBodyLimited(request, TOTP_MAX_IMPORT_BYTES);
+  if (body instanceof Response) return body;
+  const content = typeof body["content"] === "string" ? body["content"] : "";
+  const password = typeof body["password"] === "string" ? body["password"] : undefined;
+  const preview = await previewTotpImport(env.DB, content, password);
+  return json({ ok: true, ...preview });
+}
+
+async function totpImportConfirm(request: Request, env: Env): Promise<Response> {
+  if (request.method.toUpperCase() !== "POST") {
+    return json({ ok: false, error: "方法不允许" }, 405, { allow: "POST" });
+  }
+  const body = await readBodyLimited(request, TOTP_MAX_IMPORT_BYTES);
+  if (body instanceof Response) return body;
+  const result = await confirmTotpImport(env.DB, env, body["entries"], Date.now());
+  if (result.imported > 0) {
+    await logOp(env.DB, {
+      actor: await panelActor(request, env),
+      module: "保险库",
+      action: "导入",
+      targetName: "验证码",
+      text: `导入了 ${result.imported} 条验证码，跳过 ${result.skipped} 条`,
+    });
+  }
+  return json({ ok: true, imported: result.imported, skipped: result.skipped });
 }
 
 async function totpOneHandler(request: Request, env: Env, id: string): Promise<Response> {
