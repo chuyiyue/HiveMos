@@ -3,7 +3,9 @@
 // pass the cross-site check here, same as memory-http. List responses only
 // ever carry the tail of a secret, or smtp_secret_set for a mailbox SMTP
 // password. Plaintext leaves through POST /api/vault/reveal, which writes
-// an access-log row.
+// an access-log row. The TOTP tab (阶段 1/3/4) follows the same rules: its
+// list carries public fields only, live codes come from /codes, and revealing
+// a secret goes through reveal (kind=totp) with the same audit row.
 
 import { isCrossSite, json, readJsonLimited } from "./http";
 import type { Env, WaitCtx } from "./env";
@@ -31,7 +33,16 @@ import {
   updateEmail,
   updateEntry,
   updateGateway,
+  vaultKey,
 } from "./vault";
+import {
+  createTotpEntry,
+  deleteTotpEntry,
+  listTotpCodes,
+  listTotpEntries,
+  totpPublic,
+  updateTotpEntry,
+} from "./vault-totp";
 import { logOp, panelActor } from "./oplog";
 
 const MAX_BODY_BYTES = 64 * 1024;
@@ -56,9 +67,18 @@ export async function handleVaultRequest(request: Request, env: Env, ctx: WaitCt
     if (groupOne && groupOne[1]) return await groupOneHandler(request, env, groupOne[1]);
     if (path === "/api/vault/reveal") return await reveal(request, env);
     if (path === "/api/vault/access-log") return await accessLog(request, env);
+    // 验证码条目。codes 与 future import/export 路由必须排在 :id 正则前面。
+    if (path === "/api/vault/totp") return await totpEntries(request, env);
+    if (path === "/api/vault/totp/codes") return await totpCodes(request, env);
+    const totpOne = /^\/api\/vault\/totp\/([A-Za-z0-9_-]+)$/.exec(path);
+    if (totpOne && totpOne[1]) return await totpOneHandler(request, env, totpOne[1]);
     return null;
   } catch (error) {
-    if (error instanceof VaultError) return json({ ok: false, error: error.message }, error.status);
+    // VaultError may carry machine-readable detail (duplicate id/issuer on a
+    // 409, key-state code on a 503); merge it into the error body.
+    if (error instanceof VaultError) {
+      return json({ ok: false, error: error.message, ...(error.detail ?? {}) }, error.status);
+    }
     throw error;
   }
 }
@@ -307,7 +327,84 @@ async function accessLog(request: Request, env: Env): Promise<Response> {
       target_id: row.target_id,
       target_name: row.target_name,
       action: row.action,
+      // NULL = 面板操作；MCP 取码（阶段 6）才填 Agent 名。
+      actor: row.actor ?? null,
       created_at: row.created_at,
     })),
   });
+}
+
+// ---- 验证码（TOTP） ---------------------------------------------------------
+
+function totpLabel(row: { issuer: string; account: string }): string {
+  return row.account ? `${row.issuer}（${row.account}）` : row.issuer;
+}
+
+async function totpEntries(request: Request, env: Env): Promise<Response> {
+  const method = request.method.toUpperCase();
+  if (method === "GET") {
+    // vaultKeySet 是整页提示用的：未配置 VAULT_KEY 时能列出条目却取不到码。
+    const key = vaultKey(env);
+    return json({
+      ok: true,
+      entries: (await listTotpEntries(env.DB)).map(totpPublic),
+      vaultKeySet: key.state === "on",
+    });
+  }
+  if (method === "POST") {
+    const body = await readBody(request);
+    if (body instanceof Response) return body;
+    const created = await createTotpEntry(env.DB, env, body, Date.now());
+    await logOp(env.DB, {
+      actor: await panelActor(request, env),
+      module: "保险库",
+      action: "添加",
+      targetId: created.id,
+      targetName: totpLabel(created),
+      text: `添加了验证码「${totpLabel(created)}」`,
+    });
+    return json({ ok: true, entry: totpPublic(created) }, 201);
+  }
+  return json({ ok: false, error: "方法不允许" }, 405, { allow: "GET, POST" });
+}
+
+async function totpCodes(request: Request, env: Env): Promise<Response> {
+  if (request.method.toUpperCase() !== "GET") {
+    return json({ ok: false, error: "方法不允许" }, 405, { allow: "GET" });
+  }
+  const now = Date.now();
+  const entries = await listTotpCodes(env.DB, env, now);
+  // json() 已经带 cache-control: no-store：验证码不能被任何缓存留住。
+  return json({ ok: true, serverNow: now, entries });
+}
+
+async function totpOneHandler(request: Request, env: Env, id: string): Promise<Response> {
+  const method = request.method.toUpperCase();
+  if (method === "PATCH" || method === "PUT") {
+    const body = await readBody(request);
+    if (body instanceof Response) return body;
+    const updated = await updateTotpEntry(env.DB, env, id, body, Date.now());
+    await logOp(env.DB, {
+      actor: await panelActor(request, env),
+      module: "保险库",
+      action: "修改",
+      targetId: id,
+      targetName: totpLabel(updated),
+      text: `修改了验证码「${totpLabel(updated)}」`,
+    });
+    return json({ ok: true, entry: totpPublic(updated) });
+  }
+  if (method === "DELETE") {
+    const deleted = await deleteTotpEntry(env.DB, id);
+    await logOp(env.DB, {
+      actor: await panelActor(request, env),
+      module: "保险库",
+      action: "删除",
+      targetId: id,
+      targetName: totpLabel(deleted),
+      text: `删除了验证码「${totpLabel(deleted)}」`,
+    });
+    return json({ ok: true, entry: totpPublic(deleted) });
+  }
+  return json({ ok: false, error: "方法不允许" }, 405, { allow: "PATCH, DELETE" });
 }

@@ -1,5 +1,10 @@
 // RFC 6238 TOTP and recovery codes. Ported from SMSinBox src/totp.ts.
 // The only behavior change is the issuer name.
+//
+// The vault stores third-party TOTP entries, which may use SHA-256/SHA-512,
+// 6-8 digits and periods other than 30 seconds, so hotp/totpCounter take
+// those as optional parameters. Login 2FA keeps the defaults (SHA-1, 6 digits,
+// 30s) and its call sites pass nothing extra: behavior is unchanged.
 
 import { copyBytes, equalBytes, sha256Hex } from "./auth";
 import { decryptString, sealString, type ContentKey } from "./crypto";
@@ -25,6 +30,21 @@ export const TOTP_RATE_LIMIT_PER_MINUTE = 5;
 export const TOTP_FAILURE_LIMIT = 10;
 export const TOTP_FAILURE_WINDOW_MS = 5 * 60 * 1000;
 
+// HMAC algorithms RFC 6238 defines. Names are the otpauth:// `algorithm`
+// parameter values; crypto.subtle wants the dashed WebCrypto names.
+export type TotpAlgorithm = "SHA1" | "SHA256" | "SHA512";
+export const TOTP_ALGORITHMS: readonly TotpAlgorithm[] = ["SHA1", "SHA256", "SHA512"];
+
+const HMAC_HASH_NAME: Record<TotpAlgorithm, string> = {
+  SHA1: "SHA-1",
+  SHA256: "SHA-256",
+  SHA512: "SHA-512",
+};
+
+export function isTotpAlgorithm(value: unknown): value is TotpAlgorithm {
+  return typeof value === "string" && (TOTP_ALGORITHMS as readonly string[]).includes(value);
+}
+
 const SECRET_PLAIN_PREFIX = "plain:";
 const BASE32_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 const RECOVERY_HASH_PREFIX = "totp-recovery:";
@@ -45,6 +65,8 @@ export function base32Encode(bytes: Uint8Array): string {
   return encoded;
 }
 
+// Tolerant on input: case-insensitive, spaces/hyphens ignored, padding
+// optional and stripped (authenticator apps and exports all differ here).
 export function base32Decode(value: string): Uint8Array | null {
   const cleaned = value
     .toUpperCase()
@@ -73,21 +95,37 @@ export function generateTotpSecret(): string {
   return base32Encode(bytes);
 }
 
-export function totpCounter(nowMs: number): number {
-  return Math.floor(nowMs / 1000 / TOTP_PERIOD_SECONDS);
+// Canonical form of a base32 secret: uppercase, no spaces/hyphens/padding.
+// Used as the fingerprint input for vault dedup; null when it cannot decode.
+export function normalizeBase32(value: string): string | null {
+  const bytes = base32Decode(value);
+  return bytes ? base32Encode(bytes) : null;
 }
 
-// HOTP (RFC 4226) / TOTP (RFC 6238) with HMAC-SHA1, the algorithm every
-// authenticator app supports. Web Crypto means no runtime dependency.
-export async function hotp(secret: Uint8Array, counter: number, digits = TOTP_DIGITS): Promise<string> {
+// The time step length is part of the entry, not a global default.
+export function totpCounter(nowMs: number, period = TOTP_PERIOD_SECONDS): number {
+  return Math.floor(nowMs / 1000 / period);
+}
+
+// HOTP (RFC 4226) / TOTP (RFC 6238). Defaults are HMAC-SHA1 and 6 digits,
+// the algorithm every authenticator app supports. Web Crypto means no runtime
+// dependency; the truncation below is hash-length agnostic, so SHA-256/512
+// output (32/64 bytes) works with the same offset rule.
+export async function hotp(
+  secret: Uint8Array,
+  counter: number,
+  digits = TOTP_DIGITS,
+  algorithm: TotpAlgorithm = "SHA1",
+): Promise<string> {
   const message = new Uint8Array(8);
   const view = new DataView(message.buffer);
   view.setUint32(0, Math.floor(counter / 2 ** 32));
   view.setUint32(4, counter >>> 0);
+  const digest = HMAC_HASH_NAME[algorithm] ?? HMAC_HASH_NAME.SHA1;
   const key = await crypto.subtle.importKey(
     "raw",
     copyBytes(secret),
-    { name: "HMAC", hash: "SHA-1" },
+    { name: "HMAC", hash: digest },
     false,
     ["sign"],
   );

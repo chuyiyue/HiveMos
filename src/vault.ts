@@ -1,14 +1,21 @@
 // Vault module (v1, panel-only): storage behind the vault board.
-// Secrets are entry passwords, gateway keys, and mailbox SMTP passwords.
+// Secrets are entry passwords, gateway keys, mailbox SMTP passwords, and
+// TOTP entry secrets (the last ones live in vault-totp.ts, which reuses the
+// sealing, group and id helpers exported here).
 // They are stored AES-GCM sealed under the VAULT_KEY worker secret
 // (envelope helpers live in crypto.ts, same format as the TOTP seal).
 // Names, urls, usernames, notes and mailbox metadata (SMTP host, port,
 // security and user) are plain text. List views never expose a secret:
 // entries and gateways show only the last four characters (tail), emails
 // show smtp_secret_set. Reading one goes through revealSecret, which
-// writes a vault_access_log row first. There is deliberately no MCP
-// surface: agent access waits for the key-lease design, and the vault
-// permission domain stays reserved.
+// writes a vault_access_log row first.
+//
+// There is still no MCP surface: agent access waits for the key-lease and
+// vault-permission work, so vault_entries/gateways/emails stay panel-only.
+// The TOTP table (migration 0033) already carries the shape that surface
+// needs — ai_read per entry and an actor column on vault_access_log — and
+// the panel paths leave actor NULL; stage 6 fills it in when agents are
+// allowed to read codes.
 
 import { decryptString, resolveContentKey, sealString } from "./crypto";
 import type { ContentKey } from "./crypto";
@@ -17,19 +24,24 @@ import type { D1Database, Env } from "./env";
 
 export class VaultError extends Error {
   status: number;
-  constructor(message: string, status = 400) {
+  // Optional machine-readable fields merged into the JSON error body
+  // (e.g. the duplicate entry's id/issuer on a 409, or a key-state code
+  // the vault page uses to explain a whole-page failure).
+  detail: Record<string, unknown> | undefined;
+  constructor(message: string, status = 400, detail?: Record<string, unknown>) {
     super(message);
     this.status = status;
+    this.detail = detail;
   }
 }
 
-function rowsOf<T>(value: { results?: T[] } | T[] | null | undefined): T[] {
+export function rowsOf<T>(value: { results?: T[] } | T[] | null | undefined): T[] {
   if (Array.isArray(value)) return value;
   if (value && Array.isArray(value.results)) return value.results;
   return [];
 }
 
-function newId(prefix: string): string {
+export function newId(prefix: string): string {
   return prefix + "_" + crypto.randomUUID().replace(/-/g, "").slice(0, 24);
 }
 
@@ -88,10 +100,11 @@ export interface AccessLogRow {
   target_id: string;
   target_name: string | null;
   action: string;
+  actor: string | null;
   created_at: number;
 }
 
-const NAME_MAX = 60;
+export const NAME_MAX = 60;
 const URL_MAX = 300;
 const USERNAME_MAX = 120;
 const NOTE_MAX = 300;
@@ -105,7 +118,7 @@ const SMTP_HOST_MAX = 253;
 const SMTP_USER_MAX = 120;
 const SMTP_DEFAULT_PORT: Record<string, number> = { ssl: 465, starttls: 587, none: 25 };
 
-function optText(body: Record<string, unknown>, key: string, max: number, label: string): string | undefined {
+export function optText(body: Record<string, unknown>, key: string, max: number, label: string): string | undefined {
   const value = body[key];
   if (value === undefined || value === null) return undefined;
   if (typeof value !== "string") throw new VaultError(label + "格式不正确");
@@ -114,7 +127,7 @@ function optText(body: Record<string, unknown>, key: string, max: number, label:
   return trimmed;
 }
 
-function reqText(body: Record<string, unknown>, key: string, max: number, label: string): string {
+export function reqText(body: Record<string, unknown>, key: string, max: number, label: string): string {
   const value = optText(body, key, max, label);
   if (!value) throw new VaultError("请填写" + label);
   return value;
@@ -122,12 +135,14 @@ function reqText(body: Record<string, unknown>, key: string, max: number, label:
 
 // ---- secret sealing -------------------------------------------------------
 
-function vaultKey(env: Env): ContentKey {
+// JS callers (totp-http, vault-totp) check the key state before sealing or
+// opening; the value of VAULT_KEY decides whether a save/reveal is possible.
+export function vaultKey(env: Env): ContentKey {
   const raw = (env as unknown as Record<string, unknown>)["VAULT_KEY"];
   return resolveContentKey(typeof raw === "string" ? raw : undefined);
 }
 
-async function sealSecret(env: Env, plaintext: string): Promise<string> {
+export async function sealSecret(env: Env, plaintext: string): Promise<string> {
   const key = vaultKey(env);
   if (key.state === "invalid") throw new VaultError("保险库密钥配置不正确，暂时不能保存值", 503);
   if (key.state !== "on") throw new VaultError("保险库密钥未配置，暂时不能保存值", 503);
@@ -136,7 +151,9 @@ async function sealSecret(env: Env, plaintext: string): Promise<string> {
   return sealed;
 }
 
-async function openSecret(env: Env, stored: string): Promise<string> {
+// Exported so vault-totp.ts (codes, reveal, import) opens secrets through the
+// exact same envelope and error language as entries/gateways/emails.
+export async function openSecret(env: Env, stored: string): Promise<string> {
   if (!stored) return "";
   const key = vaultKey(env);
   if (key.state === "invalid") throw new VaultError("保险库密钥配置不正确，无法查看", 503);
@@ -150,7 +167,25 @@ function tailOf(secret: string): string {
   return secret.slice(-4);
 }
 
-// ---- groups (one pool shared by entries and gateways) ---------------------
+// ---- groups (one pool shared by entries, gateways and TOTP entries) --------
+
+// TOTP rows live in the table added by migration 0033. Counting them here
+// keeps the group page honest without making the whole list fail on a database
+// where that migration has not been applied yet (local dev, older deploy):
+// the count just stays at what entries+gateways report.
+async function totpGroupCounts(db: D1Database): Promise<Map<string, number>> {
+  try {
+    const rows = rowsOf(
+      await prepare(
+        db,
+        "SELECT group_id, COUNT(*) AS total FROM vault_totp WHERE group_id IS NOT NULL GROUP BY group_id",
+      ).all<{ group_id: string; total: number }>(),
+    );
+    return new Map(rows.map((row) => [row.group_id, Number(row.total) || 0]));
+  } catch {
+    return new Map();
+  }
+}
 
 export function groupPublic(row: VaultGroupRow): Record<string, unknown> {
   return {
@@ -161,8 +196,8 @@ export function groupPublic(row: VaultGroupRow): Record<string, unknown> {
   };
 }
 
-async function getGroup(db: D1Database, id: string): Promise<VaultGroupRow | null> {
-  return prepare(
+export async function getGroup(db: D1Database, id: string): Promise<VaultGroupRow | null> {
+  const row = await prepare(
     db,
     "SELECT id, name, created_at, " +
       "(SELECT COUNT(*) FROM vault_entries WHERE group_id = vault_groups.id) + " +
@@ -170,10 +205,12 @@ async function getGroup(db: D1Database, id: string): Promise<VaultGroupRow | nul
       "FROM vault_groups WHERE id = ?",
     [id],
   ).first<VaultGroupRow>();
+  if (row) row.member_count = Number(row.member_count || 0) + ((await totpGroupCounts(db)).get(row.id) ?? 0);
+  return row;
 }
 
 export async function listGroups(db: D1Database): Promise<VaultGroupRow[]> {
-  return rowsOf(
+  const rows = rowsOf(
     await prepare(
       db,
       "SELECT id, name, created_at, " +
@@ -182,6 +219,9 @@ export async function listGroups(db: D1Database): Promise<VaultGroupRow[]> {
         "FROM vault_groups ORDER BY created_at ASC, id ASC",
     ).all<VaultGroupRow>(),
   );
+  const totpCounts = await totpGroupCounts(db);
+  for (const row of rows) row.member_count = Number(row.member_count || 0) + (totpCounts.get(row.id) ?? 0);
+  return rows;
 }
 
 export async function createGroup(db: D1Database, body: Record<string, unknown>, now: number): Promise<VaultGroupRow> {
@@ -212,14 +252,21 @@ export async function deleteGroup(db: D1Database, id: string): Promise<VaultGrou
   if (!row) throw new VaultError("分组不存在", 404);
   await prepare(db, "UPDATE vault_entries SET group_id = NULL WHERE group_id = ?", [id]).run();
   await prepare(db, "UPDATE gateways SET group_id = NULL WHERE group_id = ?", [id]).run();
+  // Same delete semantics as entries/gateways: TOTP rows fall back to
+  // ungrouped, they are never deleted along with the group.
+  try {
+    await prepare(db, "UPDATE vault_totp SET group_id = NULL WHERE group_id = ?", [id]).run();
+  } catch {
+    // Migration 0033 not applied yet: nothing to ungroup.
+  }
   await prepare(db, "DELETE FROM vault_groups WHERE id = ?", [id]).run();
   return row;
 }
 
-// Resolves an optional group reference for entries/gateways. Absent means
-// "leave unchanged" for updates; null or blank means ungrouped; a present
-// id must exist in the vault pool.
-async function optGroupId(db: D1Database, body: Record<string, unknown>): Promise<string | null | undefined> {
+// Resolves an optional group reference for entries/gateways/TOTP entries.
+// Absent means "leave unchanged" for updates; null or blank means ungrouped;
+// a present id must exist in the vault pool.
+export async function optGroupId(db: D1Database, body: Record<string, unknown>): Promise<string | null | undefined> {
   const value = body["group_id"];
   if (value === undefined) return undefined;
   if (value === null || value === "") return null;
@@ -646,7 +693,7 @@ export async function revealSecret(
 ): Promise<{ kind: string; id: string; name: string; value: string }> {
   const kind = body["kind"];
   const id = body["id"];
-  if (kind !== "entry" && kind !== "gateway" && kind !== "email") throw new VaultError("类型不正确");
+  if (kind !== "entry" && kind !== "gateway" && kind !== "email" && kind !== "totp") throw new VaultError("类型不正确");
   if (typeof id !== "string" || !id) throw new VaultError("缺少 id");
   let name = "";
   let stored = "";
@@ -660,6 +707,18 @@ export async function revealSecret(
     if (!row) throw new VaultError("网关不存在", 404);
     name = row.name;
     stored = row.key_enc;
+  } else if (kind === "totp") {
+    // The vault TOTP secret leaves as the canonical base32 string it was
+    // saved in. Name mirrors the panel label (issuer, plus account if set).
+    const row = await prepare(db, "SELECT id, issuer, account, secret_enc FROM vault_totp WHERE id = ?", [id]).first<{
+      id: string;
+      issuer: string;
+      account: string;
+      secret_enc: string;
+    }>();
+    if (!row) throw new VaultError("验证码条目不存在", 404);
+    name = row.account ? `${row.issuer}（${row.account}）` : row.issuer;
+    stored = row.secret_enc;
   } else {
     const row = await getEmail(db, id);
     if (!row) throw new VaultError("邮箱不存在", 404);
@@ -668,10 +727,11 @@ export async function revealSecret(
   }
   // Audit before plaintext is produced. A failed insert fails the reveal,
   // so the secret never leaves this function without a vault_access_log row.
+  // actor stays NULL: panel reads are not attributed to an agent yet.
   await prepare(
     db,
-    "INSERT INTO vault_access_log (id, target_kind, target_id, action, created_at) VALUES (?, ?, ?, ?, ?)",
-    [newId("va"), kind, id, "reveal", now],
+    "INSERT INTO vault_access_log (id, target_kind, target_id, action, actor, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+    [newId("va"), kind, id, "reveal", null, now],
   ).run();
   const value = await openSecret(env, stored);
   return { kind, id, name, value };
@@ -681,9 +741,10 @@ export async function listAccessLog(db: D1Database, limit = 100): Promise<Access
   const rows = rowsOf(
     await prepare(
       db,
-      "SELECT l.id, l.target_kind, l.target_id, l.action, l.created_at, " +
+      "SELECT l.id, l.target_kind, l.target_id, l.action, l.actor, l.created_at, " +
         "CASE l.target_kind WHEN 'entry' THEN (SELECT name FROM vault_entries WHERE id = l.target_id) " +
         "WHEN 'gateway' THEN (SELECT name FROM gateways WHERE id = l.target_id) " +
+        "WHEN 'totp' THEN (SELECT issuer FROM vault_totp WHERE id = l.target_id) " +
         "WHEN 'email' THEN (SELECT address FROM emails WHERE id = l.target_id) END AS target_name " +
         "FROM vault_access_log l ORDER BY l.created_at DESC, l.id DESC LIMIT ?",
       [limit],
