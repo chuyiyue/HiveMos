@@ -645,6 +645,9 @@ export interface WorkerScript {
   name: string;
   modified_on: string | null;
   meta?: string | null;
+  // Vercel projects only: last deployment time and the production domain.
+  deploy_at?: string | null;
+  domain?: string | null;
 }
 
 export async function fetchWorkersForMachine(
@@ -663,25 +666,30 @@ export async function fetchWorkersForMachine(
     let vResponse: Response;
     try {
       vResponse = await fetch(
-        "https://api.vercel.com/v9/projects" + (row.team_id ? "?teamId=" + encodeURIComponent(row.team_id) : ""),
-        { headers: { authorization: "Bearer " + token, accept: "application/json" } },
+        "https://api.vercel.com/v9/projects?limit=100" + (row.team_id ? "&teamId=" + encodeURIComponent(row.team_id) : ""),
+        { headers: { authorization: "Bearer " + token, accept: "application/json" }, signal: AbortSignal.timeout(8000) },
       );
     } catch {
       throw new MachineError(502, "连接 Vercel 失败，请稍后重试");
     }
     const vBody = (await vResponse.json().catch(() => null)) as {
-      projects?: Array<{ name?: string; updatedAt?: number; framework?: string | null }>;
+      projects?: VercelProject[];
       error?: { message?: string };
     } | null;
     if (!vResponse.ok || !vBody || !Array.isArray(vBody.projects)) {
       throw new MachineError(502, vBody?.error?.message ? "Vercel：" + vBody.error.message : "Vercel 返回了无法识别的响应");
     }
     const vWorkers: WorkerScript[] = vBody.projects
-      .map((project) => ({
-        name: String(project.name ?? ""),
-        modified_on: project.updatedAt ? new Date(project.updatedAt).toISOString() : null,
-        meta: project.framework ?? null,
-      }))
+      .map((project) => {
+        const deployAt = vercelProjectDeployAt(project);
+        return {
+          name: String(project.name ?? ""),
+          modified_on: project.updatedAt ? new Date(project.updatedAt).toISOString() : null,
+          meta: project.framework ?? null,
+          deploy_at: deployAt ? new Date(deployAt).toISOString() : null,
+          domain: vercelProjectDomain(project),
+        };
+      })
       .filter((project) => project.name !== "");
     await writeAudit(db, { machineId: id, actor, source: "panel", action: "workers_list", detail: { count: vWorkers.length, platform: "vercel" } }, now);
     return { workers: vWorkers, fetched_at: now, platform: "vercel", account_id: "", subdomain: "" };
@@ -1079,18 +1087,148 @@ export interface WorkerAccountStats {
   fetched_at: number;
 }
 
+export interface VercelLatestDeploy {
+  state: string | null;
+  created_at: number | null;
+  url: string | null;
+}
+
+// Account profile for the account tab. Every field is nullable: Vercel only
+// returns what the token may read, and nothing here is ever invented.
+export interface VercelAccountProfile {
+  username: string | null;
+  email: string | null;
+  name: string | null;
+  team_name: string | null;
+  team_plan: string | null;
+}
+
 export interface VercelAccountStats {
   projects_total: number | null;
   domains_total: number | null;
-  latest_deploy_at: number | null;
+  latest_deploy: VercelLatestDeploy | null;
+  account: VercelAccountProfile;
   fetched_at: number;
 }
 
+interface VercelDeploymentRef {
+  createdAt?: number;
+  created?: number;
+  url?: string;
+  target?: string;
+  alias?: string[];
+}
+
+interface VercelProject {
+  name?: string;
+  updatedAt?: number;
+  framework?: string | null;
+  latestDeployments?: VercelDeploymentRef[];
+  targets?: { production?: { alias?: string[]; url?: string } };
+}
+
 interface VercelBody {
-  projects?: unknown[];
+  projects?: VercelProject[];
   domains?: Array<{ name?: string; createdAt?: number }>;
-  deployments?: Array<{ name?: string; url?: string; state?: string; created?: number }>;
+  deployments?: Array<{
+    name?: string;
+    url?: string;
+    state?: string;
+    created?: number;
+    meta?: Record<string, unknown>;
+  }>;
+  user?: { username?: string; email?: string; name?: string | null };
+  team?: { name?: string; plan?: string | { slug?: string } };
+  // Some Vercel endpoints return the user/team object unwrapped.
+  username?: string;
+  email?: string;
+  name?: string | null;
+  slug?: string;
+  plan?: string | { slug?: string };
   error?: { message?: string };
+}
+
+// Best-effort wrapper: a metric the token cannot read stays null instead of
+// failing the whole card.
+async function vercelSafe<T>(run: () => Promise<T>, fallback: T): Promise<T> {
+  try {
+    return await run();
+  } catch {
+    return fallback;
+  }
+}
+
+function vercelDeployTime(deploy: VercelDeploymentRef | undefined): number | null {
+  if (!deploy) return null;
+  if (typeof deploy.createdAt === "number" && deploy.createdAt > 0) return deploy.createdAt;
+  if (typeof deploy.created === "number" && deploy.created > 0) return deploy.created;
+  return null;
+}
+
+function vercelProjectDeployAt(project: VercelProject): number | null {
+  const rows = Array.isArray(project.latestDeployments) ? project.latestDeployments : [];
+  let latest = 0;
+  rows.forEach((row) => {
+    const time = vercelDeployTime(row);
+    if (time !== null && time > latest) latest = time;
+  });
+  return latest > 0 ? latest : null;
+}
+
+function vercelProjectDomain(project: VercelProject): string | null {
+  const production = project.targets?.production;
+  const alias = Array.isArray(production?.alias) ? production?.alias[0] : undefined;
+  if (typeof alias === "string" && alias.trim()) return alias.trim();
+  if (typeof production?.url === "string" && production.url.trim()) return production.url.trim();
+  const rows = Array.isArray(project.latestDeployments) ? project.latestDeployments : [];
+  const deploy = rows.find((row) => row.target === "production") ?? rows[0];
+  const deployAlias = Array.isArray(deploy?.alias) ? deploy?.alias[0] : undefined;
+  if (typeof deployAlias === "string" && deployAlias.trim()) return deployAlias.trim();
+  if (typeof deploy?.url === "string" && deploy.url.trim()) return deploy.url.trim();
+  return null;
+}
+
+// Vercel's deployment urls come without a scheme (project-x.vercel.app).
+function vercelHttpUrl(value: string | undefined | null): string | null {
+  const text = String(value ?? "").trim();
+  if (!text) return null;
+  return /^https?:\/\//i.test(text) ? text : "https://" + text;
+}
+
+function vercelDeployMeta(meta: Record<string, unknown> | undefined): { branch: string | null; commit_message: string | null } {
+  const source = meta && typeof meta === "object" ? meta : {};
+  const candidates = [source.githubCommitRef, source.gitBranch, source.branch];
+  let branch: string | null = null;
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && candidate.trim()) {
+      branch = candidate.trim();
+      break;
+    }
+  }
+  const message = typeof source.githubCommitMessage === "string" && source.githubCommitMessage.trim() ? source.githubCommitMessage.trim() : null;
+  return { branch, commit_message: message };
+}
+
+async function vercelAccountProfile(token: string, teamId: string): Promise<VercelAccountProfile> {
+  const profile: VercelAccountProfile = { username: null, email: null, name: null, team_name: null, team_plan: null };
+  try {
+    const body = await vercelGetJson(token, "https://api.vercel.com/v2/user");
+    const user = body.user ?? body;
+    if (typeof user.username === "string" && user.username.trim()) profile.username = user.username.trim();
+    if (typeof user.email === "string" && user.email.trim()) profile.email = user.email.trim();
+    if (typeof user.name === "string" && user.name.trim()) profile.name = user.name.trim();
+  } catch { /* stays null */ }
+  if (teamId) {
+    try {
+      const body = await vercelGetJson(token, "https://api.vercel.com/v2/teams/" + encodeURIComponent(teamId));
+      const team = body.team ?? body;
+      if (typeof team.name === "string" && team.name.trim()) profile.team_name = team.name.trim();
+      const plan = team.plan;
+      const slug = typeof plan === "string" ? plan : plan && typeof plan.slug === "string" ? plan.slug : "";
+      if (slug.trim()) profile.team_plan = slug.trim();
+    } catch { /* stays null */ }
+  }
+  return profile;
 }
 
 async function vercelGetJson(token: string, url: string): Promise<VercelBody> {
@@ -1120,23 +1258,28 @@ export async function getWorkerAccountStats(
   const token = await openMachineSecret(key, row.api_token_enc);
   if ((row.platform || "cloudflare") === "vercel") {
     const team = row.team_id ? "&teamId=" + encodeURIComponent(row.team_id) : "";
-    let projects_total: number | null = null;
-    let domains_total: number | null = null;
-    let latest_deploy_at: number | null = null;
-    try {
-      const body = await vercelGetJson(token, "https://api.vercel.com/v9/projects?limit=100" + team);
-      if (Array.isArray(body.projects)) projects_total = body.projects.length;
-    } catch { /* metric stays null */ }
-    try {
-      const body = await vercelGetJson(token, "https://api.vercel.com/v5/domains?limit=100" + team);
-      if (Array.isArray(body.domains)) domains_total = body.domains.length;
-    } catch { /* metric stays null */ }
-    try {
-      const body = await vercelGetJson(token, "https://api.vercel.com/v6/deployments?limit=1" + team);
-      const first = Array.isArray(body.deployments) ? body.deployments[0] : undefined;
-      if (first && typeof first.created === "number") latest_deploy_at = first.created;
-    } catch { /* metric stays null */ }
-    return { projects_total, domains_total, latest_deploy_at, fetched_at: now };
+    const [projects_total, domains_total, latest_deploy, account] = await Promise.all([
+      vercelSafe(async () => {
+        const body = await vercelGetJson(token, "https://api.vercel.com/v9/projects?limit=100" + team);
+        return Array.isArray(body.projects) ? body.projects.length : null;
+      }, null),
+      vercelSafe(async () => {
+        const body = await vercelGetJson(token, "https://api.vercel.com/v5/domains?limit=100" + team);
+        return Array.isArray(body.domains) ? body.domains.length : null;
+      }, null),
+      vercelSafe(async () => {
+        const body = await vercelGetJson(token, "https://api.vercel.com/v6/deployments?limit=1" + team);
+        const first = Array.isArray(body.deployments) ? body.deployments[0] : undefined;
+        if (!first) return null;
+        const state = typeof first.state === "string" && first.state.trim() ? first.state.trim() : null;
+        const created_at = typeof first.created === "number" && first.created > 0 ? first.created : null;
+        const url = vercelHttpUrl(first.url);
+        if (state === null && created_at === null && url === null) return null;
+        return { state, created_at, url };
+      }, null),
+      vercelAccountProfile(token, row.team_id ?? ""),
+    ]);
+    return { projects_total, domains_total, latest_deploy, account, fetched_at: now };
   }
   if (!row.cf_account_id) throw new MachineError(400, "先填写 Cloudflare 账号 ID");
   const accountId = row.cf_account_id;
@@ -1215,12 +1358,17 @@ export async function listWorkerAssets(
     } else {
       const body = await vercelGetJson(vtoken, "https://api.vercel.com/v6/deployments?limit=20" + vteam);
       const rows = Array.isArray(body.deployments) ? body.deployments : [];
-      vitems = rows.map((deployment) => ({
-        name: String(deployment.name ?? ""),
-        url: String(deployment.url ?? ""),
-        state: String(deployment.state ?? ""),
-        created_at: typeof deployment.created === "number" ? new Date(deployment.created).toISOString() : null,
-      }));
+      vitems = rows.map((deployment) => {
+        const meta = vercelDeployMeta(deployment.meta);
+        return {
+          name: String(deployment.name ?? ""),
+          url: vercelHttpUrl(deployment.url) ?? "",
+          state: String(deployment.state ?? ""),
+          created_at: typeof deployment.created === "number" ? new Date(deployment.created).toISOString() : null,
+          branch: meta.branch,
+          commit_message: meta.commit_message,
+        };
+      });
     }
     await writeAudit(db, { machineId: id, actor, source: "panel", action: "worker_assets", detail: { kind, count: vitems.length } }, now);
     return { kind, items: vitems, fetched_at: now };
