@@ -763,3 +763,64 @@ img, svg, video, canvas { max-width: 100%; }
   .totp-toolbar { flex-wrap: nowrap; }
   .totp-code { font-size: 22px; }
 }
+
+/* 保险库「验证码」批2：扫码与导入导出 */
+.totp-scan-frame {
+  position: relative;
+  border-radius: var(--r-md);
+  background: var(--bg-sunken);
+  overflow: hidden;
+  aspect-ratio: 4 / 3;
+}
+.totp-scan-frame video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.totp-scan-fallback {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-3);
+}
+.totp-scan-fallback[hidden] { display: none; }
+.totp-scan-actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.totp-scan-paste { display: grid; gap: 8px; margin-top: 10px; }
+.totp-scan-paste[hidden] { display: none; }
+.totp-scan-added { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+.totp-scan-chip {
+  padding: 4px 10px;
+  border-radius: var(--r-pill);
+  background: var(--ok-bg);
+  color: var(--success-text);
+  font-size: var(--fs-sm);
+}
+.totp-io-tabs { margin-bottom: 12px; }
+.totp-drop {
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r-md);
+  padding: 18px 12px;
+  text-align: center;
+  color: var(--text-3);
+  cursor: pointer;
+  margin-bottom: 12px;
+}
+.totp-drop.is-over { background: var(--accent-soft); color: var(--accent-text); }
+.totp-io-actions { display: flex; justify-content: flex-end; margin-top: 12px; }
+.totp-import-list { display: grid; gap: 6px; margin-top: 12px; }
+.totp-import-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  color: var(--text);
+  text-align: left;
+  font-size: var(--fs-sm);
+}
+.totp-import-row[aria-pressed="false"] { opacity: 0.55; }
+.totp-import-row.is-off { opacity: 0.55; cursor: default; }
+.totp-import-check { color: var(--accent-text); font-weight: 700; flex: none; }
+.totp-import-unsupported-title { margin: 14px 0 0; }

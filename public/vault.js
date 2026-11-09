@@ -633,7 +633,7 @@
         : activeTab === "gateway"
           ? C.addBar({ addLabel: "添加网关", addAction: "add-gateway", groupAction: "add-vgroup" })
           : activeTab === "totp"
-            ? '<button type="button" class="add-button" data-totp-act="add" data-totp-add-btn>手动添加</button>'
+            ? '<button type=\"button\" class=\"secondary\" data-totp-act=\"scan\" data-totp-add-btn>扫码添加</button><button type=\"button\" class=\"secondary\" data-totp-act=\"io\" data-totp-add-btn>导入导出</button><button type=\"button\" class=\"add-button\" data-totp-act=\"add\" data-totp-add-btn>手动添加</button>'
             : '<button type="button" class="add-button" data-add="email">添加邮箱</button>') +
       "</div></div>";
     C.mount(
