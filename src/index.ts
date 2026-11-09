@@ -36,6 +36,7 @@ import { handleNodesRequest } from "./nodes-http";
 import { runKeepaliveSweep, syncAllConnections } from "./providers";
 import { vaultKeyOf } from "./machines";
 import { handleOverviewRequest } from "./overview-http";
+import { handleVersionRequest } from "./version-http";
 import { handleRecordsRequest } from "./records-http";
 import { handleOplogRequest } from "./oplog-http";
 import { handleSystemRequest, recordCronRun } from "./system-http";
@@ -75,6 +76,8 @@ export default {
     try {
       if (isPublicAsset(path)) return env.ASSETS.fetch(request);
       if (path === "/api/health") return json({ ok: true, service: "hivemos" });
+      const version = handleVersionRequest(request, env, path);
+      if (version) return version;
       if (path === "/api/auth/login") return login(request, env);
       // The ticket is the credential. This must stay ahead of the session gate,
       // same as login, or a signed-out operator can never finish the challenge.

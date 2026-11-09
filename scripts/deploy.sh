@@ -5,7 +5,7 @@
 set -e
 cd "$(dirname "$0")/.."
 node scripts/check.mjs
-exec npx wrangler deploy "$@"
+exec npx wrangler deploy --var "BUILD_ID:$(git rev-parse --short HEAD)" "$@"
 
 # Admin alignment (admin-init design): when both secrets are present in
 # the environment, align the administrator row after deploying. Skipped

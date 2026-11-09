@@ -24,6 +24,7 @@ export interface Env {
   DB: D1Database;
   AI?: AiBinding;
   ADMIN_USERNAME?: string;
+  BUILD_ID?: string;
   ADMIN_PASSWORD?: string;
   // Optional Worker var/secret. Blank falls back to the built-in model.
   AI_MODEL?: string;
