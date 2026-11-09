@@ -2629,15 +2629,6 @@
 
   // ---- 网络节点：订阅分组、手动导入、TCP 测活 ----
 
-  function clockHM(ms) {
-    var time = Number(ms);
-    if (!Number.isFinite(time) || time <= 0) return "";
-    var date = new Date(time);
-    if (isNaN(date.getTime())) return "";
-    function pad(number) { return (number < 10 ? "0" : "") + number; }
-    return pad(date.getHours()) + ":" + pad(date.getMinutes());
-  }
-
   function findSub(id) {
     var found = null;
     state.subscriptions.forEach(function (sub) { if (sub.id === id) found = sub; });
@@ -2653,32 +2644,24 @@
   function nodeServerFact(node) {
     var host = String(node.server || "");
     var shown = host.indexOf(":") >= 0 ? "[" + host + "]" : host;
-    return '<span class="copy-text" data-copy="' + C.escapeHtml(host) + '" data-label="' + C.escapeHtml(shown) + '" title="点击复制">' + C.escapeHtml(shown) + "</span>:" + Number(node.port);
+    var full = shown + ":" + Number(node.port);
+    return '<span class="copy-text" data-copy="' + C.escapeHtml(host) + '" data-label="' + C.escapeHtml(full) + '" title="' + C.escapeHtml(full) + '">' + C.escapeHtml(full) + "</span>";
   }
 
-  function nodeTestFact(node) {
+  function nodeStatusCorner(node) {
     if (node.last_status === "ok") {
-      var bits = ["可达"];
-      if (node.last_latency_ms != null) bits.push(node.last_latency_ms + " ms");
-      var hm = clockHM(node.last_test_at);
-      if (hm) bits.push(hm);
-      return '<span class="status-indicator" data-status="ok">' + C.escapeHtml(bits.join(" · ")) + "</span>";
+      var latency = node.last_latency_ms != null ? node.last_latency_ms + " ms" : "";
+      return '<span class="status-indicator" data-status="ok" aria-label="' + C.escapeHtml(latency ? "可达 " + latency : "可达") + '">' + C.escapeHtml(latency) + "</span>";
     }
     if (node.last_status === "fail") {
-      var failBits = ["不可达"];
-      var failHm = clockHM(node.last_test_at);
-      if (failHm) failBits.push(failHm);
-      return '<span class="status-indicator" data-status="bad">' + C.escapeHtml(failBits.join(" · ")) + "</span>";
+      return '<span class="status-indicator" data-status="bad" aria-label="不可达"></span>';
     }
-    return "未测试";
+    return '<span class="status-indicator" data-status="idle" aria-label="未测试"></span>';
   }
 
   function nodeCard(node) {
     var id = C.escapeHtml(node.id);
-    var facts = [
-      ["服务器", nodeServerFact(node)],
-      ["测活", nodeTestFact(node)],
-    ];
+    var facts = [["服务器", nodeServerFact(node)]];
     if (node.note) {
       facts.push(["备注", '<span class="fact-note" title="' + C.escapeHtml(node.note) + '">' + C.escapeHtml(node.note) + "</span>"]);
     }
@@ -2690,6 +2673,8 @@
     return C.record({
       title: node.name || "未命名",
       pill: node.protocol || "",
+      corner: nodeStatusCorner(node),
+      className: "node-card",
       facts: facts,
       actions: actions,
     });
