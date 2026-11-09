@@ -2245,6 +2245,46 @@
     if (b >= 1024 * 1024) return (b / 1048576).toFixed(1).replace(/\.0$/, "") + " MB";
     return (b > 0 ? Math.max(1, Math.round(b / 1024)) : 0) + " KB";
   }
+  // Relative time for deployment rows and the card's 最近部署 fact.
+  function relTime(value) {
+    var time = typeof value === "number" ? value : value ? new Date(value).getTime() : NaN;
+    if (!Number.isFinite(time) || time <= 0) return "";
+    var diff = Date.now() - time;
+    if (diff < 0) return C.formatMinute(time) || "";
+    if (diff < 60 * 1000) return "刚刚";
+    if (diff < 60 * 60 * 1000) return Math.floor(diff / 60000) + " 分钟前";
+    if (diff < 24 * 60 * 60 * 1000) return Math.floor(diff / 3600000) + " 小时前";
+    if (diff < 30 * 24 * 60 * 60 * 1000) return Math.floor(diff / 86400000) + " 天前";
+    return C.formatMinute(time) || "";
+  }
+  // Vercel deployment states, shown as the API returns them; the tone only
+  // colours the status dot.
+  var VERCEL_STATE_TONE = {
+    READY: "ok", BUILDING: "warn", QUEUED: "warn", INITIALIZING: "warn",
+    ERROR: "bad", CANCELED: "idle",
+  };
+  function vercelStateTone(state) {
+    return VERCEL_STATE_TONE[String(state || "").toUpperCase()] || "idle";
+  }
+  function vercelStateHtml(state) {
+    var text = String(state || "").trim().toUpperCase();
+    if (!text) return "—";
+    return "<span class=\"status-indicator\" data-status=\"" + vercelStateTone(text) + "\">" + C.escapeHtml(text) + "</span>";
+  }
+  function urlHost(url) {
+    return String(url || "").replace(/^https?:\/\//i, "");
+  }
+  function copyUrlHtml(url) {
+    var full = String(url || "").trim();
+    if (!full) return "—";
+    var shown = urlHost(full);
+    return "<span class=\"copy-text\" data-copy=\"" + C.escapeHtml(full) + "\" data-label=\"" + C.escapeHtml(shown) + "\" title=\"点击复制\">" + C.escapeHtml(shown) + "</span>";
+  }
+  function vercelAccountText(stats, key) {
+    if (!stats || !stats.account) return "—";
+    var value = stats.account[key];
+    return typeof value === "string" && value.trim() ? value : "—";
+  }
   function workerStatSpan(item, metric) {
     return "<span data-wstat=\"" + C.escapeHtml(item.id) + ":" + metric + "\">…</span>";
   }
@@ -2256,7 +2296,21 @@
     if (metric === "zones") return stats.zones_total == null ? "—" : stats.zones_total + " 个";
     if (metric === "projects") return stats.projects_total == null ? "—" : stats.projects_total + " 个";
     if (metric === "vdomains") return stats.domains_total == null ? "—" : stats.domains_total + " 个";
-    if (metric === "deploy") return stats.latest_deploy_at == null ? "—" : C.formatMinute(stats.latest_deploy_at) || "—";
+    if (metric === "deploy") {
+      var deploy = stats.latest_deploy;
+      if (!deploy) return "—";
+      var pieces = [];
+      var state = String(deploy.state || "").trim().toUpperCase();
+      var when = relTime(deploy.created_at);
+      if (state) pieces.push(state);
+      if (when) pieces.push(when);
+      return pieces.length ? pieces.join(" · ") : "—";
+    }
+    if (metric === "vuser") return vercelAccountText(stats, "username");
+    if (metric === "vemail") return vercelAccountText(stats, "email");
+    if (metric === "vname") return vercelAccountText(stats, "name");
+    if (metric === "vteam") return vercelAccountText(stats, "team_name");
+    if (metric === "vplan") return vercelAccountText(stats, "team_plan");
     return "—";
   }
   function paintWorkerStats(id) {
@@ -2288,7 +2342,21 @@
     if (kind === "d1") return C.record({ id: entry.uuid || entry.name, title: entry.name, facts: [["大小", fmtSize(entry.file_size)], ["创建时间", C.escapeHtml(entry.created_at ? String(entry.created_at).slice(0, 10) : "—")]] });
     if (kind === "r2") return C.record({ id: entry.name, title: entry.name, facts: [["创建时间", C.escapeHtml(entry.created_at ? String(entry.created_at).slice(0, 10) : "—")], ["区域", C.escapeHtml(entry.location || "—")]] });
     if (kind === "vdomains") return C.record({ id: entry.name, title: entry.name, facts: [["创建时间", C.escapeHtml(entry.created_at ? String(entry.created_at).slice(0, 10) : "—")]] });
-    if (kind === "deployments") return C.record({ id: String(entry.name) + String(entry.created_at), title: entry.name || entry.url, facts: [["状态", C.escapeHtml(entry.state || "—")], ["时间", C.escapeHtml(entry.created_at ? String(entry.created_at).slice(0, 16).replace("T", " ") : "—")], ["地址", C.escapeHtml(entry.url || "—")]] });
+    if (kind === "deployments") {
+      var facts = [
+        ["地址", copyUrlHtml(entry.url)],
+        ["时间", C.escapeHtml(relTime(entry.created_at) || "—")],
+      ];
+      if (entry.branch) facts.push(["分支", C.escapeHtml(entry.branch)]);
+      if (entry.commit_message) facts.push(["提交", C.escapeHtml(entry.commit_message)]);
+      return C.record({
+        id: String(entry.name || "") + String(entry.url || entry.created_at || ""),
+        title: entry.name || entry.url || "未命名部署",
+        statusHtml: vercelStateHtml(entry.state),
+        facts: facts,
+        actions: entry.url ? "<button type=\"button\" class=\"secondary\" data-wopen=\"" + C.escapeHtml(entry.url) + "\">打开</button>" : "",
+      });
+    }
     return C.record({ id: entry.id, title: entry.title || entry.id, facts: [["ID", "<span class=\"copy-text\" data-copy=\"" + C.escapeHtml(entry.id) + "\" data-label=\"" + C.escapeHtml(entry.id) + "\" title=\"点击复制\">" + C.escapeHtml(entry.id) + "</span>"]] });
   }
   function copyWorkerConfig(item, btn) {
@@ -2355,7 +2423,14 @@
       var statRows = isVercel
         ? "<div><dt>项目总量</dt><dd>" + workerStatSpan(item, "projects") + "</dd></div>" +
           "<div><dt>域名数量</dt><dd>" + workerStatSpan(item, "vdomains") + "</dd></div>" +
-          "<div><dt>最近部署</dt><dd>" + workerStatSpan(item, "deploy") + "</dd></div>"
+          "<div><dt>最近部署</dt><dd>" + workerStatSpan(item, "deploy") + "</dd></div>" +
+          "<div><dt>用户名</dt><dd>" + workerStatSpan(item, "vuser") + "</dd></div>" +
+          "<div><dt>邮箱</dt><dd>" + workerStatSpan(item, "vemail") + "</dd></div>" +
+          "<div><dt>姓名</dt><dd>" + workerStatSpan(item, "vname") + "</dd></div>" +
+          (item.team_id
+            ? "<div><dt>团队名称</dt><dd>" + workerStatSpan(item, "vteam") + "</dd></div>" +
+              "<div><dt>团队套餐</dt><dd>" + workerStatSpan(item, "vplan") + "</dd></div>"
+            : "")
         : "<div><dt>Workers 总量</dt><dd>" + workerStatSpan(item, "workers") + "</dd></div>" +
           "<div><dt>Workers 用量</dt><dd>" + workerStatSpan(item, "requests") + "</dd></div>" +
           "<div><dt>D1 数据库</dt><dd>" + workerStatSpan(item, "d1") + "</dd></div>" +
@@ -2432,7 +2507,11 @@
           }
           var rows = workers.map(function (w) {
             var modified = w.modified_on ? String(w.modified_on).slice(0, 10) + " " + String(w.modified_on).slice(11, 16) : "未记录";
-            var wfacts = w.meta ? [["框架", C.escapeHtml(w.meta)], ["更新时间", C.escapeHtml(modified)]] : [["更新时间", C.escapeHtml(modified)]];
+            var wfacts = [];
+            if (w.meta) wfacts.push(["框架", C.escapeHtml(w.meta)]);
+            if (w.deploy_at) wfacts.push(["最近部署", C.escapeHtml(relTime(w.deploy_at) || "—")]);
+            else wfacts.push(["更新时间", C.escapeHtml(modified)]);
+            if (w.domain) wfacts.push(["域名", copyUrlHtml(w.domain)]);
             return C.record({ id: w.name, title: w.name, facts: wfacts, actions: workerActions(w) });
           }).join("");
           container.innerHTML = (
@@ -2938,6 +3017,11 @@
         if (connAct === "delete") deleteConnection(conn, connBtn);
         else connectionAction(conn, connAct, connBtn);
       }
+      return;
+    }
+    var wopenBtn = target.closest("[data-wopen]");
+    if (wopenBtn) {
+      window.open(wopenBtn.getAttribute("data-wopen"), "_blank", "noopener");
       return;
     }
     var mact = target.closest("[data-mact]");
