@@ -926,7 +926,6 @@
 
     C.mount(
       C.layout(
-        "",
         head +
           "<div data-panel=\"tasks\"" + (activeTab === "tasks" ? "" : " hidden") + ">" + tasksHtml + "</div>" +
           "<div data-panel=\"calendar\"" + (activeTab === "calendar" ? "" : " hidden") + ">" + calendarHtml() + "</div>"

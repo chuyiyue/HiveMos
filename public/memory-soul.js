@@ -353,7 +353,6 @@
       "</div></div>";
     C.mount(
       C.layout(
-        "",
         head +
           "<div data-panel=\"memory\"" + (activeTab === "memory" ? "" : " hidden") + ">" + memoryHtml + "</div>" +
           "<div data-panel=\"soul\"" + (activeTab === "soul" ? "" : " hidden") + ">" + soulHtml + "</div>"

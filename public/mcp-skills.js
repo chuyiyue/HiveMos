@@ -589,7 +589,6 @@
       "</div></div>";
     C.mount(
       C.layout(
-        "",
         head +
           "<div data-panel=\"mcp\"" +
           (activeTab === "mcp" ? "" : " hidden") +

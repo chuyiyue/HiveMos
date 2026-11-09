@@ -11,13 +11,13 @@
         "<button class=\"page-tab\" type=\"button\" role=\"tab\" data-tab=\"oplog\" aria-selected=\"false\">系统日志</button>" +
         "</div>" +
         "<div data-panel=\"overview\">" +
-        C.section("最近动态", "", C.emptyState("正在读取", "稍等片刻")) +
+        C.section("最近动态", "", C.emptyState("正在读取", "")) +
         "</div>" +
         "<div data-panel=\"calls\" hidden>" +
-        C.section("调用记录", "", C.emptyState("正在读取", "稍等片刻")) +
+        C.section("调用记录", "", C.emptyState("正在读取", "")) +
         "</div>" +
         "<div data-panel=\"oplog\" hidden>" +
-        C.section("系统日志", "", C.emptyState("正在读取", "稍等片刻")) +
+        C.section("系统日志", "", C.emptyState("正在读取", "")) +
         "</div>",
     ),
   );
@@ -73,7 +73,7 @@
     ]);
     var tasks = stats.tasks || { total: 0, queued: 0, active: 0, done: 0 };
     cards.push(["任务", tasks.total, tasks.total ? tasks.active + " 个进行中，" + tasks.queued + " 个排队，" + tasks.done + " 个已完成" : "还没有任务"]);
-    cards.push(["记忆", stats.memories || 0, stats.memories ? "跨 Agent 共享与同步" : "还没有记忆"]);
+    cards.push(["记忆", stats.memories || 0, stats.memories ? "" : "还没有记忆"]);
     cards.push(["Soul", stats.souls || 0, stats.souls ? "个 Agent 的人格定义" : "还没有 Soul"]);
     var calendars = stats.calendars || { total: 0, events_next_7d: 0 };
     cards.push(["日历", calendars.total, calendars.total ? "未来 7 天 " + calendars.events_next_7d + " 个日程" : "还没有日历"]);
@@ -145,8 +145,8 @@
       var html =
         "<div class=\"stack\">" +
         '<div class="overview-split">' +
-        C.section("最近动态", "", activity.length ? feedList(activity.slice(0, 10)) : C.emptyState("还没有动态", "各模块的操作会汇总到这里")) +
-        C.section("告警", alerts.length ? alerts.length + " 条" : "", alerts.length ? alertList(alerts) : C.emptyState("还没有告警", "运行中的异常会列在这里")) +
+        C.section("最近动态", "", activity.length ? feedList(activity.slice(0, 10)) : C.emptyState("还没有动态", "")) +
+        C.section("告警", alerts.length ? alerts.length + " 条" : "", alerts.length ? alertList(alerts) : C.emptyState("还没有告警", "")) +
         "</div>" +
         statCards(data.stats) +
         "</div>";
@@ -252,7 +252,7 @@
       if (state.failed && !state.items.length) {
         body = C.emptyState("读取失败", cfg.failText);
       } else if (!state.started || (state.loading && !state.items.length)) {
-        body = C.emptyState("正在读取", "稍等片刻");
+        body = C.emptyState("正在读取", "");
       } else if (!state.items.length) {
         body = C.emptyState(cfg.emptyTitle, cfg.emptyText);
       } else {
@@ -366,7 +366,7 @@
       return { tag: item.module_label, text: item.actor + " " + item.text };
     },
     emptyTitle: "还没有记录",
-    emptyText: "Agent 通过 MCP 的调用会汇总到这里",
+    emptyText: "",
     failText: "记录暂时读不到，点任意板块或刷新页面再试",
   });
 
@@ -394,7 +394,7 @@
       return { tag: item.module, text: item.action + " " + item.text };
     },
     emptyTitle: "还没有日志",
-    emptyText: "你在面板里的操作会记录到这里",
+    emptyText: "",
     failText: "日志暂时读不到，点任意板块或刷新页面再试",
   });
 })();

@@ -168,7 +168,6 @@
       "</div></div>";
     C.mount(
       C.layout(
-        "",
         head +
           '<div data-panel="agents"' +
           (state.activeTab === "agents" ? "" : " hidden") +

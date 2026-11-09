@@ -50,7 +50,7 @@
   }
 
   function emptyState(title, text) {
-    return '<div class="empty-state"><p class="empty-title">' + escapeHtml(title) + "</p><p>" + escapeHtml(text) + "</p></div>";
+    return '<div class="empty-state"><p class="empty-title">' + escapeHtml(title) + "</p>" + (text ? "<p>" + escapeHtml(text) + "</p>" : "") + "</div>";
   }
 
   function section(title, hint, body, actionsHtml) {
@@ -728,7 +728,6 @@
       "</div>" +
       "</div>" +
       "<div data-mpanel=\"perms\"" + (initialTab === "perms" ? "" : " hidden") + ">" +
-      "<p class=\"subtle manage-note\">这个 Agent 通过面板 MCP 能访问的系统功能，在下方点选后点保存权限统一生效</p>" +
       permSection +
       "</div>" +
       "<div data-mpanel=\"advanced\"" + (initialTab === "advanced" ? "" : " hidden") + ">" +
@@ -1408,7 +1407,7 @@
         '<div class="manage-actions">' +
         '<button type="button" class="secondary" data-avatar-choose>选择图片</button>' +
         "</div>" +
-        '<p class="subtle">选图后会自动居中裁剪并缩放为 128×128 方图再保存，文件不超过 200 KB</p>' +
+        '<p class="subtle">选图后自动居中裁剪为方图，文件不超过 200 KB</p>' +
         "</div>" +
         '<div data-avatar-pane="link" hidden>' +
         '<label>图片链接<input data-avatar-url type="url" inputmode="url" placeholder="https://example.com/avatar.png" autocomplete="off" /></label>' +
@@ -2017,7 +2016,7 @@
           if (!records) {
             agentRecordsHtml = '<p class="subtle">访问记录暂时读不到</p>';
           } else if (!records.length) {
-            agentRecordsHtml = '<p class="subtle">还没有访问记录，这个 Agent 的取用与操作会留在这里</p>';
+            agentRecordsHtml = '<p class="subtle">还没有访问记录</p>';
           } else {
             agentRecordsHtml =
               '<ol class="feed">' +
@@ -2069,9 +2068,9 @@
       escapeHtml(label) +
       '</p><p class="stat-value">' +
       escapeHtml(value) +
-      '</p><p class="subtle">' +
-      escapeHtml(hint) +
-      "</p></article>"
+      "</p>" +
+      (hint ? '<p class="subtle">' + escapeHtml(hint) + "</p>" : "") +
+      "</article>"
     );
   }
 
@@ -2090,8 +2089,8 @@
     );
   }
 
-  function layout(lede, body) {
-    return (lede ? '<p class="lede">' + escapeHtml(lede) + "</p>" : "") + body;
+  function layout(body) {
+    return body;
   }
 
   function mount(html) {
