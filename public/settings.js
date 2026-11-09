@@ -37,6 +37,7 @@
     backup: null,
     backupError: "",
     backupSeeded: false,
+    backupTab: "github",
     ghOwner: "",
     ghRepo: "",
     ghBranch: "",
@@ -892,7 +893,7 @@
     var tokenHint = target && target.has_token ? "已保存 " + C.maskTail(target.token_tail) + "，留空表示不修改" : "建议使用 repo 权限的细粒度令牌";
     var tokenPlaceholder = target && target.has_token ? "留空表示不修改" : "粘贴访问令牌";
     return (
-      '<div class="stack feature-item"><h3>GitHub 仓库</h3>' +
+      '<div class="stack feature-item">' +
       '<label>仓库 owner<input data-field="ghOwner" name="ghOwner" type="text" maxlength="100" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="例如 octocat" value="' +
       C.escapeHtml(state.ghOwner) +
       '" /></label>' +
@@ -932,7 +933,7 @@
     var passwordHint = target && target.has_password ? "已保存 " + C.maskTail(target.password_tail) + "，留空表示不修改" : "可留空";
     var passwordPlaceholder = target && target.has_password ? "留空表示不修改" : "粘贴密码";
     return (
-      '<div class="stack feature-item"><h3>WebDAV 网盘</h3>' +
+      '<div class="stack feature-item">' +
       '<label>服务器地址<input data-field="wdBase" name="wdBase" type="url" maxlength="400" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="https://example.com/dav" value="' +
       C.escapeHtml(state.wdBase) +
       '" /></label>' +
@@ -1056,6 +1057,33 @@
     );
   }
 
+  function currentBackupTab() {
+    return state.backupTab === "webdav" ? "webdav" : "github";
+  }
+
+  function backupTabButton(id) {
+    return (
+      '<button type="button" class="page-tab" data-action="set-backup-tab" data-target="' +
+      id +
+      '" aria-selected="' +
+      (currentBackupTab() === id ? "true" : "false") +
+      '">' +
+      C.escapeHtml(backupTargetName(id)) +
+      "</button>"
+    );
+  }
+
+  function backupTargets() {
+    return (
+      '<div><div class="page-tabs" role="tablist" aria-label="备份目标">' +
+      backupTabButton("github") +
+      backupTabButton("webdav") +
+      "</div>" +
+      (currentBackupTab() === "github" ? githubCard() : webdavCard()) +
+      "</div>"
+    );
+  }
+
   function backupPanel() {
     return panel(
       "backup-panel",
@@ -1063,10 +1091,7 @@
       '<div class="stack" id="backup-status"><h3>备份状态</h3>' +
         backupStatusBlock() +
         "</div>" +
-        '<div class="feature-cols">' +
-        githubCard() +
-        webdavCard() +
-        "</div>" +
+        backupTargets() +
         backupAutoPanel(),
     );
   }
@@ -1136,6 +1161,8 @@
         state.wdUser = webdav.username || "";
         state.wdDir = webdav.remote_dir || "";
       }
+      if (github) state.backupTab = "github";
+      else if (webdav) state.backupTab = "webdav";
     }
     state.backupSeeded = true;
   }
@@ -1151,6 +1178,13 @@
   function toggleBackupAuto() {
     state.backupAuto = !state.backupAuto;
     state.backupScheduleError = "";
+    render();
+  }
+
+  function setBackupTab(control) {
+    var value = control.getAttribute("data-target") || "";
+    if (value !== "github" && value !== "webdav") return;
+    state.backupTab = value;
     render();
   }
 
@@ -1412,6 +1446,7 @@
     else if (action === "set-cron-interval") setCronInterval(control);
     else if (action === "toggle-backup-auto") toggleBackupAuto();
     else if (action === "set-backup-target") setBackupTarget(control);
+    else if (action === "set-backup-tab") setBackupTab(control);
     else if (action === "backup-test") testBackupTarget(control.getAttribute("data-target") || "");
     else if (action === "backup-save") saveBackupTarget(control.getAttribute("data-target") || "");
     else if (action === "backup-run") runBackupNow(control.getAttribute("data-target") || "");
