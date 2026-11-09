@@ -776,7 +776,8 @@ button.is-armed, .is-armed {
 }
 .kv dd .copy-text,
 .card-meta dd .copy-text { display: block; }
-.kv dd .fact-note { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kv dd .fact-note,
+.card-meta dd .fact-note { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .copy-text:hover { color: var(--accent); }
 
 .pager { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-top: 14px; }

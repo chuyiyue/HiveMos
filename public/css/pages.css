@@ -841,3 +841,19 @@ img, svg, video, canvas { max-width: 100%; }
 .totp-import-row.is-off { opacity: 0.55; cursor: default; }
 .totp-import-check { color: var(--accent-text); font-weight: 700; flex: none; }
 .totp-import-unsupported-title { margin: 14px 0 0; }
+
+/* 代理节点卡：信息区按「服务器 + 备注」两行 label/value 预留高度。
+   没有备注时不渲染备注行，但 min-height 兜住，加/删备注前后卡片高度与
+   按钮位置完全一致。align-content: start 让内容始终贴顶，留白落在底部。 */
+article.node-card .record-info {
+  /* 两行 label/value（0.8125rem 标签 + 0.9375rem 值，行高 1.55）+ 行间距
+     + 标题行 + 10px 栅格间距，略留余量，随根字号一起缩放 */
+  min-height: calc(7rem + 28px);
+  align-content: start;
+}
+
+/* 服务器、备注各占一整行：备注永远是信息区的第二行，缺省时由上面的
+   min-height 留出同样的高度。 */
+article.node-card .card-meta {
+  grid-template-columns: minmax(0, 1fr);
+}
