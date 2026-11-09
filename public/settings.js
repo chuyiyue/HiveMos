@@ -1317,7 +1317,7 @@
     } else {
       html = settingsLayout();
     }
-    C.mount(C.layout("", html));
+    C.mount(C.layout(html));
     bind();
     var focusSelector = state.focus;
     state.focus = "";
