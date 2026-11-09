@@ -1045,14 +1045,13 @@
       .then(function (res) {
         var failed = !res.data || !res.data.ok;
         if (connPanelState) {
-          connPanelState.notice = {
-            text: failed
-              ? (res.data && res.data.error) || (act === "sync" ? "同步失败" : "测试失败")
-              : act === "sync"
-                ? "已同步，更新 " + (res.data.updated || 0) + " 台"
-                : "测试成功",
-            error: failed,
-          };
+          var text = failed
+            ? (res.data && res.data.error) || (act === "sync" ? "同步失败" : "测试失败")
+            : act === "sync"
+              ? "已同步，更新 " + (res.data.updated || 0) + " 台"
+              : "测试成功";
+          if (act === "test") connPanelState.testNotice = { text: text, error: failed };
+          else connPanelState.notice = { text: text, error: failed };
           connPanelState.devicesStale = !failed;
         }
         return load();
@@ -1089,6 +1088,7 @@
             connPanelState.devices = null;
             connPanelState.devicesError = "";
             connPanelState.devicesLoading = false;
+            connPanelState.testNotice = null;
           }
           connPanelState.devicesStale = false;
           connPanelState.notice = { text: "连接已删除，已接入的设备仍留在云主机列表", error: false };
@@ -1505,7 +1505,26 @@
       importing: false,
       importGroupId: "",
       notice: null,
+      testNotice: null,
     };
+  }
+
+  function setConnTestStatus(text, isError) {
+    if (connPanelState) connPanelState.testNotice = text ? { text: text, error: !!isError } : null;
+    var el = connPanelCtrl && connPanelCtrl.bodyEl.querySelector("[data-conn-test-status]");
+    if (!el) return;
+    el.textContent = text || "";
+    el.classList.toggle("is-error", !!isError);
+  }
+
+  function connTestStatusHtml() {
+    var notice = connPanelState && connPanelState.testNotice;
+    return (
+      '<p class="manage-status' + (notice && notice.error ? " is-error" : "") +
+      '" data-conn-test-status role="status">' +
+      (notice ? C.escapeHtml(notice.text) : "") +
+      "</p>"
+    );
   }
 
   function findConn(id) {
@@ -1684,67 +1703,105 @@
     return wizardConfigFields(provider);
   }
 
+  function connProviderIconId(conn) {
+    var provider = (conn && conn.provider) || "";
+    var label = (conn && (conn.provider_label || providerLabel(provider))) || "";
+    var symbol = HMIcons.match(provider) || HMIcons.match(label);
+    if (symbol) return symbol;
+    if (provider === "mcp") return "icon-gateway";
+    return "icon-layout";
+  }
+
+  function connDeviceCount(conn) {
+    if (typeof conn.device_count === "number") return conn.device_count;
+    return state.items.filter(function (it) { return it.connection_id === conn.id; }).length;
+  }
+
   function connCardsHtml() {
-    if (!state.connections.length) return C.emptyState("还没有服务商连接", "用「添加云主机」接入第一个来源");
-    return (
-      '<div class="card-grid">' +
-      state.connections
-        .map(function (conn) {
-          var count = state.items.filter(function (it) { return it.connection_id === conn.id; }).length;
-          var selected = connPanelState && connPanelState.selectedId === conn.id;
-          return C.record({
-            id: conn.id,
-            className: selected ? "is-selected" : "",
-            icon: "layout",
-            title: conn.name,
-            pill: conn.provider_label || providerLabel(conn.provider),
-            facts: [
-              ["凭据", connCredHtml(conn)],
-              ["已接入", count + " 台"],
-              ["最近测试", C.escapeHtml(testSummary(conn))],
-            ],
-            manage: "provider:" + conn.id,
-          });
-        })
-        .join("") +
-      "</div>"
-    );
+    if (!state.connections.length) {
+      return (
+        '<div class="conn-empty">' +
+        C.emptyState("还没有服务商连接", "") +
+        '<button type="button" class="add-button" data-conn-add>添加云主机</button>' +
+        "</div>"
+      );
+    }
+    var cards = state.connections
+      .map(function (conn) {
+        var selected = connPanelState && connPanelState.selectedId === conn.id;
+        var tail = conn.config_tail ? "末四位 " + conn.config_tail : "已保存";
+        return C.record({
+          id: conn.id,
+          className: "conn-card" + (selected ? " is-selected" : ""),
+          iconHtml: HMIcons.svg(connProviderIconId(conn), "icon record-icon"),
+          title: conn.name,
+          pill: conn.provider_label || providerLabel(conn.provider),
+          corner: selected ? C.badge("已选", "accent") : '<span class="conn-pick-hint">查看</span>',
+          facts: [
+            ["已接入设备", connDeviceCount(conn) + " 台"],
+            ["凭据", C.escapeHtml(tail)],
+          ],
+          manage: "provider:" + conn.id,
+        });
+      })
+      .join("");
+    return C.cardList(cards);
   }
 
   function connInfoHtml(conn) {
     var rows = [
       ["服务商", C.escapeHtml(conn.provider_label || providerLabel(conn.provider))],
-      ["凭据", connCredHtml(conn)],
-      ["创建时间", C.escapeHtml(C.formatMinute(conn.created_at) || "—")],
       ["最近测试", C.escapeHtml(testSummary(conn))],
+      ["创建时间", C.escapeHtml(C.formatMinute(conn.created_at) || "—")],
     ];
     if (conn.last_test_at && !conn.last_test_ok && conn.last_error) rows.push(["失败原因", C.escapeHtml(conn.last_error)]);
     return (
-      '<div class="manage-info-card"><dl class="kv">' +
+      '<dl class="kv">' +
       rows
         .map(function (pair) {
           return "<div><dt>" + C.escapeHtml(pair[0]) + "</dt><dd>" + pair[1] + "</dd></div>";
         })
         .join("") +
-      "</dl></div>"
+      "</dl>"
     );
+  }
+
+  function deviceStatusKind(device) {
+    var st = device.state || (device.status === "running" ? "running" : "stopped");
+    if (st === "running") return "ok";
+    if (st === "error") return "danger";
+    if (st === "stopped" || st === "deleted") return "idle";
+    return "warn";
   }
 
   function connDevicesHtml() {
     if (!connPanelState) return "";
-    if (connPanelState.devicesLoading && !connPanelState.devices) return C.emptyState("正在读取设备", "");
-    if (connPanelState.devicesError && !(connPanelState.devices && connPanelState.devices.length)) {
-      return '<p class="callout danger" role="alert">' + C.escapeHtml(connPanelState.devicesError) + "</p>";
-    }
     var devices = connPanelState.devices || [];
-    if (!devices.length) return C.emptyState("服务商那边没有设备", "");
+    var known = !!connPanelState.devices;
     var pending = devices.filter(function (device) { return !device.imported; }).length;
+    var head =
+      '<div class="conn-section-head"><h3 class="conn-section-title">接入设备</h3>' +
+      (known ? '<span class="conn-count">' + devices.length + " 台</span>" : "") +
+      "</div>";
+    if (connPanelState.devicesLoading && !known) return head + C.emptyState("正在读取设备", "");
+    if (connPanelState.devicesError && !devices.length) {
+      return (
+        head +
+        '<p class="callout danger" role="alert">' +
+        C.escapeHtml(connPanelState.devicesError) +
+        "</p>" +
+        '<div class="manage-actions"><button type="button" class="secondary" data-conn-retry>重试</button></div>'
+      );
+    }
+    if (!devices.length) return head + C.emptyState("服务商那边没有设备", "");
     var rows = devices
       .map(function (device) {
         var id = C.escapeHtml(device.remoteId);
         var name = C.escapeHtml(device.name || device.remoteId);
         var meta = C.escapeHtml([deviceStateText(device), device.spec].filter(Boolean).join(" · "));
+        var dot = '<span class="ui-status-dot" data-status="' + deviceStatusKind(device) + '" aria-hidden="true"></span>';
         var main =
+          dot +
           '<span class="wiz-device-main"><span class="wiz-device-name">' +
           name +
           "</span>" +
@@ -1771,12 +1828,8 @@
         '</label><button type="button" class="secondary" data-conn-import disabled>接入选中</button></div>'
       : "";
     return (
+      head +
       (connPanelState.devicesLoading ? '<p class="subtle">正在刷新设备列表</p>' : "") +
-      '<p class="subtle">共 ' +
-      devices.length +
-      " 台，未接入 " +
-      pending +
-      " 台</p>" +
       '<div class="conn-devices">' +
       rows +
       "</div>" +
@@ -1789,32 +1842,41 @@
     return (
       '<div class="conn-detail">' +
       C.manageInfoHead({
-        icon: "layout",
+        iconHtml: HMIcons.svg(connProviderIconId(conn), "icon"),
         title: conn.name,
-        sub: (conn.provider_label || providerLabel(conn.provider)) + " · 来源徽章用这个名称",
+        sub: conn.provider_label || providerLabel(conn.provider),
       }) +
+      '<section class="conn-section">' +
+      '<h3 class="conn-section-title">连接信息</h3>' +
       connInfoHtml(conn) +
-      '<h3 class="manage-subhead">改名</h3>' +
       '<form data-conn-rename novalidate>' +
       '<label>连接名称<input name="name" maxlength="60" autocomplete="off" value="' +
       C.escapeHtml(conn.name) +
       '" /></label>' +
       '<div class="manage-actions"><button type="submit">保存名称</button></div>' +
       "</form>" +
-      '<h3 class="manage-subhead">更新凭据</h3>' +
+      "</section>" +
+      '<section class="conn-section">' +
+      '<h3 class="conn-section-title">凭据</h3>' +
+      '<div class="conn-cred-line"><span class="conn-field-label">当前凭据</span>' +
+      connCredHtml(conn) +
+      "</div>" +
+      connTestStatusHtml() +
       '<form data-conn-cred novalidate>' +
       credentialFields(conn.provider) +
-      '<p class="subtle">保存前会拉取一次设备列表，通过后才替换现有凭据</p>' +
-      '<div class="manage-actions"><button type="submit">保存凭据</button></div>' +
-      "</form>" +
-      '<h3 class="manage-subhead">名下设备</h3>' +
-      '<div data-conn-devices>' +
-      connDevicesHtml() +
-      "</div>" +
+      '<p class="subtle">保存前会先测试，通过后才替换现有凭据</p>' +
       '<div class="manage-actions">' +
       '<button type="button" class="secondary" data-conn="test" data-id="' +
       cid +
       '">测试连接</button>' +
+      '<button type="submit">保存凭据</button>' +
+      "</div>" +
+      "</form>" +
+      "</section>" +
+      '<section class="conn-section" data-conn-devices>' +
+      connDevicesHtml() +
+      "</section>" +
+      '<div class="manage-actions conn-danger-row">' +
       '<button type="button" class="secondary" data-conn="sync" data-id="' +
       cid +
       '">同步</button>' +
@@ -1839,9 +1901,8 @@
       noticeHtml() +
       '<div class="conn-admin' +
       (selected ? " has-detail" : "") +
-      '"><div>' +
+      '"><div class="conn-list">' +
       connCardsHtml() +
-      (selected ? "" : "") +
       "</div>" +
       (selected ? connDetailHtml(selected) : "") +
       "</div>"
@@ -1913,6 +1974,7 @@
     connPanelState.devicesError = "";
     connPanelState.devicesLoading = true;
     connPanelState.notice = null;
+    connPanelState.testNotice = null;
     paintConnPanel();
     fetchConnDevices(id);
   }
@@ -2007,6 +2069,7 @@
       btn.disabled = true;
       btn.textContent = "正在验证…";
     }
+    setConnTestStatus("正在验证…", false);
     api("POST", "/api/machines/providers/" + encodeURIComponent(connPanelState.selectedId) + "/credentials", { config: readConnConfig(form) })
       .then(function (res) {
         if (!res.data || !res.data.ok) {
@@ -2014,18 +2077,19 @@
             btn.disabled = false;
             btn.textContent = "保存凭据";
           }
-          setConnStatus((res.data && res.data.error) || "凭据未更新", true);
+          setConnTestStatus((res.data && res.data.error) || "凭据未更新", true);
           return;
         }
         if (connPanelState && connPanelState.selectedId) delete connCreds[connPanelState.selectedId];
-        afterConnWrite("凭据已更新", false);
+        setConnTestStatus("测试通过，凭据已更新", false);
+        afterConnWrite("", false);
       })
       .catch(function () {
         if (btn) {
           btn.disabled = false;
           btn.textContent = "保存凭据";
         }
-        setConnStatus("网络异常，请重试", true);
+        setConnTestStatus("网络异常，请重试", true);
       });
   }
 
@@ -2050,12 +2114,17 @@
 
   function openProvidersPanel() {
     connPanelState = freshConnPanelState();
+    if (state.connections.length) {
+      connPanelState.selectedId = state.connections[0].id;
+      connPanelState.devicesLoading = true;
+    }
     connPanelCtrl = C.openManageDialog({
       title: "服务商管理",
       size: "lg",
       bodyHtml: '<div data-conn-panel></div>',
     });
     paintConnPanel();
+    if (connPanelState.selectedId) fetchConnDevices(connPanelState.selectedId);
     connPanelCtrl.dialog.addEventListener("click", handleClick);
     connPanelCtrl.dialog.addEventListener("submit", handleConnSubmit);
     connPanelCtrl.dialog.addEventListener("change", handleConnChange);
@@ -2069,6 +2138,7 @@
       connPanelState.devicesError = "";
       connPanelState.devicesLoading = false;
       connPanelState.devicesStale = false;
+      connPanelState.testNotice = null;
     }
     var refetch = !!(connPanelState.selectedId && connPanelState.devicesStale);
     if (refetch) {
@@ -2988,6 +3058,17 @@
       else if (nactFound && nactName === "copy") copyNodeLink(nactFound, nact);
       else if (nactFound && nactName === "note") openNodeNoteDialog(nactFound);
       else if (nactFound && nactName === "delete") deleteOneNode(nactFound, nact);
+      return;
+    }
+    var connAdd = target.closest("[data-conn-add]");
+    if (connAdd) {
+      if (connPanelCtrl) connPanelCtrl.close();
+      openCloudWizard();
+      return;
+    }
+    var connRetry = target.closest("[data-conn-retry]");
+    if (connRetry) {
+      if (connPanelState && connPanelState.selectedId) fetchConnDevices(connPanelState.selectedId);
       return;
     }
     var credRetry = target.closest("[data-conn-cred-retry]");
