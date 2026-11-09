@@ -370,7 +370,12 @@ async function findActiveByTitleScope(db: D1Database, title: string, scope: stri
   return row ?? null;
 }
 
-export interface ListOptions {
+export interface PageOptions {
+  limit?: number | null;
+  offset?: number | null;
+}
+
+export interface ListOptions extends PageOptions {
   scope?: string | null;
   since?: number | null;
 }
@@ -378,6 +383,17 @@ export interface ListOptions {
 // 面板列表与 MCP 全量读取、搜索共用：先置顶组、后普通组；组内权重降序，再更新时间降序。
 // 置顶是独立标记，不是权重的一档；权重只在组内比较。
 const MEMORY_READ_ORDER = "(pinned_at IS NULL) ASC, weight DESC, updated_at DESC";
+
+// 分页参数缺省时保持旧上限与从头读取；调用方多取一行探测下一页时允许再放宽一条。
+function pageLimit(value: number | null | undefined, fallback: number, cap: number = fallback): number {
+  if (value == null || !Number.isFinite(value) || value <= 0) return fallback;
+  return Math.min(Math.floor(value), cap);
+}
+
+function pageOffset(value: number | null | undefined): number {
+  if (value == null || !Number.isFinite(value) || value <= 0) return 0;
+  return Math.floor(value);
+}
 
 export async function listMemories(db: D1Database, options: ListOptions = {}): Promise<MemoryRow[]> {
   const where: string[] = [];
@@ -396,12 +412,18 @@ export async function listMemories(db: D1Database, options: ListOptions = {}): P
   }
   // 全量读取走 MEMORY_READ_ORDER。增量（since）保持更新时间序：游标只认 updated_at，不按展示序重排。
   const order = options.since != null ? "updated_at DESC" : MEMORY_READ_ORDER;
-  const sql = "SELECT * FROM memories WHERE " + where.join(" AND ") + " ORDER BY " + order + " LIMIT 500";
+  const sql = "SELECT * FROM memories WHERE " + where.join(" AND ") + " ORDER BY " + order + " LIMIT ? OFFSET ?";
+  values.push(pageLimit(options.limit, 500, 501), pageOffset(options.offset));
   const result = await prepare(db, sql, values).all<MemoryRow>();
   return rowsOf(result);
 }
 
-export async function searchMemories(db: D1Database, query: string, scope?: string | null): Promise<MemoryRow[]> {
+export async function searchMemories(
+  db: D1Database,
+  query: string,
+  scope?: string | null,
+  options: PageOptions = {},
+): Promise<MemoryRow[]> {
   const like = "%" + query.replace(/[%_]/g, " ") + "%";
   const values: Array<string | number> = [like, like, like];
   let sql =
@@ -410,7 +432,8 @@ export async function searchMemories(db: D1Database, query: string, scope?: stri
     sql += "AND scope = ? ";
     values.push(scope);
   }
-  sql += "ORDER BY " + MEMORY_READ_ORDER + " LIMIT 200";
+  sql += "ORDER BY " + MEMORY_READ_ORDER + " LIMIT ? OFFSET ?";
+  values.push(pageLimit(options.limit, 200, 201), pageOffset(options.offset));
   const result = await prepare(db, sql, values).all<MemoryRow>();
   return rowsOf(result);
 }
@@ -437,8 +460,15 @@ export async function listMemoriesAudited(db: D1Database, options: ListOptions, 
   return rows;
 }
 
-export async function searchMemoriesAudited(db: D1Database, query: string, scope: string | null, channel: Channel, now: number): Promise<MemoryRow[]> {
-  const rows = await searchMemories(db, query, scope);
+export async function searchMemoriesAudited(
+  db: D1Database,
+  query: string,
+  scope: string | null,
+  options: PageOptions,
+  channel: Channel,
+  now: number,
+): Promise<MemoryRow[]> {
+  const rows = await searchMemories(db, query, scope, options);
   if (channel.auditReads) {
     await audit(db, { memoryId: null, actor: channel.actor, action: "search", diff: { query, scope, count: rows.length } }, now);
   }

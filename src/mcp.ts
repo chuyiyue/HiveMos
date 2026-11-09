@@ -35,10 +35,12 @@ import {
   deleteMemory,
   listMemoriesAudited,
   memoryPublic,
+  parseTags,
   readMemory,
   searchMemoriesAudited,
   upsertMemory,
 } from "./memory";
+import type { MemoryRow } from "./memory";
 import {
   TaskError,
   agentName,
@@ -202,24 +204,30 @@ const TOOLS = [
   },
   {
     name: "memory_list",
-    description: "列出记忆，可按作用域过滤。全量结果先置顶组、后普通组，组内按权重降序、再按更新时间降序；置顶与权重互不影响。传 since（毫秒时间戳或 ISO 时间）只回增量（含这之后被删的墓碑，带 deleted_at），增量按更新时间序返回",
+    description: "列出记忆，可按作用域过滤。全量结果先置顶组、后普通组，组内按权重降序、再按更新时间降序；置顶与权重互不影响。传 since（毫秒时间戳或 ISO 时间）只回增量（含这之后被删的墓碑，带 deleted_at），增量按更新时间序返回。默认每条只回 id、title、tags、snippet（有摘要用摘要，否则正文前 200 字）；传 full=true 回完整内容。limit 默认 50、上限 200，翻页传上次返回的 next_cursor",
     inputSchema: {
       type: "object",
       properties: {
         scope: { type: "string", description: "只看指定作用域，缺省为全部" },
         since: { type: ["number", "string"], description: "增量起点：毫秒时间戳或 ISO 8601 时间" },
+        limit: { type: "integer", minimum: 1, maximum: 200, description: "每页条数，默认 50，上限 200" },
+        cursor: { type: "string", description: "翻页游标，传上次返回的 next_cursor" },
+        full: { type: "boolean", description: "true 时每条返回完整内容" },
       },
       additionalProperties: false,
     },
   },
   {
     name: "memory_search",
-    description: "按关键词搜记忆（标题、内容、标签）。结果先置顶组、后普通组，组内按权重降序、再按更新时间降序",
+    description: "按关键词搜记忆（标题、内容、标签）。结果先置顶组、后普通组，组内按权重降序、再按更新时间降序。默认每条只回 id、title、tags、snippet（有摘要用摘要，否则正文前 200 字）；传 full=true 回完整内容。limit 默认 50、上限 200，翻页传上次返回的 next_cursor",
     inputSchema: {
       type: "object",
       properties: {
         query: { type: "string", description: "关键词" },
         scope: { type: "string", description: "只在指定作用域内搜，缺省为全部" },
+        limit: { type: "integer", minimum: 1, maximum: 200, description: "每页条数，默认 50，上限 200" },
+        cursor: { type: "string", description: "翻页游标，传上次返回的 next_cursor" },
+        full: { type: "boolean", description: "true 时每条返回完整内容" },
       },
       required: ["query"],
       additionalProperties: false,
@@ -733,21 +741,95 @@ function parseSince(value: unknown): number | null {
   return null;
 }
 
+const MEMORY_PAGE_DEFAULT = 50;
+const MEMORY_PAGE_MAX = 200;
+
+// 游标用 base64 编码的偏移量，前端不需要理解内容；解码失败按无效游标处理。
+function encodeMemoryCursor(offset: number): string {
+  return btoa(String(offset));
+}
+
+function decodeMemoryCursor(cursor: string): number | null {
+  try {
+    const text = atob(cursor);
+    if (!/^\d+$/.test(text)) return null;
+    const offset = Number(text);
+    return Number.isSafeInteger(offset) && offset >= 0 ? offset : null;
+  } catch {
+    return null;
+  }
+}
+
+interface MemoryPage {
+  limit: number;
+  offset: number;
+  full: boolean;
+}
+
+function parseMemoryPage(args: Record<string, unknown>): MemoryPage | null {
+  let limit = MEMORY_PAGE_DEFAULT;
+  const raw = args.limit;
+  const numeric = typeof raw === "number" ? raw : typeof raw === "string" && raw.trim() ? Number(raw) : Number.NaN;
+  if (Number.isFinite(numeric) && numeric > 0) limit = Math.floor(numeric);
+  if (limit > MEMORY_PAGE_MAX) limit = MEMORY_PAGE_MAX;
+  let offset = 0;
+  const cursor = argString(args, "cursor");
+  if (cursor && cursor.trim()) {
+    const decoded = decodeMemoryCursor(cursor.trim());
+    if (decoded === null) return null;
+    offset = decoded;
+  }
+  return { limit, offset, full: args.full === true };
+}
+
+function memoryBrief(row: MemoryRow): Record<string, unknown> {
+  const summary = row.ai_summary && row.ai_summary.trim() ? row.ai_summary : row.content.slice(0, 200);
+  const view: Record<string, unknown> = { id: row.id, title: row.title, tags: parseTags(row.tags_json), snippet: summary };
+  // since 增量的墓碑仍要能被同步方识别，其余字段照旧不返回。
+  if (row.deleted_at != null) view.deleted_at = row.deleted_at;
+  return view;
+}
+
+function memoryPageResult(id: unknown, rows: MemoryRow[], page: MemoryPage): Response {
+  const hasMore = rows.length > page.limit;
+  const visible = hasMore ? rows.slice(0, page.limit) : rows;
+  return toolResult(id, {
+    memories: visible.map((row) => (page.full ? memoryPublic(row) : memoryBrief(row))),
+    next_cursor: hasMore ? encodeMemoryCursor(page.offset + page.limit) : null,
+  });
+}
+
 async function callMemoryTool(env: Env, id: unknown, name: string, args: Record<string, unknown>, agentId: string): Promise<Response> {
   const now = Date.now();
   const channel = { actor: agentId, source: "mcp", auditReads: true };
   if (name === "memory_list") {
+    const page = parseMemoryPage(args);
+    if (!page) return toolResult(id, "游标无效", true);
     const scope = argString(args, "scope");
     const since = parseSince(args.since);
-    const rows = await listMemoriesAudited(env.DB, { scope: scope || null, since }, channel, now);
-    return toolResult(id, { memories: rows.map(memoryPublic) });
+    const rows = await listMemoriesAudited(
+      env.DB,
+      { scope: scope || null, since, limit: page.limit + 1, offset: page.offset },
+      channel,
+      now,
+    );
+    return memoryPageResult(id, rows, page);
   }
   if (name === "memory_search") {
     const query = argString(args, "query");
     if (!query || !query.trim()) return toolResult(id, "请提供 query", true);
+    const page = parseMemoryPage(args);
+    if (!page) return toolResult(id, "游标无效", true);
     const scope = argString(args, "scope");
-    const rows = await searchMemoriesAudited(env.DB, query.trim(), scope || null, channel, now);
-    return toolResult(id, { memories: rows.map(memoryPublic) });
+    const rows = await searchMemoriesAudited(
+      env.DB,
+      query.trim(),
+      scope || null,
+      { limit: page.limit + 1, offset: page.offset },
+      channel,
+      now,
+    );
+    return memoryPageResult(id, rows, page);
   }
   if (name === "memory_get") {
     const memId = argString(args, "id");
