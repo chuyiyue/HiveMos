@@ -26,11 +26,11 @@ const MAX_IMPORT_BYTES = 1024 * 1024 + 64 * 1024;
 
 export async function handleNodesRequest(request: Request, env: Env, ctx: WaitCtx, path: string): Promise<Response | null> {
   void ctx;
-  if (path !== "/api/nodes" && !path.startsWith("/api/nodes/")) return null;
-  if (path === "/api/nodes") return collection(request, env);
-  if (path === "/api/nodes/import") return importNodes(request, env);
-  if (path === "/api/nodes/test-all") return testAll(request, env);
-  if (path === "/api/nodes/subscriptions") return subscriptionCollection(request, env);
+  if (path !== "/api/proxy" && !path.startsWith("/api/proxy/")) return null;
+  if (path === "/api/proxy") return collection(request, env);
+  if (path === "/api/proxy/import") return importNodes(request, env);
+  if (path === "/api/proxy/test-all") return testAll(request, env);
+  if (path === "/api/proxy/subscriptions") return subscriptionCollection(request, env);
   const subAction = /^\/api\/nodes\/subscriptions\/([A-Za-z0-9_-]+)\/(sync|reveal)$/.exec(path);
   if (subAction && subAction[1] && subAction[2]) return subscriptionAction(request, env, subAction[1], subAction[2]);
   const subOne = /^\/api\/nodes\/subscriptions\/([A-Za-z0-9_-]+)$/.exec(path);

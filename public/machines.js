@@ -11,11 +11,14 @@
    API 令牌（加密保存），可实时查看该账号名下的 Workers。
    分组：三页签共用一个分组池（groups 表 scope=machines），按分组分区
    展示、未分组置后；分组可改名/删除，删组后条目回未分组、不删条目。
-   网络节点走 /api/nodes：订阅地址和节点链接密封保存，按订阅分组，
+   网络节点走 /api/proxy：订阅地址和节点链接密封保存，按订阅分组，
    测活只测 TCP 是否连通，不表示协议握手成功。 */
 (function () {
   var C = window.HiveCommon;
-  var activeTab = location.hash === "#hosts" ? "hosts" : location.hash === "#workers" ? "workers" : location.hash === "#nodes" ? "nodes" : "servers";
+  var hashTab = location.hash;
+  if (hashTab === "#nodes") hashTab = "#proxy";
+  if (hashTab === "#workers") hashTab = "#edge";
+  var activeTab = hashTab === "#hosts" ? "hosts" : hashTab === "#proxy" ? "proxy" : hashTab === "#edge" ? "edge" : "servers";
   var API_KIND = { server: "server", host: "cloud", worker: "worker" };
   var TITLE_FOR = { server: "服务器", host: "云主机", worker: "Worker" };
 
@@ -576,15 +579,15 @@
       '<button class="page-tab" type="button" role="tab" data-tab="hosts" aria-selected="' +
       (activeTab === "hosts" ? "true" : "false") +
       '">云主机</button>' +
-      '<button class="page-tab" type="button" role="tab" data-tab="nodes" aria-selected="' +
-      (activeTab === "nodes" ? "true" : "false") +
+      '<button class="page-tab" type="button" role="tab" data-tab="proxy" aria-selected="' +
+      (activeTab === "proxy" ? "true" : "false") +
       '">代理</button>' +
-      '<button class="page-tab" type="button" role="tab" data-tab="workers" aria-selected="' +
-      (activeTab === "workers" ? "true" : "false") +
+      '<button class="page-tab" type="button" role="tab" data-tab="edge" aria-selected="' +
+      (activeTab === "edge" ? "true" : "false") +
       '">边缘计算</button>' +
       "</div>" +
       '<div class="page-head-actions">' +
-      (activeTab === "nodes"
+      (activeTab === "proxy"
         ? '<button type="button" class="secondary" data-nhead="test-all"' + (state.nodesBusy ? " disabled" : "") + '>全部测活</button>' +
           '<button type="button" class="secondary" data-nhead="import">导入节点</button>' +
           '<button type="button" class="add-button" data-nhead="add">添加订阅</button>'
@@ -601,8 +604,8 @@
         head +
           "<div data-panel=\"servers\"" + (activeTab === "servers" ? "" : " hidden") + ">" + serverHtml + "</div>" +
           "<div data-panel=\"hosts\"" + (activeTab === "hosts" ? "" : " hidden") + ">" + hostHtml + "</div>" +
-          "<div data-panel=\"workers\"" + (activeTab === "workers" ? "" : " hidden") + ">" + workerHtml + "</div>" +
-          "<div data-panel=\"nodes\"" + (activeTab === "nodes" ? "" : " hidden") + ">" + nodesHtml + "</div>"
+          "<div data-panel=\"edge\"" + (activeTab === "edge" ? "" : " hidden") + ">" + workerHtml + "</div>" +
+          "<div data-panel=\"proxy\"" + (activeTab === "proxy" ? "" : " hidden") + ">" + nodesHtml + "</div>"
       )
     );
   }
@@ -622,7 +625,7 @@
     var machinesReq = api("GET", "/api/machines");
     var connsReq = api("GET", "/api/machines/providers").catch(function () { return { data: {} }; });
     var groupsReq = api("GET", "/api/groups?scope=machines").catch(function () { return { data: {} }; });
-    var nodesReq = api("GET", "/api/nodes").catch(function () { return { data: {} }; });
+    var nodesReq = api("GET", "/api/proxy").catch(function () { return { data: {} }; });
     return Promise.all([machinesReq, connsReq, groupsReq, nodesReq])
       .then(function (results) {
         var res = results[0];
@@ -2267,7 +2270,7 @@
   function ensureWorkerStats(item) {
     if (workerStatsCache[item.id] !== undefined) { paintWorkerStats(item.id); return Promise.resolve(); }
     workerStatsCache[item.id] = "loading";
-    return api("GET", "/api/machines/" + encodeURIComponent(item.id) + "/worker-stats")
+    return api("GET", "/api/machines/" + encodeURIComponent(item.id) + "/edge-stats")
       .then(function (res) {
         workerStatsCache[item.id] = res.data && res.data.ok ? res.data.stats : null;
         paintWorkerStats(item.id);
@@ -2275,7 +2278,7 @@
       .catch(function () { workerStatsCache[item.id] = null; paintWorkerStats(item.id); });
   }
   function fillWorkerStats() {
-    if (activeTab !== "workers") return;
+    if (activeTab !== "edge") return;
     state.items.forEach(function (item) {
       if (item.kind === "worker") ensureWorkerStats(item);
     });
@@ -2369,7 +2372,7 @@
     }
     function assetsPane(kind) {
       pane.innerHTML = C.emptyState("正在读取", "");
-      api("GET", "/api/machines/" + encodeURIComponent(item.id) + "/worker-assets?kind=" + kind)
+      api("GET", "/api/machines/" + encodeURIComponent(item.id) + "/edge-assets?kind=" + kind)
         .then(function (res) {
           if (!res.data || !res.data.ok) { pane.innerHTML = C.emptyState("读取失败", (res.data && res.data.error) || "请稍后重试"); return; }
           var items = res.data.items || [];
@@ -2453,7 +2456,7 @@
       if (act === "delete") {
         var wname = btn.getAttribute("data-name");
         btn.disabled = true;
-        api("DELETE", "/api/machines/" + encodeURIComponent(item.id) + "/workers/" + encodeURIComponent(wname))
+        api("DELETE", "/api/machines/" + encodeURIComponent(item.id) + "/edges/" + encodeURIComponent(wname))
           .then(function (res) {
             if (res.data && res.data.ok) {
               C.toast("已删除 Worker「" + wname + "」");
@@ -2565,7 +2568,7 @@
   }
 
   function reloadNodes() {
-    return api("GET", "/api/nodes")
+    return api("GET", "/api/proxy")
       .then(function (res) {
         if (!res.data || !res.data.ok) {
           C.toast((res.data && res.data.error) || "代理读取失败", "danger");
@@ -2609,8 +2612,8 @@
         var payload = { name: name };
         if (url) payload.url = url;
         var request = editing
-          ? api("PATCH", "/api/nodes/subscriptions/" + encodeURIComponent(sub.id), payload)
-          : api("POST", "/api/nodes/subscriptions", payload);
+          ? api("PATCH", "/api/proxy/subscriptions/" + encodeURIComponent(sub.id), payload)
+          : api("POST", "/api/proxy/subscriptions", payload);
         request
           .then(function (res) {
             ctrl.setBusy(false);
@@ -2636,7 +2639,7 @@
       var btn = revealTarget.closest("[data-nsub-reveal]");
       if (!btn || btn.disabled) return;
       btn.disabled = true;
-      api("POST", "/api/nodes/subscriptions/" + encodeURIComponent(sub.id) + "/reveal")
+      api("POST", "/api/proxy/subscriptions/" + encodeURIComponent(sub.id) + "/reveal")
         .then(function (res) {
           btn.disabled = false;
           if (!res.data || !res.data.ok || typeof res.data.url !== "string") {
@@ -2664,7 +2667,7 @@
         var text = val(ctrl, "text");
         if (!text) { ctrl.setError("请粘贴节点或订阅内容"); return; }
         ctrl.setBusy(true);
-        api("POST", "/api/nodes/import", { text: text })
+        api("POST", "/api/proxy/import", { text: text })
           .then(function (res) {
             ctrl.setBusy(false);
             if (!res.data || !res.data.ok) {
@@ -2691,7 +2694,7 @@
 
   function syncOneSubscription(id, btn) {
     if (btn) btn.disabled = true;
-    api("POST", "/api/nodes/subscriptions/" + encodeURIComponent(id) + "/sync")
+    api("POST", "/api/proxy/subscriptions/" + encodeURIComponent(id) + "/sync")
       .then(function (res) {
         if (!res.data || !res.data.ok) {
           C.toast((res.data && res.data.error) || "同步失败", "danger");
@@ -2709,7 +2712,7 @@
 
   function deleteOneSubscription(sub, btn) {
     if (btn) btn.disabled = true;
-    api("DELETE", "/api/nodes/subscriptions/" + encodeURIComponent(sub.id))
+    api("DELETE", "/api/proxy/subscriptions/" + encodeURIComponent(sub.id))
       .then(function (res) {
         if (!res.data || !res.data.ok) {
           C.toast((res.data && res.data.error) || "删除失败", "danger");
@@ -2728,7 +2731,7 @@
   function testOneNode(node, btn) {
     btn.disabled = true;
     btn.textContent = "测活中";
-    api("POST", "/api/nodes/" + encodeURIComponent(node.id) + "/test")
+    api("POST", "/api/proxy/" + encodeURIComponent(node.id) + "/test")
       .then(function (res) {
         if (!res.data || !res.data.ok || !res.data.node) {
           btn.disabled = false;
@@ -2753,7 +2756,7 @@
     if (state.nodesBusy) return;
     state.nodesBusy = true;
     if (btn) btn.disabled = true;
-    api("POST", "/api/nodes/test-all")
+    api("POST", "/api/proxy/test-all")
       .then(function (res) {
         state.nodesBusy = false;
         if (!res.data || !res.data.ok) {
@@ -2775,7 +2778,7 @@
 
   function copyNodeLink(node, btn) {
     if (btn) btn.disabled = true;
-    api("POST", "/api/nodes/" + encodeURIComponent(node.id) + "/copy")
+    api("POST", "/api/proxy/" + encodeURIComponent(node.id) + "/copy")
       .then(function (res) {
         if (btn) btn.disabled = false;
         if (!res.data || !res.data.ok || typeof res.data.raw !== "string" || !res.data.raw) {
@@ -2792,7 +2795,7 @@
 
   function deleteOneNode(node, btn) {
     if (btn) btn.disabled = true;
-    api("DELETE", "/api/nodes/" + encodeURIComponent(node.id))
+    api("DELETE", "/api/proxy/" + encodeURIComponent(node.id))
       .then(function (res) {
         if (!res.data || !res.data.ok) {
           C.toast((res.data && res.data.error) || "删除失败", "danger");
