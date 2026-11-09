@@ -665,7 +665,7 @@
       "<label>名称<input name=\"name\" maxlength=\"60\" autocomplete=\"off\" value=\"" + C.escapeHtml(v.name) + "\" /></label>" +
       "<label>网址<input name=\"url\" maxlength=\"300\" autocomplete=\"off\" placeholder=\"例如 https://example.com\" value=\"" + C.escapeHtml(v.url) + "\" /></label>" +
       "<label>账号<input name=\"username\" maxlength=\"120\" autocomplete=\"off\" value=\"" + C.escapeHtml(v.username) + "\" /></label>" +
-      "<label>密码<input name=\"password\" maxlength=\"200\" autocomplete=\"off\" /><p class=\"subtle field-hint\">" + (item ? "留空表示不修改，填写后只保留末四位" : "列表里只会保留末四位") + "</p></label>" +
+      "<label>密码<input name=\"password\" maxlength=\"200\" autocomplete=\"off\" />" + (item ? "<p class=\"subtle field-hint\">留空表示不修改</p>" : "") + "</label>" +
       "<label>备注<textarea name=\"note\" rows=\"3\" maxlength=\"300\">" + C.escapeHtml(v.note) + "</textarea></label>" +
       "<label>分组" + C.groupSelect("group_id", GROUPS || [], v.group_id || "") + "</label>"
     );

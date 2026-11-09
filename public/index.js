@@ -78,7 +78,7 @@
     var calendars = stats.calendars || { total: 0, events_next_7d: 0 };
     cards.push(["日历", calendars.total, calendars.total ? "未来 7 天 " + calendars.events_next_7d + " 个日程" : "还没有日历"]);
     if (stats.vault_entries !== null && stats.vault_entries !== undefined) {
-      cards.push(["保险库", stats.vault_entries, "列表只显示末四位"]);
+      cards.push(["保险库", stats.vault_entries, ""]);
     }
     return (
       "<div class=\"stat-grid\">" +
