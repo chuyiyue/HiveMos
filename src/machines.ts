@@ -899,7 +899,10 @@ const PROBE_ERROR_MESSAGES: Record<string, string> = {
 
 // Best-effort GeoIP for the probed server's region label. Public IPs only;
 // a short timeout and any failure return "" so probing never depends on it.
-async function lookupRegionByIp(ip: string): Promise<string> {
+// Exported too for the cloud (InstaBox) exec probe, which resolves the
+// sandbox's egress IP through the same lookup so both card types store the
+// same value shape (an English country name, e.g. "United States").
+export async function lookupRegionByIp(ip: string): Promise<string> {
   const value = String(ip || "").trim();
   if (!value) return "";
   const ipv4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(value);

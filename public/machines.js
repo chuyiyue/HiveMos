@@ -329,7 +329,9 @@
   }
 
   function card(kind, item, facts, actionsOverride) {
-    var lede = kind === "worker" ? item.description : kind === "server" ? "" : item.region;
+    // 云主机/云条目：地域来自探测（英文国家名，如 United States），副标题
+    // 与「所在地」一样走国旗+中文国家名的渲染，不把英文原样摆出来。
+    var lede = kind === "worker" ? item.description : kind === "server" ? "" : item.region ? locationText(item) : "";
     var id = C.escapeHtml(item.id);
     var actions = "";
     if (kind === "server") {
