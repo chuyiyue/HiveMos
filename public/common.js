@@ -312,7 +312,7 @@
       escapeHtml(options.title) +
       "</h3>" +
       (options.pillHtml ? '<span class="badge">' + options.pillHtml + "</span>" : options.pill ? badge(options.pill) : "") +
-      (options.status ? statusPill(options.status) : "") +
+      (options.statusHtml ? options.statusHtml : options.status ? statusPill(options.status) : "") +
       (options.corner ? "<span class=\"record-corner\">" + options.corner + "</span>" : "") +
       "</div>";
     return (
@@ -502,6 +502,7 @@
     ["api", "API", "API 条目的列表与取用"],
     ["memory", "记忆", "记忆的读写与同步"],
     ["soul", "Soul", "Soul 的读写与同步"],
+    ["soul_write_any", "代写他人 Soul", "写入其他 Agent 的 Soul，默认不给任何 Agent"],
     ["tasks", "任务", "任务的查看与处理"],
     ["calendar", "日历", "日程的查看与编辑"],
     ["vault", "保险库", "保险库条目的取用"],

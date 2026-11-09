@@ -6,6 +6,7 @@ import { isCrossSite, json, readJsonLimited } from "./http";
 import type { Env, WaitCtx } from "./env";
 import {
   SoulError,
+  approveSoulVersion,
   createSoul,
   deleteSoul,
   deleteSoulVersion,
@@ -13,6 +14,7 @@ import {
   listSouls,
   listVersions,
   moveSoulVersion,
+  rejectSoulVersion,
   rollbackSoul,
   soulDetail,
   soulSummary,
@@ -33,6 +35,10 @@ export async function handleSoulRequest(request: Request, env: Env, ctx: WaitCtx
   if (path === "/api/soul") return collection(request, env);
   const versionMove = /^\/api\/soul\/([A-Za-z0-9_-]+)\/versions\/(\d+)\/move$/.exec(path);
   if (versionMove && versionMove[1] && versionMove[2]) return versionMoveRoute(request, env, versionMove[1], versionMove[2]);
+  const versionApprove = /^\/api\/soul\/([A-Za-z0-9_-]+)\/versions\/(\d+)\/approve$/.exec(path);
+  if (versionApprove && versionApprove[1] && versionApprove[2]) return versionApproveRoute(request, env, versionApprove[1], versionApprove[2]);
+  const versionReject = /^\/api\/soul\/([A-Za-z0-9_-]+)\/versions\/(\d+)\/reject$/.exec(path);
+  if (versionReject && versionReject[1] && versionReject[2]) return versionRejectRoute(request, env, versionReject[1], versionReject[2]);
   const versionOne = /^\/api\/soul\/([A-Za-z0-9_-]+)\/versions\/(\d+)$/.exec(path);
   if (versionOne && versionOne[1] && versionOne[2]) return versionOneRoute(request, env, versionOne[1], versionOne[2]);
   const versions = /^\/api\/soul\/([A-Za-z0-9_-]+)\/versions$/.exec(path);
@@ -203,6 +209,40 @@ async function versionMoveRoute(request: Request, env: Env, id: string, rawVersi
       current_version: moved.currentVersion,
       versions: moved.versions.map(soulVersionPublic),
     });
+  });
+}
+
+async function versionApproveRoute(request: Request, env: Env, id: string, rawVersion: string): Promise<Response> {
+  if (request.method.toUpperCase() !== "POST") return methodNotAllowed("POST");
+  return wrap(async () => {
+    const version = pathVersion(rawVersion);
+    const updated = await approveSoulVersion(env.DB, id, version, ACTOR, Date.now());
+    await logOp(env.DB, {
+      actor: await panelActor(request, env),
+      module: "Soul",
+      action: "批准",
+      targetId: id,
+      targetName: updated.agent_name,
+      text: `批准了 Soul（${updated.agent_name}）的待批准草稿 v${version}`,
+    });
+    return json({ ok: true, soul: soulDetail(updated) });
+  });
+}
+
+async function versionRejectRoute(request: Request, env: Env, id: string, rawVersion: string): Promise<Response> {
+  if (request.method.toUpperCase() !== "POST") return methodNotAllowed("POST");
+  return wrap(async () => {
+    const version = pathVersion(rawVersion);
+    const rejected = await rejectSoulVersion(env.DB, id, version, ACTOR, Date.now());
+    await logOp(env.DB, {
+      actor: await panelActor(request, env),
+      module: "Soul",
+      action: "拒绝",
+      targetId: id,
+      targetName: rejected.agentName,
+      text: `拒绝了 Soul（${rejected.agentName}）的待批准草稿 v${rejected.version}`,
+    });
+    return json({ ok: true });
   });
 }
 

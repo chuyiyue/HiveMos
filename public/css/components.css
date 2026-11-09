@@ -120,6 +120,16 @@ input:focus, textarea:focus, select:focus {
   color: var(--accent-text);
 }
 
+.badge.is-warn {
+  background: var(--warning-soft);
+  color: var(--warning-text);
+}
+
+.badge.is-danger {
+  background: var(--danger-soft);
+  color: var(--danger-text);
+}
+
 .status-indicator {
   display: inline-flex;
   align-items: center;

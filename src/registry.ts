@@ -1267,7 +1267,9 @@ export async function deleteGroup(db: D1Database, id: string): Promise<{ ok: tru
 
 // System feature domains an agent can be granted, one per board. Stored on
 // the agent as a JSON array; anything not listed is denied at the MCP edge.
-export const PERMISSION_DOMAINS = ["mcp", "skills", "api", "memory", "soul", "tasks", "calendar", "vault", "machines"];
+// soul_write_any is additive: it unlocks writing other agents' souls and is
+// never granted by default, so existing agents keep their stored grants.
+export const PERMISSION_DOMAINS = ["mcp", "skills", "api", "memory", "soul", "soul_write_any", "tasks", "calendar", "vault", "machines"];
 
 // The old single "registry" domain covered the whole MCP 与 Skills board;
 // it now splits per tab (MCP / Skills / API). Stored grants expand on read.
@@ -1597,9 +1599,10 @@ export async function authenticateAgent(
   db: D1Database,
   token: string,
   now: number,
-): Promise<{ ok: true; agentId: string; permissions: string[] } | Failure> {
-  const row = await prepare(db, "SELECT id, status, permissions, last_seen_at FROM agents WHERE token_hash = ?", [await sha256Hex(token)]).first<{
+): Promise<{ ok: true; agentId: string; agentName: string; permissions: string[] } | Failure> {
+  const row = await prepare(db, "SELECT id, name, status, permissions, last_seen_at FROM agents WHERE token_hash = ?", [await sha256Hex(token)]).first<{
     id: string;
+    name: string;
     status: string;
     permissions: string | null;
     last_seen_at: number | string | null;
@@ -1615,7 +1618,7 @@ export async function authenticateAgent(
   // call_count backs the card's 调用次数: every authenticated /mcp request
   // counts, so unlike last_seen_at this write is deliberately unthrottled.
   await prepare(db, "UPDATE agents SET call_count = call_count + 1 WHERE id = ?", [row.id]).run();
-  return { ok: true, agentId: row.id, permissions: parsePermissions(row.permissions) };
+  return { ok: true, agentId: row.id, agentName: row.name, permissions: parsePermissions(row.permissions) };
 }
 
 export async function searchServers(db: D1Database, query: string, tag: string, withMatches: boolean): Promise<SearchHit[]> {
