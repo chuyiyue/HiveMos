@@ -38,8 +38,8 @@ export async function handleNodesRequest(request: Request, env: Env, ctx: WaitCt
   if (subOne && subOne[1]) return subscriptionOne(request, env, subOne[1]);
   const nodeAction = /^\/api\/proxy\/([A-Za-z0-9_-]+)\/(test|copy)$/.exec(path);
   if (nodeAction && nodeAction[1] && nodeAction[2]) return nodeActionRun(request, env, nodeAction[1], nodeAction[2]);
-  const nodeOne = /^\/api\/proxy\/([A-Za-z0-9_-]+)$/.exec(path);
-  if (nodeOne && nodeOne[1]) return nodeOne(request, env, nodeOne[1]);
+  const nodeMatch = /^\/api\/proxy\/([A-Za-z0-9_-]+)$/.exec(path);
+  if (nodeMatch && nodeMatch[1]) return nodeOne(request, env, nodeMatch[1]);
   return null;
 }
 
