@@ -42,6 +42,7 @@ export interface PublicNode {
   protocol: string;
   server: string;
   port: number;
+  note: string;
   last_status: "" | "ok" | "fail";
   last_latency_ms: number | null;
   last_test_at: number | null;
@@ -81,6 +82,7 @@ interface NodeRow {
   protocol: string;
   server: string;
   port: number;
+  note: string;
   raw_enc: string;
   dedupe_key: string;
   last_status: string;
@@ -183,6 +185,7 @@ function publicNode(row: NodeRow): PublicNode {
     protocol: row.protocol,
     server: row.server,
     port: Number(row.port),
+    note: row.note || "",
     last_status: statusOf(row.last_status),
     last_latency_ms: asNumber(row.last_latency_ms),
     last_test_at: asNumber(row.last_test_at),
@@ -204,7 +207,7 @@ async function listNodeRows(db: D1Database): Promise<NodeRow[]> {
   // 列表不读 raw_enc。原文只在复制链接时按 id 取出。
   const result = await prepare(
     db,
-    "SELECT id, subscription_id, name, protocol, server, port, '' AS raw_enc, '' AS dedupe_key, last_status, last_latency_ms, last_test_at, created_at, updated_at FROM proxy_nodes ORDER BY created_at ASC, id ASC",
+    "SELECT id, subscription_id, name, protocol, server, port, note, '' AS raw_enc, '' AS dedupe_key, last_status, last_latency_ms, last_test_at, created_at, updated_at FROM proxy_nodes ORDER BY created_at ASC, id ASC",
   ).all<NodeRow>();
   return rowsOf(result);
 }
@@ -220,7 +223,7 @@ async function getSubscription(db: D1Database, id: string): Promise<SubRow | nul
 async function getNode(db: D1Database, id: string): Promise<NodeRow | null> {
   return prepare(
     db,
-    "SELECT id, subscription_id, name, protocol, server, port, raw_enc, dedupe_key, last_status, last_latency_ms, last_test_at, created_at, updated_at FROM proxy_nodes WHERE id = ?",
+    "SELECT id, subscription_id, name, protocol, server, port, note, raw_enc, dedupe_key, last_status, last_latency_ms, last_test_at, created_at, updated_at FROM proxy_nodes WHERE id = ?",
     [id],
   ).first<NodeRow>();
 }
@@ -542,6 +545,24 @@ export async function deleteNode(db: D1Database, id: string): Promise<{ name: st
   if (!row) throw new NodeError(404, "节点不存在");
   await prepare(db, "DELETE FROM proxy_nodes WHERE id = ?", [id]).run();
   return { name: row.name };
+}
+
+// 备注是节点自己的展示信息：同步对账不写这一列，改备注也不动其它字段。
+export async function updateNodeNote(
+  db: D1Database,
+  id: string,
+  input: { note?: unknown },
+  now: number,
+): Promise<PublicNode> {
+  const row = await getNode(db, id);
+  if (!row) throw new NodeError(404, "节点不存在");
+  if (typeof input.note !== "string") throw new NodeError(400, "备注格式不正确");
+  const note = input.note.trim();
+  if (note.length > 200) throw new NodeError(400, "备注过长，最多 200 字");
+  await prepare(db, "UPDATE proxy_nodes SET note = ?, updated_at = ? WHERE id = ?", [note, now, id]).run();
+  const fresh = await getNode(db, id);
+  if (!fresh) throw new NodeError(404, "节点不存在");
+  return publicNode(fresh);
 }
 
 export async function copyNodeRaw(
