@@ -65,7 +65,7 @@ export async function handleMachinesRequest(request: Request, env: Env, ctx: Wai
   if (workerStats && workerStats[1]) return workerStatsRun(request, env, workerStats[1]);
   const workerAssets = /^\/api\/machines\/([A-Za-z0-9_-]+)\/edge-assets$/.exec(path);
   if (workerAssets && workerAssets[1]) return workerAssetsRun(request, env, workerAssets[1]);
-  const action = /^\/api\/machines\/([A-Za-z0-9_-]+)\/(reveal|workers|probe)$/.exec(path);
+  const action = /^\/api\/machines\/([A-Za-z0-9_-]+)\/(reveal|edges|probe)$/.exec(path);
   if (action && action[1] && action[2]) return machineAction(request, env, action[1], action[2]);
   const power = /^\/api\/machines\/([A-Za-z0-9_-]+)\/power$/.exec(path);
   if (power && power[1]) return machinePower(request, env, power[1]);

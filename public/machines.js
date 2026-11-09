@@ -2416,7 +2416,7 @@
       return btns;
     }
     function loadWorkers() {
-      api("POST", "/api/machines/" + encodeURIComponent(item.id) + "/workers")
+      api("POST", "/api/machines/" + encodeURIComponent(item.id) + "/edges")
         .then(function (result) {
           if (!result.data || !result.data.ok) {
             container.innerHTML = (C.emptyState("读取失败", (result.data && result.data.error) || "请稍后重试"));
