@@ -232,11 +232,11 @@ function readNewPassword(record: Record<string, unknown>): string | { error: str
 function readProfileUsername(value: unknown): { username: string } | { error: string } {
   if (!value || typeof value !== "object" || Array.isArray(value)) return { error: "请求体无效" };
   const raw = (value as Record<string, unknown>).username;
-  if (typeof raw !== "string") return { error: "请填写用户名" };
+  if (typeof raw !== "string") return { error: "请填写昵称" };
   const username = raw.trim();
   if (username === "") return { username: "" };
   if (!GITHUB_USERNAME_RE.test(username)) {
-    return { error: "用户名需为 1 到 39 位字母、数字或连字符，且不能以连字符开头或结尾" };
+    return { error: "昵称需为 1 到 39 位字母、数字或连字符，且不能以连字符开头或结尾" };
   }
   return { username };
 }

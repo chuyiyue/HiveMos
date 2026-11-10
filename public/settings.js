@@ -272,8 +272,8 @@
     var profile = state.profile || {};
     var created = C.formatMinute(profile.created_at) || "未知";
     var profileForm =
-      '<form id="profile-form" class="stack" novalidate><h3>用户名</h3>' +
-      "<label>GitHub 用户名" +
+      '<form id="profile-form" class="stack" novalidate><h3>昵称</h3>' +
+      "<label>GitHub 昵称" +
       '<input data-field="profileInput" name="username" type="text" maxlength="39" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="例如 octocat，可留空" value="' +
       C.escapeHtml(state.profileInput) +
       '" />' +
@@ -281,7 +281,7 @@
       fieldError("profile-error", state.profileError) +
       '<div class="row-actions"><button type="submit"' +
       (state.busy ? " disabled" : "") +
-      ">保存用户名</button></div></form>" +
+      ">保存昵称</button></div></form>" +
       C.facts([
         ["登录用户名", C.escapeHtml(profile.username || "未知")],
         ["角色", C.escapeHtml(roleText(profile.role))],
@@ -1560,7 +1560,7 @@
     api("POST", "/api/account/profile", { username: username }).then(function (result) {
       state.busy = false;
       if (!result.data || result.data.ok !== true) {
-        fail('[data-field="profileInput"]', "profileError", result, "保存用户名失败，请重试");
+        fail('[data-field="profileInput"]', "profileError", result, "保存昵称失败，请重试");
         return;
       }
       var saved = typeof result.data.profile_username === "string" ? result.data.profile_username : username;
@@ -1568,7 +1568,7 @@
       if (!state.profile) state.profile = {};
       state.profile.profile_username = saved;
       state.profileError = "";
-      state.accountStatus = saved ? "用户名已保存" : "用户名已清除";
+      state.accountStatus = saved ? "昵称已保存" : "昵称已清除";
       paintSidebar(displayName(saved, state.profile.username));
       toast(state.accountStatus);
       render();
