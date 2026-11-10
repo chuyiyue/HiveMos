@@ -45,6 +45,7 @@ import { handleBackupRequest } from "./backup-http";
 import { maybeRunScheduledBackup } from "./backup";
 import { cronSweepDue } from "./settings";
 import { handleVaultRequest } from "./vault-http";
+import { handleOAuthAdmin, handleOAuthPublic } from "./oauth-http";
 import { handleExtrasRequest } from "./extras-http";
 import { syncDueMirrors } from "./calendar";
 import { refreshActiveSnapshots } from "./registry";
@@ -64,6 +65,7 @@ const PUBLIC_ASSETS = new Set([
   "/icons.svg",
   "/registry.js",
   "/shell.js",
+  "/oauth-authorize.js",
 ]);
 
 const UNCONFIGURED = "管理员尚未同步，请先完成部署";
@@ -88,6 +90,11 @@ export default {
       // Agents POST JSON-RPC here with their own bearer. GET stays on the session
       // gate so html_handling can still serve mcp.html at /mcp.
       if (path === "/mcp" && request.method.toUpperCase() === "POST") return handleMcp(request, env, wait);
+
+      // OAuth 授权服务器：发现元数据、客户端注册、授权页、令牌与撤销都
+      // 在会话门之前（授权页内部再按会话分身份路径）。
+      const oauthPublic = await handleOAuthPublic(request, env, path);
+      if (oauthPublic) return oauthPublic;
 
       // ICS subscription feed: the token in the URL is the credential, so
       // this stays ahead of the session gate like login and the TOTP ticket.
@@ -138,6 +145,8 @@ export default {
       if (backup) return backup;
       const vault = await handleVaultRequest(request, env, wait, path);
       if (vault) return vault;
+      const oauthAdmin = await handleOAuthAdmin(request, env, path);
+      if (oauthAdmin) return oauthAdmin;
       const extras = await handleExtrasRequest(request, env, wait, path);
       if (extras) return extras;
       if (path === "/api" || path.startsWith("/api/")) return json({ ok: false, error: "未找到" }, 404);
