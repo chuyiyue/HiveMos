@@ -5,9 +5,12 @@
 (function () {
   var C = window.HiveCommon;
   var state = {
-    loading: true,
-    loadError: "",
     accountError: "",
+    accountPending: true,
+    accountLoadError: "",
+    sessionsPending: true,
+    featuresPending: true,
+    backupPending: true,
     accountStatus: "",
     system: null,
     systemError: "",
@@ -248,6 +251,19 @@
   }
 
   function accountPanel() {
+    if (state.accountPending) {
+      return panel("account-panel", "管理员账号", '<p class="subtle">正在读取账号信息</p>');
+    }
+    if (state.accountLoadError) {
+      return panel(
+        "account-panel",
+        "管理员账号",
+        '<p class="callout danger" role="alert">' +
+          C.escapeHtml(state.accountLoadError) +
+          "</p>" +
+          '<div class="row-actions"><button type="button" data-action="reload-account">重试</button></div>',
+      );
+    }
     var profile = state.profile || {};
     var created = C.formatMinute(profile.created_at) || "未知";
     var profileForm =
@@ -567,6 +583,9 @@
   }
 
   function sessionsPanel() {
+    if (state.sessionsPending) {
+      return panel("sessions-panel", "会话管理", '<p class="subtle">正在读取会话列表</p>');
+    }
     var others = state.sessions.some(function (item) {
       return !item.current;
     });
@@ -657,7 +676,7 @@
   }
 
   function featureDirty() {
-    if (state.loading) return false;
+    if (state.featuresPending) return false;
     // 按文本比对：非法或空值也算「有改动」，这样保存按钮可点、提交时给出校验提示
     var raw = String(state.pinLimitInput).trim();
     return state.cronInterval !== state.savedCronInterval || raw !== String(state.savedPinLimit);
@@ -690,6 +709,9 @@
   }
 
   function featuresPanel() {
+    if (state.featuresPending) {
+      return panel("features-panel", "功能设置", '<p class="subtle">正在读取功能设置</p>');
+    }
     var dirty = featureDirty();
     var body =
       '<form id="features-form" class="stack" novalidate>' +
@@ -1085,6 +1107,9 @@
   }
 
   function backupPanel() {
+    if (state.backupPending) {
+      return panel("backup-panel", "同步与备份", '<p class="subtle">正在读取备份状态</p>');
+    }
     return panel(
       "backup-panel",
       "同步与备份",
@@ -1171,7 +1196,8 @@
     return api("GET", "/api/backup").then(function (result) {
       if (loggedOut(result)) return;
       applyBackupState(result);
-      if (!state.loading) render();
+      state.backupPending = false;
+      render();
     });
   }
 
@@ -1342,16 +1368,7 @@
     var active = document.activeElement;
     var activeField = active && active.getAttribute ? active.getAttribute("data-field") : "";
     var selectionStart = active && typeof active.selectionStart === "number" ? active.selectionStart : null;
-    var html = "";
-    if (state.loading) html = C.emptyState("正在读取", "稍等片刻");
-    else if (state.loadError) {
-      html =
-        C.emptyState("没有读到账号", state.loadError) +
-        '<div class="row-actions"><button type="button" data-action="reload">重试</button></div>';
-    } else {
-      html = settingsLayout();
-    }
-    C.mount(C.layout(html));
+    C.mount(C.layout(settingsLayout()));
     bind();
     var focusSelector = state.focus;
     state.focus = "";
@@ -1431,7 +1448,7 @@
     var control = target.closest("[data-action]");
     if (!control || state.busy) return;
     var action = control.getAttribute("data-action");
-    if (action === "reload") load();
+    if (action === "reload-account") reloadAccount();
     else if (action === "logout") logout();
     else if (action === "generate-password") fillGenerated();
     else if (action === "totp-setup") beginSetup();
@@ -1816,67 +1833,112 @@
         state.system = result.data;
         state.systemError = "";
       }
-      if (!state.loading) render();
+      render();
+    });
+  }
+
+  function loadAccount(token) {
+    Promise.all([api("GET", "/api/account/profile"), api("GET", "/api/account/totp")]).then(function (results) {
+      if (token !== loadToken) return;
+      var profile = results[0];
+      var totp = results[1];
+      if (profile.status === 401 || totp.status === 401) {
+        location.assign("/login.html");
+        return;
+      }
+      state.accountPending = false;
+      var failed = [profile, totp].filter(function (item) {
+        return !item.data || item.data.ok !== true;
+      })[0];
+      if (failed) {
+        state.accountLoadError =
+          failed.status === 0 ? "网络异常，请重试" : C.explain(failed.data && failed.data.error, "没有读到账号，请重试");
+        render();
+        return;
+      }
+      state.profile = profile.data;
+      if (!state.profileInput) state.profileInput = profile.data.profile_username || "";
+      state.totp = totp.data;
+      state.accountLoadError = "";
+      render();
+    });
+  }
+
+  function reloadAccount() {
+    state.accountPending = true;
+    state.accountLoadError = "";
+    render();
+    loadAccount(loadToken);
+  }
+
+  function loadSessions(token) {
+    api("GET", "/api/account/sessions").then(function (result) {
+      if (token !== loadToken) return;
+      if (result.status === 401) {
+        location.assign("/login.html");
+        return;
+      }
+      state.sessionsPending = false;
+      if (!result.data || result.data.ok !== true) {
+        state.sessionsError =
+          result.status === 0 ? "网络异常，请重试" : C.explain(result.data && result.data.error, "加载会话失败，请重试");
+        render();
+        return;
+      }
+      state.sessions = Array.isArray(result.data.sessions) ? result.data.sessions : [];
+      state.sessionsError = "";
+      render();
+    });
+  }
+
+  function loadFeatures(token) {
+    api("GET", "/api/settings").then(function (result) {
+      if (token !== loadToken) return;
+      if (result.status === 401) {
+        location.assign("/login.html");
+        return;
+      }
+      state.featuresPending = false;
+      if (result.data && result.data.ok === true && result.data.settings) {
+        var savedSettings = result.data.settings;
+        state.savedPinLimit = Number(savedSettings.sidebar_pin_limit);
+        state.pinLimitInput = String(savedSettings.sidebar_pin_limit);
+        state.savedCronInterval = Number(savedSettings.cron_interval_hours);
+        state.cronInterval = state.savedCronInterval;
+      }
+      // 功能设置读不到不拦整页：面板回退到默认值，而保存按钮只有在真改过
+      // （与默认值不同）时才会亮，不会把默认值误写回去。
+      render();
+    });
+  }
+
+  function loadBackup(token) {
+    api("GET", "/api/backup").then(function (result) {
+      if (token !== loadToken) return;
+      if (result.status === 401) {
+        location.assign("/login.html");
+        return;
+      }
+      // 同步与备份读不到也不拦整页：面板显示提示，其它设置照常可用
+      state.backupPending = false;
+      applyBackupState(result);
+      render();
     });
   }
 
   function load() {
     var token = (loadToken += 1);
-    state.loading = true;
-    state.loadError = "";
+    state.accountPending = true;
+    state.accountLoadError = "";
+    state.sessionsPending = true;
+    state.featuresPending = true;
+    state.backupPending = true;
     render();
     loadSystem();
-    Promise.all([
-      api("GET", "/api/account/profile"),
-      api("GET", "/api/account/totp"),
-      api("GET", "/api/account/sessions"),
-      api("GET", "/api/settings"),
-      api("GET", "/api/backup"),
-    ]).then(
-      function (results) {
-        if (token !== loadToken) return;
-        if (
-          results.some(function (item) {
-            return item.status === 401;
-          })
-        ) {
-          location.assign("/login.html");
-          return;
-        }
-        var profile = results[0];
-        var totp = results[1];
-        var sessions = results[2];
-        var settingsResult = results[3];
-        var backupResult = results[4];
-        if (settingsResult.data && settingsResult.data.ok === true && settingsResult.data.settings) {
-          var savedSettings = settingsResult.data.settings;
-          state.savedPinLimit = Number(savedSettings.sidebar_pin_limit);
-          state.pinLimitInput = String(savedSettings.sidebar_pin_limit);
-          state.savedCronInterval = Number(savedSettings.cron_interval_hours);
-          state.cronInterval = state.savedCronInterval;
-        }
-        // 同步与备份读不到也不拦整页：面板显示提示，其它设置照常可用
-        applyBackupState(backupResult);
-        // 功能设置读不到不拦整页：面板回退到默认值，而保存按钮只有在真改过
-        // （与默认值不同）时才会亮，不会把默认值误写回去。
-        var failed = [profile, totp, sessions].filter(function (item) {
-          return !item.data || item.data.ok !== true;
-        })[0];
-        state.loading = false;
-        if (failed) {
-          state.loadError =
-            failed.status === 0 ? "网络异常，请重试" : C.explain(failed.data && failed.data.error, "没有读到账号，请重试");
-          render();
-          return;
-        }
-        state.profile = profile.data;
-        if (!state.profileInput) state.profileInput = profile.data.profile_username || "";
-        state.totp = totp.data;
-        state.sessions = Array.isArray(sessions.data.sessions) ? sessions.data.sessions : [];
-        state.loadError = "";
-        render();
-      },
-    );
+    loadAccount(token);
+    loadSessions(token);
+    loadFeatures(token);
+    loadBackup(token);
   }
 
   // 手动保存的同类设置：离开页面前提醒还没提交的改动
