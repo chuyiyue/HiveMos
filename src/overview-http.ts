@@ -10,9 +10,12 @@
 
 import { json } from "./http";
 import type { D1Database, Env, WaitCtx } from "./env";
+import { isTargetId, readBackupSchedule, readPublicTargets, targetLabel } from "./backup";
 
 const ACTIVITY_LIMIT = 20;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const BACKUP_ALERT_LIMIT = 2;
+const BACKUP_ERROR_MAX = 80;
 
 interface ActivityItem {
   at: number;
@@ -361,5 +364,61 @@ async function buildAlerts(db: D1Database, now: number): Promise<AlertItem[]> {
     alerts.push({ kind: "task_stale", text: `任务「${task.title}」进行中超过 7 天没有进展`, at: task.updated_at });
   }
 
+  alerts.push(...(await buildBackupAlerts(db)));
+
   return alerts;
+}
+
+// 备份类条目只取摘要，最多两条，按失败/从未/配置异常/成功的优先级截断。
+async function buildBackupAlerts(db: D1Database): Promise<AlertItem[]> {
+  const [schedule, targets] = await Promise.all([readBackupSchedule(db), readPublicTargets(db)]);
+  const summary = schedule.last_summary;
+  const configuredCount = Object.values(targets).filter((target) => target?.configured).length;
+  const alerts: AlertItem[] = [];
+
+  if (summary && summary["ok"] === false) {
+    const reason = backupError(summary, schedule.last_error);
+    alerts.push({
+      kind: "backup_failed",
+      text: `上次备份失败 · ${backupTargetName(summary)}${reason ? `：${reason}` : ""}`,
+      at: backupAt(summary),
+    });
+  }
+
+  if (!summary && configuredCount > 0) {
+    alerts.push({ kind: "backup_never", text: "尚未进行过备份", at: null });
+  }
+
+  const autoTarget = schedule.target;
+  if (schedule.auto_enabled && (!autoTarget || !targets[autoTarget]?.enabled)) {
+    alerts.push({ kind: "backup_auto_invalid", text: "自动备份已开启，但目标不可用", at: null });
+  }
+
+  if (summary && summary["ok"] === true) {
+    const files = summary["files"];
+    const suffix = typeof files === "number" && files >= 0 ? ` · ${files} 个文件` : "";
+    alerts.push({
+      kind: "backup_ok",
+      text: `最近一次备份成功 · ${backupTargetName(summary)}${suffix}`,
+      at: backupAt(summary),
+    });
+  }
+
+  return alerts.slice(0, BACKUP_ALERT_LIMIT);
+}
+
+function backupTargetName(summary: Record<string, unknown>): string {
+  const target = summary["target"];
+  return isTargetId(target) ? targetLabel(target) : "备份目标";
+}
+
+function backupAt(summary: Record<string, unknown>): number | null {
+  const at = summary["at"];
+  return typeof at === "number" && Number.isFinite(at) && at > 0 ? at : null;
+}
+
+function backupError(summary: Record<string, unknown>, lastError: string): string {
+  const raw = typeof summary["error"] === "string" ? summary["error"] : "";
+  const error = (raw || lastError).trim();
+  return error.length > BACKUP_ERROR_MAX ? `${error.slice(0, BACKUP_ERROR_MAX)}…` : error;
 }
