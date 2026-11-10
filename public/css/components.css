@@ -1006,8 +1006,9 @@ article.record .card-actions { margin-top: auto; }
 .section .tag-row { margin-bottom: 12px; }
 
 @media (max-width: 639px) {
-  .wp-tabs { width: 100%; flex-wrap: nowrap; }
-  .wp-tab { flex: 1 1 0; min-width: 0; white-space: nowrap; padding-left: 6px; padding-right: 6px; text-align: center; }
+  .wp-tabs { width: 100%; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+  .wp-tabs::-webkit-scrollbar { display: none; }
+  .wp-tab { flex: 0 0 auto; white-space: nowrap; }
 }
 
 /* Agent 卡片的「管理Agent」按钮：手机端隐藏（点卡片信息区即打开管理弹窗，功能相同），电脑端保留 */
