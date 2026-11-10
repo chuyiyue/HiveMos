@@ -1307,6 +1307,8 @@ export async function listCoreMemories(db: D1Database, agentName: string, now: n
     used += cost;
   }
   return picked;
+}
+
 // 后台拆分完成后拉取待补全记忆；只跑少量，失败保留 pending 由下一轮重试。
 export async function listPendingAiMemories(db: D1Database, limit = 10): Promise<MemoryRow[]> {
   const rows = rowsOf(
