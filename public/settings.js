@@ -74,6 +74,7 @@
   var bound = false;
 
   var CRON_INTERVAL_OPTIONS = [
+    { hours: 0, label: "关闭" },
     { hours: 1, label: "每小时" },
     { hours: 3, label: "每 3 小时" },
     { hours: 6, label: "每 6 小时" },

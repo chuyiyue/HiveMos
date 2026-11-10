@@ -19,7 +19,7 @@ export const SIDEBAR_PIN_LIMIT_MIN = 1;
 export const SIDEBAR_PIN_LIMIT_MAX = 20;
 
 export const CRON_INTERVAL_HOURS_DEFAULT = 6;
-export const CRON_INTERVAL_OPTIONS = [1, 3, 6, 12, 24] as const;
+export const CRON_INTERVAL_OPTIONS = [0, 1, 3, 6, 12, 24] as const;
 
 const SIDEBAR_PIN_LIMIT_KEY = "sidebar_pin_limit";
 const CRON_INTERVAL_HOURS_KEY = "cron_interval_hours";
@@ -70,6 +70,7 @@ export function isCronIntervalOption(value: unknown): boolean {
 }
 
 export function cronIntervalLabel(hours: number): string {
+  if (hours === 0) return "关闭";
   if (hours === 1) return "每小时";
   if (hours === 24) return "每天";
   return `每 ${hours} 小时`;
@@ -152,6 +153,7 @@ export async function readCronState(db: D1Database): Promise<CronState> {
 // First run (no stamp) counts as due, so a fresh deployment sweeps right away.
 export async function cronSweepDue(db: D1Database, now: number): Promise<boolean> {
   const state = await readCronState(db);
+  if (state.interval_hours <= 0) return false;
   if (state.last_run_at === null) return true;
   return now - state.last_run_at >= cronIntervalMs(state.interval_hours);
 }
