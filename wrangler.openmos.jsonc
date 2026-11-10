@@ -5,9 +5,10 @@
   // 2026-10-30 is the newest date this Wrangler's workerd accepts.
   "compatibility_date": "2026-10-30",
   "workers_dev": true,
-  // No custom domain yet: OpenMos starts on its workers.dev address
-  // (openmos.lokfu.workers.dev) while the hivemos script is suspended.
-  // Bind a domain here once the owner picks one.
+  // Custom domain picked by the owner 2026-11-10 (zone oonn.pp.ua is on
+  // this Cloudflare account; mos.loko.pp.ua stays with the hivemos
+  // script for now).
+  "routes": [{ "pattern": "mos.oonn.pp.ua", "custom_domain": true }],
   "assets": {
     "directory": "./public",
     "binding": "ASSETS",
