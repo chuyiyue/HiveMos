@@ -1005,3 +1005,8 @@ article.record .card-actions { margin-top: auto; }
   .wp-tabs { width: 100%; flex-wrap: nowrap; }
   .wp-tab { flex: 1 1 0; min-width: 0; white-space: nowrap; padding-left: 6px; padding-right: 6px; text-align: center; }
 }
+
+/* Agent 卡片的「管理Agent」按钮：手机端隐藏（点卡片信息区即打开管理弹窗，功能相同），电脑端保留 */
+@media (max-width: 639px) {
+  [data-action="manage-agent"] { display: none; }
+}
