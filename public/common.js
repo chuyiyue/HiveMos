@@ -767,7 +767,7 @@
           "<span class=\"manage-avatar-edit\" aria-hidden=\"true\"><svg class=\"icon\" viewBox=\"0 0 24 24\"><use href=\"/icons.svg#icon-edit\"></use></svg></span>" +
           "</button>",
         title: agent.name,
-        sub: (active ? "已启用" : "已停用") + " · Agent · " + (partial ? "读取中" : groupName || "未分组"),
+        sub: "Agent · " + (partial ? "读取中" : groupName || "未分组"),
         titleSuffix: "<button type=\"button\" class=\"manage-name-edit\" data-agent-act=\"rename\" title=\"改名\" aria-label=\"改名\"><svg class=\"icon\" viewBox=\"0 0 24 24\" aria-hidden=\"true\"><use href=\"/icons.svg#icon-edit\"></use></svg></button>",
       }) +
       "<div class=\"manage-info-card\"><dl class=\"kv\">" +
