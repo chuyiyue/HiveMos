@@ -1595,10 +1595,11 @@ export async function disableAgent(db: D1Database, id: string): Promise<{ ok: tr
   return { ok: true };
 }
 
-// Hard delete: the agents row goes away, and with it everything that only
-// makes sense while the agent exists — its Soul (souls are keyed by agent
-// name) with the full version history, and its uploaded avatar. Audit and
-// call history are NOT touched: agents_audit / calendar_audit / task_audit /
+// Hard delete removes the agent's ACCESS only: the agents row (token hash
+// and sealed copy, pin, group) plus its uploaded avatar. Content the agent
+// wrote is NOT touched — its Soul (souls are keyed by agent name) and the
+// version history stay behind as ownerless data, as do memories and task
+// history. Audit and call history are NOT touched either: agents_audit / calendar_audit / task_audit /
 // memory_audit / soul_audit / machines_audit keep their rows (their actor
 // is a bare agent id and the records feed already renders a missing agent
 // as 「已删除的 Agent」), and mcp_fetch_audit gets the agent's name
@@ -1626,10 +1627,6 @@ export async function deleteAgent(
   }
   try {
     await db.batch([
-      prepare(db, "DELETE FROM soul_versions WHERE soul_id IN (SELECT id FROM souls WHERE agent_name = ?)", [
-        row.name,
-      ]),
-      prepare(db, "DELETE FROM souls WHERE agent_name = ?", [row.name]),
       prepare(db, "DELETE FROM agent_avatars WHERE agent_id = ?", [id]),
       prepare(db, "DELETE FROM agents WHERE id = ?", [id]),
     ]);

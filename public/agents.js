@@ -682,7 +682,7 @@
           text:
             "确定要删除 Agent「" +
             agent.name +
-            "」吗？删除后不可恢复，该 Agent 的令牌与 Soul 会一并删除",
+            "」吗？删除后不可恢复，该 Agent 将无法再访问，它写下的 Soul、记忆等数据会保留",
           confirmLabel: "删除",
           danger: true,
         }).then(function (yes) {
