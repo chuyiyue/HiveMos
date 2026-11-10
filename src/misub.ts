@@ -325,8 +325,14 @@ function asPositiveSeconds(value: unknown): number | null {
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : null;
 }
 
-// MiSub 的 lastUpdate 是毫秒 epoch；只做数值校验，不做时区/单位猜测。
+// MiSub 的 lastUpdate 实测有两种形态：毫秒 epoch 数字与 ISO 时间字符串
+// （真实实例返回 "2026-11-10T17:45:12.909Z"）。数字按 epoch 用，字符串走
+// Date.parse，都归一成毫秒 epoch。
 function asEpochMs(value: unknown): number | null {
+  if (typeof value === "string" && value.trim() !== "" && Number.isNaN(Number(value))) {
+    const parsedDate = Date.parse(value);
+    return Number.isFinite(parsedDate) && parsedDate > 0 ? parsedDate : null;
+  }
   const parsed = typeof value === "number" ? value : Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : null;
 }
