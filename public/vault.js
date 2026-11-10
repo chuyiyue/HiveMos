@@ -283,7 +283,7 @@
         size: "sm",
         title: item.name,
         bodyHtml:
-          C.manageInfoHead({ icon: "lock", title: item.name, sub: "账号密码" }) + entryManageBody(item),
+          C.manageInfoHead({ icon: "lock", title: item.name, sub: "保险库" }) + entryManageBody(item),
       })
     );
   }
@@ -573,12 +573,12 @@
       "</div>";
     var head =
       '<div class="page-head"><div class="page-tabs" role="tablist">' +
+      '<button class="page-tab" type="button" role="tab" data-tab="vault" aria-selected="' +
+      (activeTab === "vault" ? "true" : "false") +
+      '">保险库</button>' +
       '<button class="page-tab" type="button" role="tab" data-tab="email" aria-selected="' +
       (activeTab === "email" ? "true" : "false") +
       '">邮箱</button>' +
-      '<button class="page-tab" type="button" role="tab" data-tab="vault" aria-selected="' +
-      (activeTab === "vault" ? "true" : "false") +
-      '">账号密码</button>' +
       '<button class="page-tab" type="button" role="tab" data-tab="totp" aria-selected="' +
       (activeTab === "totp" ? "true" : "false") +
       '">验证码</button>' +
