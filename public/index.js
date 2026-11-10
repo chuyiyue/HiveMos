@@ -4,7 +4,6 @@
 
   C.mount(
     C.layout(
-      "",
       "<div class=\"page-tabs\" role=\"tablist\">" +
         "<button class=\"page-tab\" type=\"button\" role=\"tab\" data-tab=\"overview\" aria-selected=\"true\">总览</button>" +
         "<button class=\"page-tab\" type=\"button\" role=\"tab\" data-tab=\"calls\" aria-selected=\"false\">调用记录</button>" +
