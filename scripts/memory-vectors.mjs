@@ -266,7 +266,8 @@ function baseEnv(db, extra = {}) {
 {
   const { raw, db } = freshDb();
   const env = baseEnv(db);
-  raw.exec("ALTER TABLE memories ADD COLUMN expires_at INTEGER");
+  // 合并后 0060 已带 expires_at 列；保留这句 ALTER 的探测意图，列已存在时忽略。
+  try { raw.exec("ALTER TABLE memories ADD COLUMN expires_at INTEGER"); } catch { /* 列已存在 */ }
   const row = await memory.createMemory(
     db,
     { title: "Expired by column", content: "带显式过期时间", tags: [], weight: 80 },

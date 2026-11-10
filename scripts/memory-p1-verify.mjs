@@ -77,6 +77,11 @@ function makeDb(withFts) {
       });
       return wrap([]);
     },
+    async batch(statements) {
+      const out = [];
+      for (const stmt of statements) out.push(await stmt.run());
+      return out;
+    },
   };
   return db;
 }
