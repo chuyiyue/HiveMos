@@ -29,6 +29,11 @@
     totpUri: "",
     totpCode: "",
     totpPassword: "",
+    github: null,
+    githubError: "",
+    bindPassword: "",
+    githubRebindOpen: false,
+    githubConfirmUnbind: false,
     recoveryCodes: [],
     sessions: [],
     sessionsError: "",
@@ -290,9 +295,51 @@
         profileForm +
         '</div><div class="stack account-col">' +
         totpPanel() +
+        githubPanel() +
         passwordForm() +
         "</div></div>",
     );
+  }
+
+  function githubPanel() {
+    if (!state.github || state.github.configured !== true) return "";
+    var gh = state.github;
+    var body = "";
+    if (gh.bound) {
+      body += C.facts([
+        ["状态", "已绑定"],
+        ["GitHub 账号", C.escapeHtml(gh.login || "")],
+      ]);
+      if (state.githubRebindOpen) {
+        body +=
+          '<form id="github-rebind-form" class="stack" novalidate><label>当前密码' +
+          '<input data-field="bindPassword" name="bindPassword" type="password" maxlength="256" autocomplete="current-password" value="' +
+          C.escapeHtml(state.bindPassword) +
+          '" /></label>' +
+          '<p class="subtle">验证当前密码后会跳转到 GitHub 完成换绑</p>' +
+          fieldError("github-error", state.githubError) +
+          '<div class="row-actions"><button type="submit"' +
+          (state.busy ? " disabled" : "") +
+          ">验证并换绑</button>" +
+          button("取消", "github-rebind-cancel", "ghost") +
+          "</div></form>";
+      } else {
+        body +=
+          '<div class="row-actions">' +
+          button("换绑", "github-rebind-open", "secondary") +
+          (state.githubConfirmUnbind
+            ? button("确认解绑", "github-unbind", "danger")
+            : button("解绑", "github-unbind", "ghost")) +
+          "</div>";
+      }
+    } else {
+      body +=
+        '<p class="subtle">绑定后可以用 GitHub 账号直接登录这个面板</p>' +
+        '<div class="row-actions">' +
+        button("绑定 GitHub", "github-bind", "secondary") +
+        "</div>";
+    }
+    return '<div class="stack" id="github-panel"><h3>GitHub 登录</h3>' + body + "</div>";
   }
 
   function passwordForm() {
@@ -1417,6 +1464,7 @@
       state.accountError = "";
     }
     if (field === "totpCode" || field === "totpPassword") clearNote("totp-error", "totpError");
+    if (field === "bindPassword") clearNote("github-error", "githubError");
     if (field === "pinLimitInput") {
       clearNote("features-error", "featuresError");
       paintFeatureState();
@@ -1449,6 +1497,10 @@
     if (!control || state.busy) return;
     var action = control.getAttribute("data-action");
     if (action === "reload-account") reloadAccount();
+    else if (action === "github-bind") bindGithub();
+    else if (action === "github-rebind-open") openGithubRebind();
+    else if (action === "github-rebind-cancel") closeGithubRebind();
+    else if (action === "github-unbind") unbindGithub();
     else if (action === "logout") logout();
     else if (action === "generate-password") fillGenerated();
     else if (action === "totp-setup") beginSetup();
@@ -1478,6 +1530,7 @@
     else if (form.id === "password-form") submitPassword();
     else if (form.id === "features-form") submitFeatures();
     else if (form.id === "backup-auto-form") submitBackupAuto();
+    else if (form.id === "github-rebind-form") submitGithubRebind();
   }
 
   function fail(slot, key, result, fallback) {
@@ -1838,11 +1891,16 @@
   }
 
   function loadAccount(token) {
-    Promise.all([api("GET", "/api/account/profile"), api("GET", "/api/account/totp")]).then(function (results) {
+    Promise.all([
+      api("GET", "/api/account/profile"),
+      api("GET", "/api/account/totp"),
+      api("GET", "/api/account/github"),
+    ]).then(function (results) {
       if (token !== loadToken) return;
       var profile = results[0];
       var totp = results[1];
-      if (profile.status === 401 || totp.status === 401) {
+      var github = results[2];
+      if (profile.status === 401 || totp.status === 401 || github.status === 401) {
         location.assign("/login.html");
         return;
       }
@@ -1856,10 +1914,81 @@
         render();
         return;
       }
+      if (github.data && github.data.ok === true) state.github = github.data;
       state.profile = profile.data;
       if (!state.profileInput) state.profileInput = profile.data.profile_username || "";
       state.totp = totp.data;
       state.accountLoadError = "";
+      render();
+    });
+  }
+
+  function bindGithub() {
+    location.assign("/api/v1/auth/github/start?intent=bind");
+  }
+
+  function openGithubRebind() {
+    state.githubRebindOpen = true;
+    state.githubError = "";
+    state.bindPassword = "";
+    state.focus = '[data-field="bindPassword"]';
+    render();
+  }
+
+  function closeGithubRebind() {
+    state.githubRebindOpen = false;
+    state.githubError = "";
+    state.bindPassword = "";
+    render();
+  }
+
+  function submitGithubRebind() {
+    var password = fieldValue("bindPassword");
+    if (!password) {
+      state.githubError = "请填写当前密码";
+      render();
+      return;
+    }
+    state.githubError = "";
+    state.busy = true;
+    render();
+    api("POST", "/api/v1/auth/github/rebind", { current_password: password }).then(function (result) {
+      if (result.data && result.data.ok === true) {
+        location.assign("/api/v1/auth/github/start?intent=bind");
+        return;
+      }
+      fail('[data-field="bindPassword"]', "githubError", result, "验证失败，请重试");
+    });
+  }
+
+  function unbindGithub() {
+    if (!state.githubConfirmUnbind) {
+      state.githubConfirmUnbind = true;
+      render();
+      window.setTimeout(function () {
+        if (state.githubConfirmUnbind) {
+          state.githubConfirmUnbind = false;
+          render();
+        }
+      }, 3500);
+      return;
+    }
+    state.githubConfirmUnbind = false;
+    state.busy = true;
+    render();
+    api("POST", "/api/v1/auth/github/unbind").then(function (result) {
+      state.busy = false;
+      if (loggedOut(result)) return;
+      if (!result.data || result.data.ok !== true) {
+        state.accountError =
+          result.status === 0 ? "网络异常，请重试" : C.explain(result.data && result.data.error, "解绑失败，请重试");
+        render();
+        return;
+      }
+      state.github = { configured: true, bound: false, login: "", avatar_url: "" };
+      state.githubRebindOpen = false;
+      state.bindPassword = "";
+      state.accountStatus = "GitHub 账号已解绑";
       render();
     });
   }
@@ -1928,6 +2057,10 @@
 
   function load() {
     var token = (loadToken += 1);
+    var ghResult = new URLSearchParams(location.search).get("github");
+    if (ghResult === "bound") state.accountStatus = "GitHub 账号已绑定";
+    if (ghResult === "error") state.accountError = "GitHub 绑定失败，请重试";
+    if (ghResult) history.replaceState(null, "", location.pathname);
     state.accountPending = true;
     state.accountLoadError = "";
     state.sessionsPending = true;
