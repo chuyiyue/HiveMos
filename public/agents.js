@@ -2,7 +2,9 @@
    GET /api/agents + GET /api/groups?scope=agent，按分组分区展示；添加 Agent/
    添加分组走弹窗，卡片高级操作（改名、移动分组、高级设置、轮换令牌、停用）
    走卡片「管理Agent」下拉菜单（改名/分组/权限直达管理弹窗对应页签）。
-   应用：接入 MCP 的应用条目，走 /api/extras/apps；分组没有独立的后端
+   应用：手动登记条目（/api/extras/apps）与 OAuth 授权创建的应用
+   （/api/oauth/apps，自带令牌与权限矩阵）同列表展示、卡片标出来源；
+   分组没有独立的后端
    scope，仍是页内状态（group_id 不落库），其余与 Agents 页签共用同一套
    操作区、分组分区与卡片。令牌除存摘要外另以 AES-GCM 密封保存，卡片
    「复制密钥」走 reveal 端点（先写审计再回明文）；页面状态从不持有明文 */
@@ -18,12 +20,13 @@
     noticeKind: "danger",
     busy: false,
     activeTab: location.hash === "#apps" ? "apps" : "agents",
-    // 应用页签：条目走 /api/extras/apps（loadAll 时拉取）；分组没有后端
-    // scope 可用，仍是页内状态，条目的 group_id 只在页内生效、不落库
+    // 应用页签：手动条目走 /api/extras/apps、OAuth 应用走 /api/oauth/apps
+    // （loadAll 时一并拉取）；分组没有后端 scope 可用，仍是页内状态
     apps: {
       seq: 0,
       groups: [],
       items: [],
+      oauthItems: [],
     },
   };
 
@@ -290,7 +293,12 @@
   }
 
   function loadAll() {
-    return Promise.all([api("GET", "/api/agents"), api("GET", "/api/groups?scope=agent"), api("GET", "/api/extras/apps")])
+    return Promise.all([
+      api("GET", "/api/agents"),
+      api("GET", "/api/groups?scope=agent"),
+      api("GET", "/api/extras/apps"),
+      api("GET", "/api/oauth/apps"),
+    ])
       .then(function (results) {
         if (authRedirect(results[0].status) || authRedirect(results[1].status)) return;
         state.loading = false;
@@ -304,6 +312,8 @@
         if (results[2].data && results[2].data.ok === true) {
           state.apps.items = (results[2].data.apps || []).map(mapApp);
         }
+        state.apps.oauthItems =
+          results[3].data && results[3].data.ok === true ? (results[3].data.apps || []).map(mapOAuthApp) : [];
         state.loadError = "";
         render();
       })
@@ -713,6 +723,7 @@
   function mapApp(row) {
     return {
       id: row.id,
+      source: "manual",
       name: row.name,
       type: row.type || "",
       note: row.note || "",
@@ -721,8 +732,26 @@
     };
   }
 
+  function mapOAuthApp(row) {
+    return {
+      id: row.id,
+      source: "oauth",
+      name: row.name,
+      client_name: row.client_name || "",
+      permissions: row.permissions || null,
+      created_at: row.created_at || 0,
+      last_used_at: row.last_used_at || 0,
+      group_id: null,
+    };
+  }
+
+  // 应用页签的统一列表：OAuth 应用在前、手动条目在后，同列表展示。
+  function allApps() {
+    return state.apps.oauthItems.concat(state.apps.items);
+  }
+
   function findApp(id) {
-    return state.apps.items.find(function (item) {
+    return allApps().find(function (item) {
       return item.id === id;
     });
   }
@@ -734,6 +763,7 @@
   }
 
   function appCard(item) {
+    if (item.source === "oauth") return oauthAppCard(item);
     var id = C.escapeHtml(item.id);
     return C.record({
       id: item.id,
@@ -746,6 +776,23 @@
       ],
       actions:
         "<button type=\"button\" class=\"secondary\" data-action=\"app-edit\" data-id=\"" + id + "\">编辑</button>",
+      manage: "app:" + item.id,
+    });
+  }
+
+  function oauthAppCard(item) {
+    return C.record({
+      id: item.id,
+      icon: "layout",
+      title: item.name,
+      pill: "OAuth",
+      facts: [
+        ["来源", "OAuth"],
+        ["客户端", C.escapeHtml(item.client_name || "未命名客户端")],
+        ["最近使用", C.escapeHtml(item.last_used_at ? shortMinute(item.last_used_at) : "还没有使用")],
+        ["权限", C.escapeHtml(C.permSummaryOf({ permissions: item.permissions }))],
+      ],
+      actions: "",
       manage: "app:" + item.id,
     });
   }
@@ -774,7 +821,9 @@
       });
     } else if (kind === "app") {
       var app = findApp(id);
-      if (app) openAppManage(app);
+      if (!app) return;
+      if (app.source === "oauth") openOAuthAppManage(app);
+      else openAppManage(app);
     }
   }
 
@@ -796,6 +845,157 @@
     ctrl.dialog.addEventListener("click", handleClick);
   }
 
+  // OAuth 应用的管理弹窗：权限矩阵（与 Agent 同一套矩阵组件，保存走
+  // PATCH /api/oauth/apps/:id，令牌实时按新权限校验）、查看令牌
+  // （审计先行）、删除应用（令牌立即全灭）。
+  function openOAuthAppManage(item) {
+    var savedPerms = C.normalizePerms(item.permissions);
+    var desired = C.permClone(savedPerms);
+    var busy = false;
+    var ctrl = C.openManageDialog({
+      title: item.name,
+      hideHead: true,
+      size: "lg",
+      bodyHtml:
+        C.manageInfoHead({ icon: "layout", title: item.name }) +
+        '<dl class="kv">' +
+        kv("来源", "OAuth") +
+        kv("客户端", C.escapeHtml(item.client_name || "未命名客户端")) +
+        kv("创建时间", C.escapeHtml(item.created_at ? shortMinute(item.created_at) : "未知")) +
+        kv("最近使用", C.escapeHtml(item.last_used_at ? shortMinute(item.last_used_at) : "还没有使用")) +
+        "</dl>" +
+        '<p class="manage-status" data-manage-status aria-live="polite"></p>' +
+        C.permMatrixHtml({ permissions: desired }) +
+        '<div class="manage-actions">' +
+        '<button type="button" class="secondary" data-oapp-reveal>查看令牌</button>' +
+        '<button type="button" class="danger" data-oapp-delete>删除应用</button>' +
+        "</div>" +
+        '<div data-oapp-tokens></div>',
+    });
+
+    function setStatus(message, isError) {
+      var el = ctrl.bodyEl.querySelector("[data-manage-status]");
+      if (!el) return;
+      el.textContent = message || "";
+      el.classList.toggle("is-error", !!isError);
+    }
+
+    function syncMatrix() {
+      ctrl.bodyEl.querySelectorAll("[data-perm-cell]").forEach(function (box) {
+        var cell = desired[box.getAttribute("data-perm-cell")];
+        box.checked = !!(cell && cell[box.getAttribute("data-perm-op")]);
+      });
+      ctrl.bodyEl.querySelectorAll("[data-perm-adv]").forEach(function (box) {
+        var cell = desired.advanced[box.getAttribute("data-perm-adv")];
+        box.checked = !!(cell && cell[box.getAttribute("data-perm-op")]);
+      });
+      var saveBtn = ctrl.bodyEl.querySelector("[data-perm-save]");
+      if (saveBtn) saveBtn.disabled = busy || C.permsEqual(desired, savedPerms);
+    }
+    syncMatrix();
+
+    ctrl.dialog.addEventListener("change", function (event) {
+      var target = event.target;
+      if (!(target instanceof Element)) return;
+      var domain = target.getAttribute("data-perm-cell");
+      var adv = target.getAttribute("data-perm-adv");
+      var op = target.getAttribute("data-perm-op");
+      if (domain && desired[domain]) desired[domain][op] = !!target.checked;
+      else if (adv && desired.advanced[adv]) desired.advanced[adv][op] = !!target.checked;
+      else return;
+      syncMatrix();
+    });
+
+    ctrl.dialog.addEventListener("click", function (event) {
+      var target = event.target;
+      if (!(target instanceof Element)) return;
+      if (target.closest("[data-perm-clear]")) {
+        desired = C.emptyPerms();
+        syncMatrix();
+        return;
+      }
+      if (target.closest("[data-perm-save]")) {
+        if (busy) return;
+        busy = true;
+        syncMatrix();
+        api("PATCH", "/api/oauth/apps/" + encodeURIComponent(item.id), { permissions: desired })
+          .then(function (result) {
+            busy = false;
+            if (!result.data || result.data.ok !== true) {
+              setStatus((result.data && result.data.error) || "保存失败，请重试", true);
+              syncMatrix();
+              return;
+            }
+            savedPerms = C.permClone(desired);
+            item.permissions = C.permClone(desired);
+            setStatus("权限已保存", false);
+            syncMatrix();
+            loadAll();
+          })
+          .catch(function () {
+            busy = false;
+            setStatus("网络异常，请重试", true);
+            syncMatrix();
+          });
+        return;
+      }
+      if (target.closest("[data-oapp-reveal]")) {
+        if (busy) return;
+        busy = true;
+        api("POST", "/api/oauth/apps/" + encodeURIComponent(item.id) + "/reveal-tokens")
+          .then(function (result) {
+            busy = false;
+            if (!result.data || result.data.ok !== true) {
+              setStatus((result.data && result.data.error) || "令牌暂时取不到", true);
+              return;
+            }
+            var slot = ctrl.bodyEl.querySelector("[data-oapp-tokens]");
+            if (!slot) return;
+            var html =
+              '<dl class="kv">' +
+              "<div><dt>访问令牌</dt><dd><span class=\"mono\">" +
+              C.escapeHtml(result.data.access_token) +
+              '</span> <button type="button" class="copy-btn" data-copy="' +
+              C.escapeHtml(result.data.access_token) +
+              '" data-label="复制">复制</button></dd></div>';
+            if (result.data.refresh_token) {
+              html +=
+                "<div><dt>刷新令牌</dt><dd><span class=\"mono\">" +
+                C.escapeHtml(result.data.refresh_token) +
+                '</span> <button type="button" class="copy-btn" data-copy="' +
+                C.escapeHtml(result.data.refresh_token) +
+                '" data-label="复制">复制</button></dd></div>';
+            }
+            slot.innerHTML = html + "</dl>";
+          })
+          .catch(function () {
+            busy = false;
+            setStatus("网络异常，请重试", true);
+          });
+        return;
+      }
+      if (target.closest("[data-oapp-delete]")) {
+        C.askConfirm({
+          title: "删除应用",
+          danger: true,
+          confirmLabel: "删除",
+          text: "确定要删除应用「" + item.name + "」吗？删除后它的令牌立即全部失效，外部客户端需要重新授权",
+          onConfirm: function () {
+            return api("DELETE", "/api/oauth/apps/" + encodeURIComponent(item.id)).then(function (result) {
+              if (!result.data || result.data.ok !== true) {
+                throw new Error((result.data && result.data.error) || "删除失败，请重试");
+              }
+              state.notice = "应用已删除";
+              state.noticeKind = "ok";
+              ctrl.close();
+              loadAll();
+            });
+          },
+        });
+      }
+    });
+  }
+
   function appGroupActions(group) {
     return (
       '<button type="button" class="secondary" data-action="app-rename-group" data-id="' +
@@ -812,7 +1012,7 @@
       C.groupedSections({
         cardGrid: true,
         groups: state.apps.groups,
-        items: state.apps.items,
+        items: allApps(),
         groupOf: function (item) {
           return item.group_id || null;
         },
@@ -821,7 +1021,7 @@
         ungroupedTitle: "未分组",
         emptyGroupText: "添加应用时选择这个分组即可归入",
         emptyTitle: "还没有应用",
-        emptyText: "点上方「添加应用」接入第一个",
+        emptyText: "手动登记，或让外部 AI 客户端通过 OAuth 授权创建",
       }) +
       "</div>"
     );

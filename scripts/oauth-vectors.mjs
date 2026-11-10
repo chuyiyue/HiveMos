@@ -1,20 +1,21 @@
 #!/usr/bin/env node
-// OAuth 阶段 2–4 的断言：纯逻辑向量 + 可选的本地端到端。
+// OAuth「应用」模型的断言：纯逻辑向量 + 可选的本地端到端。
 //
 //   /data/workspace/node24/bin/node scripts/oauth-vectors.mjs          纯逻辑
 //   /data/workspace/node24/bin/node scripts/oauth-vectors.mjs --e2e    再加本地 wrangler dev 全流程
 //
-// 纯逻辑覆盖：PKCE S256、redirect URI 准入、链接密钥提取、权限交集与工
-// 具可见性（基础只读 + 连接给写 → 写工具不可见/被拒；收紧基础后交集立
-// 即变小）。这部分用的正是 resolveOAuthAccessToken 计算生效权限时调用
-// 的同一组函数（parsePermissions / intersectPermissions /
-// toolVisibleToAgent / toolAccessError），不是复制品。
+// 模型（2026-11-10 改定）：OAuth 只建独立「应用」，权限就是授权页勾选
+// 的完整矩阵，没有基础 ∩ 连接交集、没有链接密钥绑定。纯逻辑覆盖：
+// PKCE S256、redirect URI 准入、应用权限原样解析/序列化（含高级域）、
+// 垃圾输入全关、工具可见性直接按应用权限判定、高级权限（操作2FA）
+// 门、以及旧符号（intersectPermissions / extractLinkSecret）确已删除。
 //
 // --e2e 覆盖（本地 D1 + wrangler dev --local，端口 8797）：注册与坏回调
-// 拒绝、链接密钥绑定授权、PKCE 错验拒绝、授权码单次使用、tools/list 与
-// tools/call 的交集校验、管理员查看连接与审计后 reveal、面板撤销后令牌
-// 立即失效、refresh 轮换、旧 refresh 复用整族撤销、收紧基础权限后存量
-// 连接即刻受限、管理员会话的 existing / new 两条身份路。
+// 拒绝、未登录授权页跳登录（next 回跳）、未登录提交 401、管理员单路
+// 授权页（应用名 + 一张矩阵）、授权码快照建应用、PKCE 错验拒绝、授权
+// 码单次使用、应用权限原样生效（写工具可见）、面板改权限对同一令牌
+// 立即生效、审计后 reveal、refresh 轮换、旧 refresh 复用整族撤销、
+// 第二个应用独立存在、删应用令牌立即失效、Agent 令牌路径回归。
 
 import { register } from "node:module";
 import { spawn, execFileSync } from "node:child_process";
@@ -54,10 +55,15 @@ function expectTrue(label, value) {
   expect(label, !!value, true);
 }
 
-const { parsePermissions, intersectPermissions, serializePermissions } = await import("../src/permissions.ts");
+const permissionsModule = await import("../src/permissions.ts");
+const { parsePermissions, serializePermissions, denyAllPermissions } = permissionsModule;
+const oauthUtilModule = await import("../src/oauth-util.ts");
+const { pkceChallengeFor, pkceMatches, isValidCodeVerifier, isAllowedRedirectUri } = oauthUtilModule;
 const { toolVisibleToAgent, toolAccessError } = await import("../src/tool-permissions.ts");
-const { pkceChallengeFor, pkceMatches, isValidCodeVerifier, isAllowedRedirectUri, extractLinkSecret } =
-  await import("../src/oauth-util.ts");
+
+// ---- 已删除的旧符号（交集与绑定路径不许复活） -----------------------------------
+expect("删除: intersectPermissions 不存在", typeof permissionsModule.intersectPermissions, "undefined");
+expect("删除: extractLinkSecret 不存在", typeof oauthUtilModule.extractLinkSecret, "undefined");
 
 // ---- PKCE ------------------------------------------------------------------
 const verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
@@ -79,27 +85,36 @@ expect("redirect: 通配拒绝", isAllowedRedirectUri("https://*.example/cb"), f
 expect("redirect: 内嵌凭据拒绝", isAllowedRedirectUri("https://user:pass@client.example/cb"), false);
 expect("redirect: 非 http(s) 拒绝", isAllowedRedirectUri("ftp://client.example/cb"), false);
 
-// ---- 链接密钥提取 --------------------------------------------------------------
-expect("link: 裸令牌", extractLinkSecret("hvm_agt_abc"), "hvm_agt_abc");
-expect("link: 整段接入地址", extractLinkSecret("https://mos.example/mcp?token=hvm_agt_abc"), "hvm_agt_abc");
-expect("link: 地址带其它参数", extractLinkSecret("https://mos.example/mcp?x=1&token=hvm_agt_abc&y=2"), "hvm_agt_abc");
-
-// ---- 权限交集与工具可见性 -------------------------------------------------------
-const baseReadOnly = parsePermissions({ memory: { read: true, write: false } });
-const connWrite = parsePermissions({ memory: { read: true, write: true }, tasks: { read: true, write: true } });
-const effective = intersectPermissions(baseReadOnly, connWrite);
-expect("交集: memory 只读", [effective.memory.read, effective.memory.write], [true, false]);
-expect("交集: 基础没有的域全关", [effective.tasks.read, effective.tasks.write], [false, false]);
-expectTrue("交集: memory_search 可见", toolVisibleToAgent("memory_search", effective));
-expect("交集: memory_upsert 不可见", toolVisibleToAgent("memory_upsert", effective), false);
-expectTrue("交集: memory_upsert 调用被拒", toolAccessError("memory_upsert", effective, "Agent", {}) !== null);
-expect("交集: memory_search 调用放行", toolAccessError("memory_search", effective, "Agent", {}), null);
-// 收紧基础：连接不变，交集立即变小（resolve 每次现算，不缓存）。
-const tightened = intersectPermissions(parsePermissions({}), connWrite);
-expect("收紧: 交集全关", toolVisibleToAgent("memory_search", tightened), false);
-// 垃圾权限 JSON 解析失败 = 全关，交集仍全关。
-const garbage = intersectPermissions(parsePermissions("{not json"), connWrite);
-expect("垃圾输入: 交集全关", serializePermissions(garbage), serializePermissions(parsePermissions(null)));
+// ---- 应用权限：授权页勾什么，应用就是什么 ---------------------------------------
+const appGrants = parsePermissions({
+  memory: { read: true, write: true },
+  soul: { read: true, write: false },
+  advanced: { totp: { read: true, write: false }, soul_other: { read: false, write: true } },
+});
+expect("应用权限: memory 读写原样", [appGrants.memory.read, appGrants.memory.write], [true, true]);
+expect("应用权限: soul 只读原样", [appGrants.soul.read, appGrants.soul.write], [true, false]);
+expect("应用权限: 未勾的域全关", [appGrants.tasks.read, appGrants.tasks.write], [false, false]);
+expect("应用权限: 高级 totp 读原样", appGrants.advanced.totp.read, true);
+expect("应用权限: 高级 soul_other 写原样", appGrants.advanced.soul_other.write, true);
+expect(
+  "应用权限: 序列化往返不变",
+  serializePermissions(parsePermissions(serializePermissions(appGrants))),
+  serializePermissions(appGrants),
+);
+// 写工具直接按应用权限可见——没有任何基础权限在上面封顶。
+expectTrue("应用权限: memory_upsert 可见", toolVisibleToAgent("memory_upsert", appGrants));
+expect("应用权限: memory_upsert 调用放行", toolAccessError("memory_upsert", appGrants, "E2E App", {}), null);
+expectTrue("应用权限: memory_search 可见", toolVisibleToAgent("memory_search", appGrants));
+expect("应用权限: 未授权域工具不可见", toolVisibleToAgent("tasks_list", appGrants), false);
+expectTrue("应用权限: 未授权域调用被拒", toolAccessError("tasks_list", appGrants, "E2E App", {}) !== null);
+// 高级权限门：vault_2fa_list 需要 vault 读 + 操作2FA 读，缺一不可。
+const vaultOnly = parsePermissions({ vault: { read: true, write: false } });
+expectTrue("应用权限: 只有 vault 读时取码工具被拒", toolAccessError("vault_2fa_list", vaultOnly, "E2E App", {}) !== null);
+const vaultAndTotp = parsePermissions({ vault: { read: true, write: false }, advanced: { totp: { read: true, write: false } } });
+expect("应用权限: vault 读 + 2FA 读时取码放行", toolAccessError("vault_2fa_list", vaultAndTotp, "E2E App", {}), null);
+// 垃圾权限 = 全关。
+expect("垃圾输入: 全关", serializePermissions(parsePermissions("{not json")), serializePermissions(denyAllPermissions()));
+expect("垃圾输入: 工具全不可见", toolVisibleToAgent("memory_search", parsePermissions("junk")), false);
 
 if (!process.argv.includes("--e2e")) {
   console.log(`\n${checks} checks, ${failures} failures（纯逻辑；加 --e2e 跑本地全流程）`);
@@ -133,6 +148,11 @@ async function req(path, options = {}) {
   }
   return { status: response.status, data, headers: response.headers };
 }
+async function reqManual(path, options = {}) {
+  const response = await fetch(ORIGIN + path, { redirect: "manual", ...options });
+  const text = await response.text();
+  return { status: response.status, location: response.headers.get("location") || "", text };
+}
 const form = (obj) => ({
   method: "POST",
   headers: { "content-type": "application/x-www-form-urlencoded" },
@@ -143,6 +163,12 @@ const asJson = (obj, extra = {}) => ({
   headers: { "content-type": "application/json", ...(extra.headers || {}) },
   body: JSON.stringify(obj),
 });
+const mcpCall = (token, method, params) =>
+  req("/mcp", {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+  });
 
 console.log("\n-- e2e: 准备本地 D1 与种子 --");
 execFileSync("bash", ["-c", "yes | npx wrangler d1 migrations apply hivemos --local"], {
@@ -201,13 +227,21 @@ try {
   const clientId = reg.data.client_id;
   expectTrue("e2e: client_id 已发", typeof clientId === "string" && clientId.length > 0);
 
+  const authorizeQuery =
+    `client_id=${clientId}&redirect_uri=${encodeURIComponent("https://client.example/cb")}` +
+    `&response_type=code&code_challenge=${challenge}&code_challenge_method=S256&state=st1`;
   const badPage = await req(
     `/oauth/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent("https://nope.example/cb")}&response_type=code&code_challenge=${challenge}&code_challenge_method=S256`,
   );
   expectTrue("e2e: 坏回调只给错误页不跳转", badPage.status === 200 && String(badPage.data).includes("无法继续"));
 
-  // -- 连接 1：绑定路径 --
-  const authorize = (payload) => req("/oauth/authorize", asJson(payload));
+  // -- 只有一条路：先登录管理员 --
+  const anonPage = await reqManual(`/oauth/authorize?${authorizeQuery}`);
+  expect("e2e: 未登录授权页 302", anonPage.status, 302);
+  expectTrue("e2e: 跳登录带 next", anonPage.location.startsWith("/login?next="));
+  const nextTarget = decodeURIComponent(anonPage.location.slice("/login?next=".length));
+  expectTrue("e2e: next 指回授权页", nextTarget.startsWith("/oauth/authorize?") && nextTarget.includes("client_id="));
+
   const base = {
     client_id: clientId,
     redirect_uri: "https://client.example/cb",
@@ -215,17 +249,40 @@ try {
     code_challenge: challenge,
     code_challenge_method: "S256",
   };
+  const anonSubmit = await req("/oauth/authorize", asJson({ ...base, app_name: "Anon App", grants: {} }));
+  expect("e2e: 未登录提交 401", anonSubmit.status, 401);
+
+  const adminPage = await req(`/oauth/authorize?${authorizeQuery}`, { headers: adminCookie });
+  expect("e2e: 管理员授权页 200", adminPage.status, 200);
+  const pageHtml = String(adminPage.data);
+  expectTrue("e2e: 页面有应用名输入", pageHtml.includes('id="appName"'));
+  expectTrue("e2e: 页面有一张权限矩阵", pageHtml.includes('id="permMatrix"'));
+  expect("e2e: 页面无绑定路径", pageHtml.includes("linkSecret"), false);
+  expect("e2e: 页面无身份选择", pageHtml.includes("agentSel"), false);
+  expect("e2e: 页面无双层矩阵", pageHtml.includes("baseMatrix") || pageHtml.includes("connMatrix"), false);
+
+  const junkGrants = await req(
+    "/oauth/authorize",
+    asJson({ ...base, app_name: "Junk", grants: "junk" }, { headers: adminCookie }),
+  );
+  expect("e2e: 垃圾 grants 400", junkGrants.status, 400);
+
+  // -- 应用 1：授权页勾选原样生效 --
+  const authorize = (payload) => req("/oauth/authorize", asJson(payload, { headers: adminCookie }));
   const grant1 = await authorize({
     ...base,
-    mode: "bind",
-    link_secret: `https://mos.example/mcp?token=${agentToken}`,
-    grants: { memory: { read: true, write: true } },
+    app_name: "E2E App",
+    grants: { memory: { read: true, write: true }, soul: { read: true, write: false } },
   });
-  expect("e2e: 绑定授权 200", grant1.status, 200);
+  expect("e2e: 管理员授权 200", grant1.status, 200);
   const redirect1 = new URL(grant1.data.redirect);
   const code1 = redirect1.searchParams.get("code");
   expect("e2e: 回跳带 state", redirect1.searchParams.get("state"), "st1");
   expectTrue("e2e: 回跳带 code", typeof code1 === "string" && code1.startsWith("hvm_oac_"));
+
+  // 兑换前应用还不存在：授权码只带快照，兑换才建应用。
+  const appsBefore = await req("/api/oauth/apps", { headers: adminCookie });
+  expect("e2e: 兑换前应用列表为空", appsBefore.data.apps?.length, 0);
 
   const wrongPkce = await req(
     "/oauth/token",
@@ -250,107 +307,79 @@ try {
   );
   expect("e2e: 授权码二次使用拒绝", reuse.status, 400);
 
-  const mcpCall = (token, method, params) =>
-    req("/mcp", {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
-    });
   const list1 = await mcpCall(access1, "tools/list", {});
   const toolNames = (list1.data.result?.tools || []).map((tool) => tool.name);
-  expectTrue("e2e: 交集后 memory_search 可见", toolNames.includes("memory_search"));
-  expect("e2e: 交集后 memory_upsert 不可见", toolNames.includes("memory_upsert"), false);
-  const denied = await mcpCall(access1, "tools/call", { name: "memory_upsert", arguments: { title: "x" } });
-  expect("e2e: 写调用被拒 -32003", denied.data.error?.code, -32003);
+  expectTrue("e2e: 应用权限原样: memory_upsert 可见", toolNames.includes("memory_upsert"));
+  expectTrue("e2e: 应用权限原样: memory_search 可见", toolNames.includes("memory_search"));
+  expectTrue("e2e: 应用权限原样: soul_get 可见", toolNames.includes("soul_get"));
+  expect("e2e: 未授权域不可见", toolNames.includes("tasks_list"), false);
+  const writeCall = await mcpCall(access1, "tools/call", { name: "memory_upsert", arguments: { title: "e2e app note" } });
+  expectTrue("e2e: 写调用不被权限拒绝", writeCall.data.error?.code !== -32003);
 
-  // -- 管理端：列表 / reveal / 撤销 --
-  const conns = await req(`/api/agents/${agentId}/oauth-connections`, { headers: adminCookie });
-  expect("e2e: 连接列表 200", conns.status, 200);
-  expect("e2e: 连接列表 1 条", conns.data.connections?.length, 1);
-  const conn1 = conns.data.connections[0];
-  const reveal = await req(`/api/oauth/connections/${conn1.id}/reveal-tokens`, { method: "POST", headers: adminCookie });
+  // -- 管理端：应用列表 / 改权限实时生效 / reveal --
+  const apps1 = await req("/api/oauth/apps", { headers: adminCookie });
+  expect("e2e: 应用列表 200", apps1.status, 200);
+  expect("e2e: 应用列表 1 个", apps1.data.apps?.length, 1);
+  const app1 = apps1.data.apps[0];
+  expect("e2e: 应用名来自授权页", app1.name, "E2E App");
+  expectTrue("e2e: 应用 id 前缀", typeof app1.id === "string" && app1.id.startsWith("oapp_"));
+  expect("e2e: 应用权限 memory 写", app1.permissions?.memory?.write, true);
+  expect("e2e: 应用权限 soul 读", app1.permissions?.soul?.read, true);
+
+  const patch = await req(`/api/oauth/apps/${app1.id}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json", ...adminCookie },
+    body: JSON.stringify({ permissions: { memory: { read: true, write: false } } }),
+  });
+  expect("e2e: 改权限 200", patch.status, 200);
+  const listAfterPatch = await mcpCall(access1, "tools/list", {});
+  const namesAfterPatch = (listAfterPatch.data.result?.tools || []).map((tool) => tool.name);
+  expectTrue("e2e: 改权限后读工具仍在", namesAfterPatch.includes("memory_search"));
+  expect("e2e: 改权限后同一令牌写工具立即消失", namesAfterPatch.includes("memory_upsert"), false);
+  const deniedAfterPatch = await mcpCall(access1, "tools/call", { name: "memory_upsert", arguments: { title: "x" } });
+  expect("e2e: 改权限后写调用被拒 -32003", deniedAfterPatch.data.error?.code, -32003);
+
+  const reveal = await req(`/api/oauth/apps/${app1.id}/reveal-tokens`, { method: "POST", headers: adminCookie });
   expect("e2e: reveal 200", reveal.status, 200);
   expect("e2e: reveal 回当前 access", reveal.data.access_token, access1);
-  const revoke = await req(`/api/oauth/connections/${conn1.id}/revoke`, { method: "POST", headers: adminCookie });
-  expect("e2e: 面板撤销 200", revoke.status, 200);
-  const afterRevoke = await mcpCall(access1, "tools/list", {});
-  expect("e2e: 撤销后令牌立即失效", afterRevoke.status, 401);
 
-  // -- 连接 2：refresh 轮换与复用整族撤销 --
-  const grant2 = await authorize({ ...base, mode: "bind", link_secret: agentToken, grants: { memory: { read: true } } });
+  // -- refresh 轮换与复用整族撤销 --
+  const rotated = await req("/oauth/token", form({ grant_type: "refresh_token", refresh_token: refresh1, client_id: clientId }));
+  expect("e2e: refresh 轮换成功", rotated.status, 200);
+  const rotatedList = await mcpCall(rotated.data.access_token, "tools/list", {});
+  expect("e2e: 轮换后新 access 可用", rotatedList.status, 200);
+  const reuseOld = await req("/oauth/token", form({ grant_type: "refresh_token", refresh_token: refresh1, client_id: clientId }));
+  expect("e2e: 旧 refresh 复用拒绝", reuseOld.status, 400);
+  const familyDead = await mcpCall(rotated.data.access_token, "tools/list", {});
+  expect("e2e: 复用后整族撤销", familyDead.status, 401);
+
+  // -- 应用 2：独立存在；删除即令牌全灭 --
+  const grant2 = await authorize({ ...base, app_name: "E2E App 2", grants: { tasks: { read: true, write: false } } });
   const code2 = new URL(grant2.data.redirect).searchParams.get("code");
   const tokens2 = await req(
     "/oauth/token",
     form({ grant_type: "authorization_code", code: code2, client_id: clientId, redirect_uri: base.redirect_uri, code_verifier: verifier }),
   );
-  const rotated = await req("/oauth/token", form({ grant_type: "refresh_token", refresh_token: tokens2.data.refresh_token, client_id: clientId }));
-  expect("e2e: refresh 轮换成功", rotated.status, 200);
-  const rotatedList = await mcpCall(rotated.data.access_token, "tools/list", {});
-  expect("e2e: 轮换后新 access 可用", rotatedList.status, 200);
-  const reuseOld = await req(
-    "/oauth/token",
-    form({ grant_type: "refresh_token", refresh_token: tokens2.data.refresh_token, client_id: clientId }),
-  );
-  expect("e2e: 旧 refresh 复用拒绝", reuseOld.status, 400);
-  const familyDead = await mcpCall(rotated.data.access_token, "tools/list", {});
-  expect("e2e: 复用后整族撤销", familyDead.status, 401);
+  expect("e2e: 第二个应用兑换成功", tokens2.status, 200);
+  const apps2 = await req("/api/oauth/apps", { headers: adminCookie });
+  expect("e2e: 应用列表 2 个", apps2.data.apps?.length, 2);
+  const app2 = (apps2.data.apps || []).find((app) => app.name === "E2E App 2");
+  expectTrue("e2e: 第二个应用在列表里", !!app2);
+  const listApp2 = await mcpCall(tokens2.data.access_token, "tools/list", {});
+  expect("e2e: 第二个应用令牌可用", listApp2.status, 200);
+  const del = await req(`/api/oauth/apps/${app2.id}`, { method: "DELETE", headers: adminCookie });
+  expect("e2e: 删除应用 200", del.status, 200);
+  const afterDelete = await mcpCall(tokens2.data.access_token, "tools/list", {});
+  expect("e2e: 删应用后令牌立即失效", afterDelete.status, 401);
+  const appsAfterDelete = await req("/api/oauth/apps", { headers: adminCookie });
+  expect("e2e: 删除后列表回到 1 个", appsAfterDelete.data.apps?.length, 1);
 
-  // -- 连接 3：管理员身份路 + 收紧基础立即生效 --
-  // 先把基础放宽到读写再授权（连接存的是授权当时的交集），兑换后写工具
-  // 可见；随后收紧基础，同一令牌的可见集立即变小。
-  await req(`/api/agents/${agentId}`, {
-    method: "PATCH",
-    headers: { "content-type": "application/json", ...adminCookie },
-    body: JSON.stringify({ permissions: { memory: { read: true, write: true } } }),
-  });
-  const grant3 = await req("/oauth/authorize", {
-    ...asJson({ ...base, mode: "existing", agent_id: agentId, grants: { memory: { read: true, write: true } } }),
-    headers: { "content-type": "application/json", ...adminCookie },
-  });
-  expect("e2e: 管理员选择已有 Agent 200", grant3.status, 200);
-  const code3 = new URL(grant3.data.redirect).searchParams.get("code");
-  const tokens3 = await req(
-    "/oauth/token",
-    form({ grant_type: "authorization_code", code: code3, client_id: clientId, redirect_uri: base.redirect_uri, code_verifier: verifier }),
-  );
-  const listWide = await mcpCall(tokens3.data.access_token, "tools/list", {});
-  expectTrue(
-    "e2e: 基础放宽后写工具可见",
-    (listWide.data.result?.tools || []).some((tool) => tool.name === "memory_upsert"),
-  );
-  await req(`/api/agents/${agentId}`, {
-    method: "PATCH",
-    headers: { "content-type": "application/json", ...adminCookie },
-    body: JSON.stringify({ permissions: { memory: { read: true, write: false } } }),
-  });
-  const listTight = await mcpCall(tokens3.data.access_token, "tools/list", {});
-  expect(
-    "e2e: 基础收紧后存量连接即刻受限",
-    (listTight.data.result?.tools || []).some((tool) => tool.name === "memory_upsert"),
-    false,
-  );
-
-  // -- 管理员新建 Agent 路 --
-  const grant4 = await req("/oauth/authorize", {
-    ...asJson({
-      ...base,
-      mode: "new",
-      agent_name: "E2E New Agent",
-      base_permissions: { memory: { read: true, write: false } },
-      grants: { memory: { read: true, write: true } },
-    }),
-    headers: { "content-type": "application/json", ...adminCookie },
-  });
-  expect("e2e: 管理员新建 Agent 授权 200", grant4.status, 200);
-  const code4 = new URL(grant4.data.redirect).searchParams.get("code");
-  const tokens4 = await req(
-    "/oauth/token",
-    form({ grant_type: "authorization_code", code: code4, client_id: clientId, redirect_uri: base.redirect_uri, code_verifier: verifier }),
-  );
-  const list4 = await mcpCall(tokens4.data.access_token, "tools/list", {});
-  const names4 = (list4.data.result?.tools || []).map((tool) => tool.name);
-  expectTrue("e2e: 新 Agent 连接可读记忆", names4.includes("memory_search"));
-  expect("e2e: 新 Agent 连接不可写（基础只读封顶）", names4.includes("memory_upsert"), false);
+  // -- 回归：Agent 长期令牌路径不受影响 --
+  const agentList = await mcpCall(agentToken, "tools/list", {});
+  expect("e2e: Agent 令牌仍可用", agentList.status, 200);
+  const agentTools = (agentList.data.result?.tools || []).map((tool) => tool.name);
+  expectTrue("e2e: Agent 令牌按自身权限（可读）", agentTools.includes("memory_search"));
+  expect("e2e: Agent 令牌按自身权限（不可写）", agentTools.includes("memory_upsert"), false);
 } finally {
   dev.kill("SIGTERM");
 }
