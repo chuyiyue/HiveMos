@@ -179,6 +179,7 @@
     btns += "<button type=\"button\" class=\"danger\" data-confirm-delete data-mact=\"delete\" data-kind=\"" + kind + "\" data-id=\"" + id + "\">删除</button>";
     var kindLabel = kind === "server" ? "服务器" : kind === "worker" ? "Worker" : "云主机";
     var ctrl = C.openManageDialog({
+      hideHead: true,
       title: kind === "worker" ? item.name : deviceTitle(item),
       bodyHtml:
         C.manageInfoHead({

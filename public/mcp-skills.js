@@ -233,6 +233,7 @@
       : C.emptyState("还没有工具快照", "http 与 sse 可以用卡片上的刷新快照探活，stdio 请用手填快照");
     var ctrl = C.openManageDialog({
       size: "lg",
+      hideHead: true,
       title: server.title,
       bodyHtml:
         C.manageInfoHead({
@@ -469,6 +470,7 @@
         kv("说明", C.escapeHtml(item.note || "无"));
     }
     var ctrl = C.openManageDialog({
+      hideHead: true,
       title: item.name,
       bodyHtml:
         C.manageInfoHead({

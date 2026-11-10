@@ -411,7 +411,7 @@
     closeBtn.className = "icon-btn ghost manage-close";
     closeBtn.setAttribute("aria-label", "关闭");
     closeBtn.innerHTML = CLOSE_ICON;
-    head.append(heading, closeBtn);
+    if (!options.hideHead) head.append(heading, closeBtn);
     var body = document.createElement("div");
     body.className = "manage-body";
     body.innerHTML = options.bodyHtml || "";
@@ -419,7 +419,12 @@
     confirmSlot.className = "confirm-slot";
     confirmSlot.setAttribute("data-manage-confirm", "");
     body.append(confirmSlot);
-    card.append(head, body);
+    if (options.hideHead) {
+      card.classList.add("headless");
+      card.append(closeBtn, body);
+    } else {
+      card.append(head, body);
+    }
     dialog.append(card);
     document.body.append(dialog);
     var ctrl = {
@@ -968,6 +973,7 @@
 
     var ctrl = (options.panel ? openSidePanel : openManageDialog)({
       size: "lg",
+      hideHead: true,
       title: seed ? seed.name : "Agent",
       bodyHtml: seed
         ? agentManageBody(seed, groupNameOf(seed), { partial: partial, tab: currentTab })

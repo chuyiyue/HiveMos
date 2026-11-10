@@ -1016,3 +1016,10 @@ article.record .card-actions { margin-top: auto; }
 
 .perm-advanced { display: grid; gap: 4px; }
 .perm-advanced-title { font-weight: 600; }
+
+/* 无头弹窗（正文自带信息头时）：关掉标题行，关闭键浮在右上角，顶部更紧凑 */
+.modal-card.headless { position: relative; padding-top: 20px; }
+.modal-card.headless .manage-close { position: absolute; top: 12px; right: 12px; margin: 0; z-index: 3; }
+/* 弹窗卡片隐藏滚动条（仍可滚动），不再有滚动条压住圆角 */
+.modal-card { scrollbar-width: none; }
+.modal-card::-webkit-scrollbar { display: none; }
