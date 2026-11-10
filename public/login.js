@@ -2,6 +2,7 @@
 (function () {
   var C = window.HiveCommon;
   var nextParam = new URLSearchParams(location.search).get("next");
+  var errorParam = new URLSearchParams(location.search).get("error");
   var form = document.getElementById("login-form");
   var username = document.getElementById("username");
   var password = document.getElementById("password");
@@ -14,6 +15,8 @@
   var totpSubmit = document.getElementById("totp-submit");
   var totpCancel = document.getElementById("totp-cancel");
   var label = "登录";
+  var githubBox = document.getElementById("github-login");
+  var githubEnabled = false;
   var ticket = "";
   var lockedUntil = 0;
   var countdownTimer = 0;
@@ -42,9 +45,13 @@
       return;
     }
     probeUnconfigured();
+    probeGithub();
   });
 
   if (!form || !error || !username || !password || !submit) return;
+  if (errorParam && errorParam.indexOf("github_") === 0) {
+    showError(githubErrorText(errorParam), "danger");
+  }
   form.addEventListener("submit", function (event) {
     event.preventDefault();
     var account = username.value.trim();
@@ -154,6 +161,7 @@
     setTotpBusy(false);
     form.hidden = true;
     if (totpForm) totpForm.hidden = false;
+    paintGithub();
     hideTotpError();
     if (totpCode) {
       totpCode.value = "";
@@ -169,9 +177,36 @@
     if (totpCode) totpCode.value = "";
     hideTotpError();
     form.hidden = false;
+    paintGithub();
     if (message) showError(message, "danger");
     else hideError();
     password.focus();
+  }
+
+  function probeGithub() {
+    fetch("/api/v1/auth/config", {
+      headers: { accept: "application/json" },
+      cache: "no-store",
+    })
+      .then(function (response) {
+        return readBody(response);
+      })
+      .then(function (data) {
+        githubEnabled = !!(data && data.github_enabled === true);
+        paintGithub();
+      })
+      .catch(function () {});
+  }
+
+  function paintGithub() {
+    if (!githubBox) return;
+    githubBox.hidden = !(githubEnabled && form && !form.hidden);
+  }
+
+  function githubErrorText(code) {
+    if (code === "github_state") return "GitHub 登录已失效，请重新尝试";
+    if (code === "github_forbidden") return "这个 GitHub 账号还没有绑定，无法登录";
+    return "GitHub 登录失败，请稍后重试";
   }
 
   function probeUnconfigured() {

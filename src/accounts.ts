@@ -525,3 +525,84 @@ export async function recordAccountPasswordFailure(db: D1Database, userId: strin
 export async function clearAccountPasswordFailures(db: D1Database, userId: string, now: number): Promise<void> {
   await clearLoginFailures(db, await loginRateKey("account", userId), now);
 }
+
+// GitHub binding lives on the administrator's users row. github_id is the only
+// authorization value; login name and avatar are display-only and refreshed on
+// every successful GitHub sign-in.
+export interface GithubBinding {
+  github_id: string | null;
+  github_login: string | null;
+  github_avatar_url: string | null;
+  github_rebind_until: number | null;
+}
+
+const GITHUB_BINDING_COLUMNS = "github_id, github_login, github_avatar_url, github_rebind_until";
+
+export async function getGithubBinding(db: D1Database, userId: string): Promise<GithubBinding | null> {
+  return db
+    .prepare(`SELECT ${GITHUB_BINDING_COLUMNS} FROM users WHERE id = ?`)
+    .bind(userId)
+    .first<GithubBinding>();
+}
+
+// The login page and the anonymous config endpoint only need to know whether
+// any binding exists. The system is single-admin, so the oldest row is the one.
+export async function getAdminGithubBinding(db: D1Database): Promise<GithubBinding | null> {
+  return db
+    .prepare(`SELECT ${GITHUB_BINDING_COLUMNS} FROM users ORDER BY created_at ASC LIMIT 1`)
+    .first<GithubBinding>();
+}
+
+export async function setGithubBinding(
+  db: D1Database,
+  userId: string,
+  binding: { id: string; login: string; avatarUrl: string },
+): Promise<void> {
+  await db
+    .prepare(
+      `UPDATE users
+       SET github_id = ?, github_login = ?, github_avatar_url = ?, github_rebind_until = NULL
+       WHERE id = ?`,
+    )
+    .bind(binding.id, binding.login, binding.avatarUrl, userId)
+    .run();
+}
+
+export async function updateGithubDisplay(
+  db: D1Database,
+  userId: string,
+  login: string,
+  avatarUrl: string,
+): Promise<void> {
+  await db
+    .prepare("UPDATE users SET github_login = ?, github_avatar_url = ? WHERE id = ?")
+    .bind(login, avatarUrl, userId)
+    .run();
+}
+
+export async function clearGithubBinding(db: D1Database, userId: string): Promise<void> {
+  await db
+    .prepare(
+      `UPDATE users
+       SET github_id = NULL, github_login = NULL, github_avatar_url = NULL, github_rebind_until = NULL
+       WHERE id = ?`,
+    )
+    .bind(userId)
+    .run();
+}
+
+export async function setGithubRebindUntil(db: D1Database, userId: string, until: number): Promise<void> {
+  await db.prepare("UPDATE users SET github_rebind_until = ? WHERE id = ?").bind(until, userId).run();
+}
+
+// Consumes the replacement window atomically: only an unexpired grant is
+// cleared, and the boolean tells the callback whether replacement is allowed.
+export async function consumeGithubRebind(db: D1Database, userId: string, now: number): Promise<boolean> {
+  const result = await db
+    .prepare(
+      "UPDATE users SET github_rebind_until = NULL WHERE id = ? AND github_rebind_until IS NOT NULL AND github_rebind_until >= ?",
+    )
+    .bind(userId, now)
+    .run();
+  return changesOf(result) > 0;
+}

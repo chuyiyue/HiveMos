@@ -48,6 +48,7 @@ import { cronSweepDue } from "./settings";
 import { handleVaultRequest } from "./vault-http";
 import { handleOAuthAdmin, handleOAuthPublic } from "./oauth-http";
 import { handleExtrasRequest } from "./extras-http";
+import { handleGithubAuthedRequest, handleGithubPublicRequest } from "./github";
 import { syncDueMirrors } from "./calendar";
 import { refreshActiveSnapshots } from "./registry";
 import { issueSession, publicUser, requireAdminUser } from "./session";
@@ -102,6 +103,12 @@ export default {
       const feed = /^\/cal\/([A-Za-z0-9_-]+)\.ics$/.exec(path);
       if (feed && feed[1]) return handleCalendarFeed(request, env, feed[1]);
 
+      // GitHub OAuth: the config probe is anonymous and start/callback are
+      // a cross-site redirect pair, so they stay ahead of the session gate.
+      // Binding changes are dispatched behind the gate further below.
+      const githubPublic = await handleGithubPublicRequest(request, env, path);
+      if (githubPublic) return githubPublic;
+
       const admin = await requireAdminUser(request, env, { crossSite: wantsCrossSiteCheck(path) });
       if (admin instanceof Response) {
         // A cross-site refusal must keep its 403 text. deny() would also drop a cookie that is still valid.
@@ -115,6 +122,8 @@ export default {
       if (totpAccount) return totpAccount;
       const account = await handleAccountRequest(request, env, path);
       if (account) return account;
+      const github = await handleGithubAuthedRequest(request, env, path);
+      if (github) return github;
       const registry = await handleRegistryRequest(request, env, wait, path);
       if (registry) return registry;
       const calendar = await handleCalendarRequest(request, env, wait, path);

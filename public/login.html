@@ -31,6 +31,10 @@
         </label>
         <button id="login-submit" type="submit">登录</button>
       </form>
+      <div id="github-login" class="auth-github" hidden>
+        <p class="auth-divider" aria-hidden="true">或</p>
+        <a class="button secondary" href="/api/v1/auth/github/start?intent=login">使用 GitHub 登录</a>
+      </div>
       <form id="totp-form" class="auth-form auth-step" hidden>
         <h2 id="totp-title" class="auth-step-title">两步验证</h2>
         <p class="subtle">输入验证器上的 6 位验证码，或一个未使用的恢复码</p>

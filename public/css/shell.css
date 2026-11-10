@@ -549,6 +549,10 @@ button.account-logout:hover { background: var(--sidebar-bg-hover); color: var(--
 .auth-card .auth-step .subtle { margin: 0; color: var(--text-2); font-size: var(--fs-sm); }
 .auth-card .auth-step .ghost { width: 100%; }
 .auth-alternatives:empty { display: none; }
+.auth-github { margin-top: 20px; }
+.auth-divider { display: flex; align-items: center; gap: 12px; margin: 0 0 14px; color: var(--text-3); font-size: var(--fs-xs); }
+.auth-divider::before, .auth-divider::after { content: ""; flex: 1; border-top: 1px solid var(--border-strong); }
+.auth-card .auth-github .button { display: block; text-align: center; }
 
 /* Password-manager proxy: no pixels, no tab stop, no screen-reader text. */
 .auth-username-proxy {
