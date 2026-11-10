@@ -1035,6 +1035,7 @@
       return {
         matrix: ctrl.bodyEl.querySelector("[data-perm-matrix]"),
         save: ctrl.bodyEl.querySelector("[data-perm-save]"),
+        clear: ctrl.bodyEl.querySelector("[data-perm-clear]"),
         summary: ctrl.bodyEl.querySelector("[data-perm-summary]"),
       };
     }
@@ -1056,6 +1057,35 @@
         els.save.disabled = !dirty || permSaving;
         els.save.classList.toggle("is-dirty", dirty);
       }
+      if (els.clear) els.clear.textContent = anyPermChecked() ? "全部关闭" : "全部开启";
+    }
+
+    function anyPermChecked() {
+      return (
+        PERM_MATRIX.some(function (entry) {
+          var cell = permDesired[entry[0]];
+          return !!(cell && (cell.read || cell.write));
+        }) ||
+        PERM_ADVANCED.some(function (entry) {
+          var cell = permDesired.advanced[entry[0]];
+          return !!(cell && (cell.read || cell.write));
+        })
+      );
+    }
+
+    function fillPerms() {
+      if (partial) return;
+      interacted = true;
+      var out = {};
+      PERM_MATRIX.forEach(function (entry) {
+        out[entry[0]] = { read: true, write: true };
+      });
+      out.advanced = {};
+      PERM_ADVANCED.forEach(function (entry) {
+        out.advanced[entry[0]] = { read: true, write: true };
+      });
+      permDesired = out;
+      syncPermUI();
     }
 
     function updatePermSummary() {
@@ -1986,7 +2016,8 @@
       var target = event.target;
       if (!(target instanceof Element)) return;
       if (target.closest("[data-perm-clear]")) {
-        clearPerms();
+        if (anyPermChecked()) clearPerms();
+        else fillPerms();
         return;
       }
       if (target.closest("[data-perm-save]")) {
