@@ -6,6 +6,7 @@
 
 import type { D1Database, D1PreparedStatement } from "./env";
 import { prepare } from "./registry";
+import { listCoreMemories } from "./memory";
 
 export class SoulError extends Error {
   status: number;
@@ -97,6 +98,109 @@ export function soulVersionPublic(row: SoulVersionRow): Record<string, unknown> 
 
 export function soulVersionStatus(row: SoulVersionRow): string {
   return typeof row.status === "string" && row.status ? row.status : "active";
+}
+
+// ---------------------------------------------------------------------------
+// Soul 分段（P2）：四段固定名 + 字符上限。souls.content 恒等于 active 版本
+// 全文；有分段时全文就是各段按 SOUL_SECTION_ORDER 拼接（段间空行分隔、
+// 不加标题文字、空段不占位）。分段只在版本生效时同步进 soul_sections；
+// 待批准期间的分段快照放在 soul_section_drafts，批准时整表替换过去。
+
+export const SOUL_SECTION_ORDER = ["persona", "rules", "tools", "learned_context"] as const;
+
+export type SoulSectionName = (typeof SOUL_SECTION_ORDER)[number];
+
+export const SOUL_SECTION_LIMITS: Record<SoulSectionName, number> = {
+  persona: 2000,
+  rules: 2000,
+  tools: 2000,
+  learned_context: 6000,
+};
+
+export function isSoulSectionName(value: string): value is SoulSectionName {
+  return (SOUL_SECTION_ORDER as readonly string[]).includes(value);
+}
+
+export type SoulSections = Partial<Record<SoulSectionName, string>>;
+
+export function composeSoulSections(sections: SoulSections): string {
+  const parts: string[] = [];
+  for (const name of SOUL_SECTION_ORDER) {
+    const text = sections[name];
+    if (typeof text === "string" && text.length > 0) parts.push(text);
+  }
+  return parts.join("\n\n");
+}
+
+export async function getSoulSections(db: D1Database, soulId: string): Promise<SoulSections | null> {
+  const listed = await prepare(db, "SELECT section, content FROM soul_sections WHERE soul_id = ?", [soulId]).all<{
+    section: string;
+    content: string;
+  }>();
+  const rows = rowsOf(listed);
+  if (rows.length === 0) return null;
+  const sections: SoulSections = {};
+  for (const row of rows) {
+    if (isSoulSectionName(row.section)) sections[row.section] = row.content;
+  }
+  return Object.keys(sections).length > 0 ? sections : null;
+}
+
+async function replaceSoulSections(db: D1Database, soulId: string, sections: SoulSections, now: number): Promise<void> {
+  const statements = [prepare(db, "DELETE FROM soul_sections WHERE soul_id = ?", [soulId])];
+  for (const name of SOUL_SECTION_ORDER) {
+    const text = sections[name];
+    if (typeof text !== "string") continue;
+    statements.push(
+      prepare(db, "INSERT INTO soul_sections (soul_id, section, content, updated_at) VALUES (?, ?, ?, ?)", [soulId, name, text, now]),
+    );
+  }
+  await db.batch(statements);
+}
+
+async function clearSoulSections(db: D1Database, soulId: string): Promise<void> {
+  await db.batch([
+    prepare(db, "DELETE FROM soul_sections WHERE soul_id = ?", [soulId]),
+    prepare(db, "DELETE FROM soul_section_drafts WHERE soul_id = ?", [soulId]),
+  ]);
+}
+
+async function saveSoulSectionDraft(
+  db: D1Database,
+  soulId: string,
+  version: number,
+  sections: SoulSections,
+  now: number,
+): Promise<void> {
+  await prepare(
+    db,
+    "INSERT INTO soul_section_drafts (soul_id, version, sections_json, created_at) VALUES (?, ?, ?, ?) ON CONFLICT (soul_id, version) DO UPDATE SET sections_json = excluded.sections_json, created_at = excluded.created_at",
+    [soulId, version, JSON.stringify(sections), now],
+  ).run();
+}
+
+async function getSoulSectionDraft(db: D1Database, soulId: string, version: number): Promise<SoulSections | null> {
+  const row = await prepare(db, "SELECT sections_json FROM soul_section_drafts WHERE soul_id = ? AND version = ?", [
+    soulId,
+    version,
+  ]).first<{ sections_json: string }>();
+  if (!row) return null;
+  try {
+    const parsed = JSON.parse(row.sections_json) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    const sections: SoulSections = {};
+    for (const name of SOUL_SECTION_ORDER) {
+      const value = (parsed as Record<string, unknown>)[name];
+      if (typeof value === "string") sections[name] = value;
+    }
+    return sections;
+  } catch {
+    return null;
+  }
+}
+
+async function deleteSoulSectionDraft(db: D1Database, soulId: string, version: number): Promise<void> {
+  await prepare(db, "DELETE FROM soul_section_drafts WHERE soul_id = ? AND version = ?", [soulId, version]).run();
 }
 
 // ---------------------------------------------------------------------------
@@ -397,6 +501,9 @@ export async function updateSoul(
       throw error;
     }
     assertBatchChanges(result, [1, 1, 1], "Soul 当前版本已被其他写入更新，请刷新后重试");
+    // 整篇覆盖已生效全文（面板直写）：旧分段不再与全文对应，立即清掉，
+    // 这个 Soul 回到未分段状态，直到下一次 soul_patch 重新分段。
+    await clearSoulSections(db, id);
   } else if (agentName !== row.agent_name) {
     await prepare(db, "UPDATE souls SET agent_name = ?, updated_at = ? WHERE id = ?", [agentName, now, id]).run();
   }
@@ -473,6 +580,58 @@ export async function upsertSoulByName(
   );
 }
 
+// MCP soul_patch: change one section without resubmitting the whole
+// document. The composed full text goes through the exact same pending
+// draft path as soul_update; the section snapshot waits in
+// soul_section_drafts and only lands in soul_sections when the panel
+// approves the version. On an unsectioned soul the current full text is
+// treated as learned_context, so a first patch never destroys existing
+// prose (the cap only applies to the patched section's new text).
+export async function patchSoulByName(
+  db: D1Database,
+  agentNameRaw: unknown,
+  sectionRaw: unknown,
+  contentRaw: unknown,
+  expectedVersionRaw: unknown,
+  actor: string,
+  source: string,
+  now: number,
+): Promise<SoulRow & { pending_version?: number; pending_status?: string; sections: SoulSections | null }> {
+  const agentName = readAgentName(agentNameRaw);
+  if (typeof sectionRaw !== "string" || !isSoulSectionName(sectionRaw.trim())) {
+    throw new SoulError(400, "section 只能是 persona、rules、tools、learned_context");
+  }
+  const section = sectionRaw.trim() as SoulSectionName;
+  const content = readContent(contentRaw);
+  const limit = SOUL_SECTION_LIMITS[section];
+  if (content.length > limit) {
+    throw new SoulError(400, `section「${section}」超出上限 ${content.length - limit} 字（当前 ${content.length} 字，上限 ${limit} 字）`);
+  }
+  const expectedVersion = readExpectedVersion(expectedVersionRaw);
+  const existing = await getSoulByName(db, agentName);
+  if (!existing) {
+    if (expectedVersion !== null && expectedVersion !== 0) {
+      throw new SoulError(409, "Soul 版本已变化（当前版本 v0），请先读取最新版本再重试");
+    }
+    const sections: SoulSections = { [section]: content };
+    const created = await createPendingSoul(db, agentName, composeSoulSections(sections), actor, source, now);
+    await saveSoulSectionDraft(db, created.id, 1, sections, now);
+    return Object.assign(created, { sections });
+  }
+  const stored = await getSoulSections(db, existing.id);
+  const base: SoulSections = stored ? { ...stored } : existing.content ? { learned_context: existing.content } : {};
+  const next: SoulSections = { ...base, [section]: content };
+  const composed = composeSoulSections(next);
+  if (composed === existing.content) {
+    return Object.assign(existing, { sections: stored });
+  }
+  const updated = await updateSoul(db, existing.id, { content: composed }, actor, source, now, { pending: true, expectedVersion });
+  if (updated.pending_version) {
+    await saveSoulSectionDraft(db, existing.id, updated.pending_version, next, now);
+  }
+  return Object.assign(updated, { sections: next });
+}
+
 export async function rollbackSoul(
   db: D1Database,
   id: string,
@@ -512,6 +671,8 @@ export async function rollbackSoul(
     throw error;
   }
   assertBatchChanges(result, [1, 1, 1], "Soul 当前版本已被其他写入更新，请刷新后重试");
+  // 回滚把全文换成历史版本，分段与全文不再对应，一并清掉。
+  await clearSoulSections(db, id);
   const updated = await getSoulById(db, id);
   if (!updated) throw new SoulError(500, "回滚后读取失败");
   return updated;
@@ -551,6 +712,15 @@ export async function approveSoulVersion(
     ),
   ]);
   assertBatchChanges(result, [1, 1, 1], "Soul 当前版本已被其他写入更新，请刷新后重试");
+  // 分段在版本生效这一刻才同步：soul_patch 的草稿带分段快照，把快照整表
+  // 替换进 soul_sections；整篇写入的草稿没有快照，清掉旧分段。
+  const draft = await getSoulSectionDraft(db, soulId, version);
+  if (draft) {
+    await replaceSoulSections(db, soulId, draft, now);
+    await deleteSoulSectionDraft(db, soulId, version);
+  } else {
+    await clearSoulSections(db, soulId);
+  }
   const updated = await getSoulById(db, soulId);
   if (!updated) throw new SoulError(500, "批准后读取失败");
   return updated;
@@ -581,6 +751,7 @@ export async function rejectSoulVersion(
     ),
   ]);
   assertBatchChanges(result, [1, 1], "这个版本刚被其他操作处理过，请刷新后重试");
+  await deleteSoulSectionDraft(db, soulId, version);
   return { agentName: soul.agent_name, version };
 }
 
@@ -626,6 +797,10 @@ export async function updateSoulVersion(
       );
     }
     await db.batch(statements);
+  }
+  if (contentChanged && version === soul.version) {
+    // 就地改了生效全文，分段与全文不再对应，清掉分段。
+    await clearSoulSections(db, soulId);
   }
   const updatedSoul = await getSoulById(db, soulId);
   const updatedVersion = await getVersion(db, soulId, version);
@@ -692,6 +867,8 @@ export async function deleteSoul(db: D1Database, id: string, actor: string, now:
   const row = await getSoulById(db, id);
   if (!row) throw new SoulError(404, "Soul 不存在");
   await prepare(db, "DELETE FROM soul_versions WHERE soul_id = ?", [id]).run();
+  await prepare(db, "DELETE FROM soul_sections WHERE soul_id = ?", [id]).run();
+  await prepare(db, "DELETE FROM soul_section_drafts WHERE soul_id = ?", [id]).run();
   await prepare(db, "DELETE FROM souls WHERE id = ?", [id]).run();
   await audit(db, { soulId: id, agentName: row.agent_name, actor, action: "delete", version: row.version }, now);
 }
@@ -700,4 +877,84 @@ export async function deleteSoul(db: D1Database, id: string, actor: string, now:
 // pulled which persona, and when, is the point of the audit trail.
 export async function recordSoulRead(db: D1Database, row: SoulRow, actor: string, version: number, now: number): Promise<void> {
   await audit(db, { soulId: row.id, agentName: row.agent_name, actor, action: "read", version }, now);
+}
+
+// ---------------------------------------------------------------------------
+// soul_diff 与带分段/核心记忆的完整视图。
+
+export interface SoulDiff {
+  agent_name: string;
+  from_version: number;
+  to_version: number;
+  added_lines: string[];
+  removed_lines: string[];
+  unchanged_lines: number;
+}
+
+// 行级 diff（简单版）：掐掉公共前缀与公共后缀行，中间整段算增删，不做
+// LCS，大文档也保持线性时间。只回增删行，不回显两份全文。缺省对比当前
+// 生效版本与上一个已生效版本；指定的版本必须是已生效的（与 soul_get
+// 取历史版本的口径一致，草稿不外读）。
+export async function diffSoulVersions(
+  db: D1Database,
+  agentNameRaw: unknown,
+  fromVersionRaw: unknown,
+  toVersionRaw: unknown,
+): Promise<SoulDiff> {
+  const agentName = readAgentName(agentNameRaw);
+  const soul = await getSoulByName(db, agentName);
+  if (!soul) throw new SoulError(404, "这个 Agent 还没有 Soul");
+  const readVersionArg = (value: unknown): number | null => {
+    if (value == null) return null;
+    if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
+      throw new SoulError(400, "版本号格式不正确");
+    }
+    return value;
+  };
+  const toVersion = readVersionArg(toVersionRaw) ?? soul.version;
+  let fromVersion = readVersionArg(fromVersionRaw);
+  if (fromVersion === null) {
+    const prev = await prepare(
+      db,
+      "SELECT version FROM soul_versions WHERE soul_id = ? AND status = 'active' AND version < ? ORDER BY version DESC LIMIT 1",
+      [soul.id, toVersion],
+    ).first<{ version: number }>();
+    fromVersion = prev ? Number(prev.version) : toVersion;
+  }
+  const fromRow = await getVersion(db, soul.id, fromVersion);
+  const toRow = await getVersion(db, soul.id, toVersion);
+  if (!fromRow || !toRow) throw new SoulError(404, "这个版本不存在");
+  if (soulVersionStatus(fromRow) !== "active" || soulVersionStatus(toRow) !== "active") {
+    throw new SoulError(409, "只能对比已生效的版本");
+  }
+  const fromLines = fromRow.content.split("\n");
+  const toLines = toRow.content.split("\n");
+  let head = 0;
+  while (head < fromLines.length && head < toLines.length && fromLines[head] === toLines[head]) head++;
+  let tail = 0;
+  while (
+    tail < fromLines.length - head &&
+    tail < toLines.length - head &&
+    fromLines[fromLines.length - 1 - tail] === toLines[toLines.length - 1 - tail]
+  ) {
+    tail++;
+  }
+  return {
+    agent_name: soul.agent_name,
+    from_version: fromVersion,
+    to_version: toVersion,
+    added_lines: toLines.slice(head, toLines.length - tail),
+    removed_lines: fromLines.slice(head, fromLines.length - tail),
+    unchanged_lines: head + tail,
+  };
+}
+
+// soul_get 的完整视图：全文 + 分段（未分段为 null）+ 常驻核心记忆。
+// MCP 与面板共用这一个函数，两边口径一致。
+export async function soulFullView(db: D1Database, row: SoulRow, now: number): Promise<Record<string, unknown>> {
+  const [sections, coreMemories] = await Promise.all([
+    getSoulSections(db, row.id),
+    listCoreMemories(db, row.agent_name, now),
+  ]);
+  return { ...soulDetail(row), sections, core_memories: coreMemories };
 }
