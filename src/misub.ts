@@ -254,8 +254,8 @@ export async function setMisubRefreshEnabled(env: Env, enabled: boolean): Promis
   if (!existing) throw new MisubError(400, "尚未连接 MiSub");
   const stored = { ...existing, refresh_enabled: enabled };
   await writeStoredConfig(env.DB, stored);
-  if (cache && cache.config.base_url === stored.base_url) {
-    cache = { ...cache, config: { base_url: stored.base_url, token_tail: stored.token_tail, refresh_enabled: enabled } };
+  if (cache && cache.snapshot.config.base_url === stored.base_url) {
+    cache.snapshot.config.refresh_enabled = enabled;
   }
   return { base_url: stored.base_url, token_tail: stored.token_tail, refresh_enabled: stored.refresh_enabled };
 }
@@ -308,10 +308,25 @@ export function maskHost(host: string): string {
 }
 
 // 只取服务器 host:port，不解析协议内部结构。vmess 的载荷是整段
-// base64、取不到主机名时返回空，页面显示「—」。
+// base64 JSON：URL 解析会把载荷本身当主机名，所以先按 vmess 处理，
+// 解出 add/port；解不出就返回空，页面显示「—」。
 export function nodeServerOf(rawUrl: string): { host: string; port: number | null; server: string } {
   const text = typeof rawUrl === "string" ? rawUrl.trim() : "";
   if (!text) return { host: "", port: null, server: "" };
+  if (/^vmess:\/\//i.test(text)) {
+    try {
+      const payload = text.slice(text.indexOf("://") + 3).split(/[?#]/)[0] ?? "";
+      const normalized = payload.replaceAll("-", "+").replaceAll("_", "/");
+      const padded = normalized + "=".repeat((4 - (normalized.length % 4)) % 4);
+      const parsed = JSON.parse(atob(padded)) as Record<string, unknown>;
+      const host = typeof parsed["add"] === "string" ? parsed["add"] : "";
+      const port = parsed["port"] != null && Number(parsed["port"]) > 0 ? Number(parsed["port"]) : null;
+      if (host) return { host, port, server: host + (port ? ":" + port : "") };
+    } catch {
+      // 解不出就当没有服务器信息。
+    }
+    return { host: "", port: null, server: "" };
+  }
   try {
     const url = new URL(text);
     if (url.hostname) {
