@@ -4,7 +4,8 @@
 
 import { json } from "./http";
 import type { Env, WaitCtx } from "./env";
-import { authenticateAgent, fetchConfigForAgent, recordToolDenied, searchServers } from "./registry";
+import { fetchConfigForAgent, recordToolDenied, searchServers } from "./registry";
+import { authenticateMcp } from "./oauth";
 import { toolPermissionOf, toolAccessError, toolVisibleToAgent } from "./tool-permissions";
 import type { AgentPermissions } from "./permissions";
 import {
@@ -499,14 +500,15 @@ function initialize(id: unknown, params: unknown): Response {
   });
 }
 
-// tools/list 只返回当前 Agent 有效权限覆盖的工具：域的开关键或 advanced
-// 开关没给，工具直接不出现（machines_get_access 就是一个例子）。无 Bearer
-// 的请求保持历史行为（返回全部工具，OAuth 阶段再收紧）；Bearer 认证失败
-// 与 tools/call 一样报错。
+// tools/list 只返回当前身份有效权限覆盖的工具：域的开关键或 advanced
+// 开关没给，工具直接不出现（machines_get_access 就是一个例子）。鉴权走
+// authenticateMcp：Agent 令牌用基础权限，OAuth 令牌用基础 ∩ 连接权限。
+// 无 Bearer 的请求保持历史行为（返回全部工具）；Bearer 认证失败与
+// tools/call 一样报错。
 async function listTools(request: Request, env: Env, id: unknown): Promise<Response> {
   const token = bearerToken(request);
   if (!token) return rpcResult(id, { tools: TOOLS });
-  const auth = await authenticateAgent(env.DB, token, Date.now());
+  const auth = await authenticateMcp(env, token, Date.now());
   if (!auth.ok) return rpcError(id, -32001, auth.error, 401);
   const tools = TOOLS.filter((tool) => toolVisibleToAgent(tool.name, auth.permissions));
   return rpcResult(id, { tools });
@@ -515,7 +517,7 @@ async function listTools(request: Request, env: Env, id: unknown): Promise<Respo
 async function callTool(request: Request, env: Env, id: unknown, params: unknown): Promise<Response> {
   const token = bearerToken(request);
   if (!token) return rpcError(id, -32001, "缺少 Bearer 令牌", 401);
-  const auth = await authenticateAgent(env.DB, token, Date.now());
+  const auth = await authenticateMcp(env, token, Date.now());
   if (!auth.ok) return rpcError(id, -32001, auth.error, 401);
   if (!params || typeof params !== "object") return rpcError(id, -32602, "参数不正确");
   const name = (params as { name?: unknown }).name;
