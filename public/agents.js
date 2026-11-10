@@ -75,7 +75,7 @@
     );
   }
 
-  // Card-only short form of C.formatMinute (MM-DD HH:mm, no year).
+  // Card-only short form of C.formatMinute (YY-MM-DD HH:mm, short year).
   // The shared helper stays untouched: other views keep full timestamps.
   function shortMinute(value) {
     var time = Number(value);
@@ -85,7 +85,7 @@
     function pad(number) {
       return String(number).padStart(2, "0");
     }
-    return pad(date.getMonth() + 1) + "-" + pad(date.getDate()) + " " + pad(date.getHours()) + ":" + pad(date.getMinutes());
+    return String(date.getFullYear()).slice(2) + "-" + pad(date.getMonth() + 1) + "-" + pad(date.getDate()) + " " + pad(date.getHours()) + ":" + pad(date.getMinutes());
   }
 
   function card(agent) {
