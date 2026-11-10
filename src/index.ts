@@ -56,7 +56,7 @@ const LOGIN_BODY_BYTES = 8 * 1024;
 const PUBLIC_ASSETS = new Set([
   "/login.html",
   "/login",
-  "/logo.jpg",
+  "/logo.png",
   "/style.css",
   "/theme-boot.js",
   "/common.js",
