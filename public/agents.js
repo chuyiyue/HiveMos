@@ -119,14 +119,53 @@
   }
 
   function groupActions(group) {
+    var gid = C.escapeHtml(group.id);
     return (
-      '<button type="button" class="secondary" data-action="rename-group" data-id="' +
-      C.escapeHtml(group.id) +
-      '">改名</button><button type="button" class="danger" data-confirm-delete data-action="delete-group" data-id="' +
-      C.escapeHtml(group.id) +
-      '">删除</button>'
+      '<button type="button" class="icon-btn ghost group-menu-btn" data-action="group-menu" data-id="' +
+      gid +
+      '" aria-label="分组操作" aria-haspopup="menu">' +
+      GROUP_MENU_ICON +
+      "</button>" +
+      '<span class="confirm-slot" data-confirm-group="' +
+      gid +
+      '"></span>'
     );
   }
+
+  // 分组头只留一个三条线菜单按钮：改名/删除收进 C.openActionMenu；
+  // 删除沿用机器页 deleteGroupFlow 的 askConfirm 文案做二次确认。
+  var GROUP_MENU_ICON =
+    '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>';
+
+  function confirmDeleteGroup(group, btn, run) {
+    var section = btn ? btn.closest("section") : null;
+    var slot = section ? section.querySelector('[data-confirm-group="' + group.id + '"]') : null;
+    C.askConfirm({
+      anchor: slot || btn,
+      title: "删除分组",
+      text: "确认删除分组「" + group.name + "」吗？组内条目会回到未分组，不会被删除",
+      confirmLabel: "删除",
+      danger: true,
+    }).then(function (yes) {
+      if (yes) run();
+    });
+  }
+
+  function openGroupMenu(group, btn, renameFn, deleteFn) {
+    C.openActionMenu({
+      items: [
+        { label: "改名", onSelect: renameFn },
+        {
+          label: "删除",
+          danger: true,
+          onSelect: function () {
+            confirmDeleteGroup(group, btn, deleteFn);
+          },
+        },
+      ],
+    });
+  }
+
 
   function render() {
     var body;
@@ -241,12 +280,15 @@
       else if (action === "pin") {
         var agent3 = findAgent(id);
         if (agent3) togglePin(agent3);
-      } else if (action === "rename-group") {
+      } else if (action === "group-menu") {
         var group = findGroup(id);
-        if (group) openRenameGroup(group);
-      } else if (action === "delete-group") {
-        var target2 = findGroup(id);
-        if (target2) deleteGroup(target2, button);
+        if (group)
+          openGroupMenu(
+            group,
+            button,
+            function () { openRenameGroup(group); },
+            function () { deleteGroup(group); }
+          );
       } else if (action === "app-add") openAppDialog(null);
       else if (action === "app-add-group") openAppGroupDialog(null);
       else if (action === "app-edit") {
@@ -255,12 +297,15 @@
       } else if (action === "app-delete") {
         var app2 = findApp(id);
         if (app2) deleteApp(app2);
-      } else if (action === "app-rename-group") {
+      } else if (action === "app-group-menu") {
         var appGroup = findAppGroup(id);
-        if (appGroup) openAppGroupDialog(appGroup);
-      } else if (action === "app-delete-group") {
-        var appGroup2 = findAppGroup(id);
-        if (appGroup2) deleteAppGroup(appGroup2);
+        if (appGroup)
+          openGroupMenu(
+            appGroup,
+            button,
+            function () { openAppGroupDialog(appGroup); },
+            function () { deleteAppGroup(appGroup); }
+          );
       }
   }
 
@@ -797,12 +842,16 @@
   }
 
   function appGroupActions(group) {
+    var gid = C.escapeHtml(group.id);
     return (
-      '<button type="button" class="secondary" data-action="app-rename-group" data-id="' +
-      C.escapeHtml(group.id) +
-      '">改名</button><button type="button" class="danger" data-confirm-delete data-action="app-delete-group" data-id="' +
-      C.escapeHtml(group.id) +
-      '">删除</button>'
+      '<button type="button" class="icon-btn ghost group-menu-btn" data-action="app-group-menu" data-id="' +
+      gid +
+      '" aria-label="分组操作" aria-haspopup="menu">' +
+      GROUP_MENU_ICON +
+      "</button>" +
+      '<span class="confirm-slot" data-confirm-group="' +
+      gid +
+      '"></span>'
     );
   }
 

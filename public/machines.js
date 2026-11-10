@@ -536,10 +536,23 @@
   function groupActionsHtml(group) {
     var gid = C.escapeHtml(group.id);
     return (
-      "<button type=\"button\" class=\"secondary\" data-mgroup=\"rename\" data-id=\"" + gid + "\">改名</button>" +
-      "<button type=\"button\" class=\"danger\" data-mgroup=\"delete\" data-id=\"" + gid + "\">删除</button>" +
+      "<button type=\"button\" class=\"icon-btn ghost group-menu-btn\" data-mgroup=\"menu\" data-id=\"" + gid + "\" aria-label=\"分组操作\" aria-haspopup=\"menu\">" + GROUP_MENU_ICON + "</button>" +
       "<span class=\"confirm-slot\" data-confirm-group=\"" + gid + "\"></span>"
     );
+  }
+
+  var GROUP_MENU_ICON =
+    '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>';
+
+  // 分组头只留一个三条线菜单按钮；改名/删除仍走原来的 openGroupDialog /
+  // deleteGroupFlow（内含 askConfirm 二次确认，文案不变）。
+  function openGroupMenu(group, btn) {
+    C.openActionMenu({
+      items: [
+        { label: "改名", onSelect: function () { openGroupDialog(group); } },
+        { label: "删除", danger: true, onSelect: function () { deleteGroupFlow(group, btn); } },
+      ],
+    });
   }
 
   function listSection(uiKind, title, unit) {
@@ -3006,8 +3019,7 @@
       var mgroupFound = null;
       state.groups.forEach(function (entry) { if (entry.id === mgroupId) mgroupFound = entry; });
       if (mgroupFound) {
-        if (mgroup.getAttribute("data-mgroup") === "rename") openGroupDialog(mgroupFound);
-        else deleteGroupFlow(mgroupFound, mgroup);
+        if (mgroup.getAttribute("data-mgroup") === "menu") openGroupMenu(mgroupFound, mgroup);
       }
       return;
     }
