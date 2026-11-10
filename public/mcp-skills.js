@@ -325,9 +325,9 @@
       ? '<ul class="feed">' +
         audits
           .map(function (item) {
-            var when = C.formatMinute(item.created_at) || "未知时间";
+            var when = C.feedStamp(item.created_at) || "未知时间";
             var who = item.agent_name || "未知 Agent";
-            return "<li><time>" + C.escapeHtml(when) + "</time><span>" + C.escapeHtml(who) + " 取过配置</span></li>";
+            return "<li><time>" + when + "</time><span>" + C.escapeHtml(who) + " 取过配置</span></li>";
           })
           .join("") +
         "</ul>"

@@ -2046,7 +2046,7 @@
                     '<li><time datetime="' +
                     escapeHtml(new Date(item.at).toISOString()) +
                     '">' +
-                    escapeHtml(formatMinute(item.at) || "") +
+                    feedStamp(item.at) +
                     '</time><span><span class="tag">' +
                     escapeHtml(item.module_label) +
                     "</span> " +
@@ -2402,6 +2402,24 @@
       return String(number).padStart(2, "0");
     }
     return date.getFullYear() + "-" + pad(date.getMonth() + 1) + "-" + pad(date.getDate()) + " " + pad(date.getHours()) + ":" + pad(date.getMinutes());
+  }
+
+  // Feed timestamp as two stacked lines: date (YY-MM-DD) over time (HH:MM).
+  function feedStamp(value) {
+    var time = Number(value);
+    if (!Number.isFinite(time) || time <= 0) return "";
+    var date = new Date(time);
+    if (Number.isNaN(date.getTime())) return "";
+    function pad(number) {
+      return String(number).padStart(2, "0");
+    }
+    return (
+      '<span class="feed-d">' +
+      String(date.getFullYear()).slice(2) + "-" + pad(date.getMonth() + 1) + "-" + pad(date.getDate()) +
+      '</span><span class="feed-t">' +
+      pad(date.getHours()) + ":" + pad(date.getMinutes()) +
+      "</span>"
+    );
   }
 
   var closeConfirm = null;
@@ -2864,6 +2882,7 @@
     paintAccountAvatar: paintAccountAvatar,
     logout: logout,
     formatMinute: formatMinute,
+    feedStamp: feedStamp,
     askConfirm: askConfirm,
     openFormDialog: openFormDialog,
     openActionMenu: openActionMenu,

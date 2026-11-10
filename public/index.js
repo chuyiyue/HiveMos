@@ -49,14 +49,6 @@
     return String(number).padStart(2, "0");
   }
 
-  function feedTime(ms) {
-    var d = new Date(ms);
-    var now = new Date();
-    var clock = pad(d.getHours()) + ":" + pad(d.getMinutes());
-    if (d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate()) return clock;
-    return pad(d.getMonth() + 1) + "-" + pad(d.getDate()) + " " + clock;
-  }
-
   function statCards(stats) {
     var cards = [];
     var agents = stats.agents || { total: 0, active: 0, disabled: 0 };
@@ -92,7 +84,7 @@
       items.map(function (item) {
         return (
           "<li><time datetime=\"" + C.escapeHtml(new Date(item.at).toISOString()) + "\">" +
-          C.escapeHtml(feedTime(item.at)) +
+          C.feedStamp(item.at) +
           "</time><span>" +
           C.escapeHtml(item.actor + " " + item.text) +
           "</span></li>"
@@ -124,7 +116,7 @@
         .map(function (item) {
           var meta = ALERT_TONES[item.kind] || { tone: "info", icon: "bot", href: "" };
           var time = item.at
-            ? '<time datetime="' + C.escapeHtml(new Date(item.at).toISOString()) + '">' + C.escapeHtml(feedTime(item.at)) + "</time>"
+            ? '<time datetime="' + C.escapeHtml(new Date(item.at).toISOString()) + '">' + C.feedStamp(item.at) + "</time>"
             : "";
           var inner =
             '<span class="alert-icon tone-' + meta.tone + '">' + C.iconSvg(meta.icon) + "</span>" +
@@ -236,7 +228,7 @@
               '<li><time datetime="' +
               C.escapeHtml(new Date(item.at).toISOString()) +
               '">' +
-              C.escapeHtml(feedTime(item.at)) +
+              C.feedStamp(item.at) +
               '</time><span><span class="tag">' +
               C.escapeHtml(row.tag) +
               "</span> " +

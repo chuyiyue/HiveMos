@@ -83,12 +83,21 @@
   display: grid;
   grid-template-columns: 64px minmax(0, 1fr);
   gap: 12px;
-  align-items: baseline;
+  align-items: start;
+}
+.feed li > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .feed time {
   color: var(--text-3);
   font-size: var(--fs-sm);
   font-variant-numeric: tabular-nums;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.4;
 }
 
 .copy-line {
