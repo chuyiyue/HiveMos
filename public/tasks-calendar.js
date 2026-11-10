@@ -439,7 +439,13 @@
     ];
     if (item.kind === "mirror") {
       facts.push(["来源", C.escapeHtml((item.source_host || "") + "…" + (item.source_tail || ""))]);
-      facts.push(["上次同步", C.escapeHtml(item.last_sync_at ? (C.formatMinute(item.last_sync_at) || "") : "还没同步") + (item.sync_status === "error" ? " · 失败：" + (item.sync_error || "") : "")]);
+      var syncNote = "";
+      if (item.sync_status === "error") {
+        syncNote = item.sync_paused
+          ? " · 已暂停自动同步（连续失败 " + (item.sync_fail_count || 0) + " 次）：" + (item.sync_error || "")
+          : " · 同步出错（第 " + (item.sync_fail_count || 0) + " 次）：" + (item.sync_error || "");
+      }
+      facts.push(["上次同步", C.escapeHtml(item.last_sync_at ? (C.formatMinute(item.last_sync_at) || "") : "还没同步") + syncNote]);
     }
     return C.record({
       id: "calrow-" + item.id,

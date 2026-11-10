@@ -26,6 +26,7 @@ export interface CalendarRow {
   last_sync_at: number | null;
   sync_status: string | null;
   sync_error: string | null;
+  sync_fail_count: number;
   timezone: string;
   ctag: number;
   is_default: number;
@@ -540,6 +541,8 @@ export function calendarPublic(row: CalendarRow): Record<string, unknown> {
     last_sync_at: row.last_sync_at,
     sync_status: row.sync_status,
     sync_error: row.sync_error,
+    sync_fail_count: row.sync_fail_count ?? 0,
+    sync_paused: row.kind === "mirror" && (row.sync_fail_count ?? 0) >= MIRROR_SYNC_FAIL_LIMIT,
     source_host: sourceHost,
     source_tail: sourceTail,
     created_by: row.created_by,
@@ -1557,6 +1560,10 @@ function rowKey(row: EventRow): string {
 // Mirror sync: pull the source ICS, reconcile by UID, never touch other data
 // on failure.
 
+// 镜像同步连续失败达到这个次数就暂停自动同步（due 选取跳过）；
+// 手动同步不受限，成功一次清零恢复。出站失败停损口径，常量集中在此。
+export const MIRROR_SYNC_FAIL_LIMIT = 3;
+
 export interface SyncReport {
   ok: boolean;
   unchanged?: boolean;
@@ -1578,7 +1585,7 @@ export async function syncMirror(db: D1Database, cal: CalendarRow, now: number):
     if (cal.source_last_modified) headers["if-modified-since"] = cal.source_last_modified;
     const response = await fetch(cal.source_url, { headers, redirect: "follow" });
     if (response.status === 304) {
-      await prepare(db, "UPDATE calendars SET last_sync_at = ?, sync_status = 'ok', sync_error = NULL WHERE id = ?", [now, cal.id]).run();
+      await prepare(db, "UPDATE calendars SET last_sync_at = ?, sync_status = 'ok', sync_error = NULL, sync_fail_count = 0 WHERE id = ?", [now, cal.id]).run();
       report.ok = true;
       report.unchanged = true;
       return report;
@@ -1642,14 +1649,14 @@ export async function syncMirror(db: D1Database, cal: CalendarRow, now: number):
     const changed = report.added + report.updated + report.deleted > 0;
     await prepare(
       db,
-      "UPDATE calendars SET source_etag = ?, source_last_modified = ?, last_sync_at = ?, sync_status = 'ok', sync_error = NULL, ctag = ctag + ? WHERE id = ?",
+      "UPDATE calendars SET source_etag = ?, source_last_modified = ?, last_sync_at = ?, sync_status = 'ok', sync_error = NULL, sync_fail_count = 0, ctag = ctag + ? WHERE id = ?",
       [response.headers.get("etag"), response.headers.get("last-modified"), now, changed ? 1 : 0, cal.id],
     ).run();
     report.ok = true;
     return report;
   } catch (error) {
     const message = error instanceof Error ? error.message : "同步失败";
-    await prepare(db, "UPDATE calendars SET last_sync_at = ?, sync_status = 'error', sync_error = ? WHERE id = ?", [
+    await prepare(db, "UPDATE calendars SET last_sync_at = ?, sync_status = 'error', sync_error = ?, sync_fail_count = COALESCE(sync_fail_count, 0) + 1 WHERE id = ?", [
       now, message.slice(0, 200), cal.id,
     ]).run();
     report.error = message;
@@ -1660,8 +1667,8 @@ export async function syncMirror(db: D1Database, cal: CalendarRow, now: number):
 export async function syncDueMirrors(db: D1Database, now: number): Promise<void> {
   const listed = await prepare(
     db,
-    "SELECT * FROM calendars WHERE kind = 'mirror' AND (last_sync_at IS NULL OR last_sync_at < ?)",
-    [now - 60 * 60 * 1000],
+    "SELECT * FROM calendars WHERE kind = 'mirror' AND (last_sync_at IS NULL OR last_sync_at < ?) AND COALESCE(sync_fail_count, 0) < ?",
+    [now - 60 * 60 * 1000, MIRROR_SYNC_FAIL_LIMIT],
   ).all<CalendarRow>();
   for (const cal of rowsOf(listed)) {
     try {

@@ -313,7 +313,7 @@ export async function buildBackupPackage(db: D1Database, now: number): Promise<B
   // ---- 日历（含事件；订阅令牌只存哈希，不导出） ---------------------------
   const calendars = await rows(
     db,
-    "SELECT id, name, color, kind, source_url, source_etag, source_last_modified, last_sync_at, sync_status, sync_error, timezone, ctag, is_default, created_by, created_at, updated_at FROM calendars ORDER BY id ASC",
+    "SELECT id, name, color, kind, source_url, source_etag, source_last_modified, last_sync_at, sync_status, sync_error, sync_fail_count, timezone, ctag, is_default, created_by, created_at, updated_at FROM calendars ORDER BY id ASC",
   );
   for (const row of calendars) {
     entity("calendars", `calendar/calendars/${segment(row["id"], "calendar")}.json`, row, [
@@ -327,6 +327,7 @@ export async function buildBackupPackage(db: D1Database, now: number): Promise<B
       "last_sync_at",
       "sync_status",
       "sync_error",
+      "sync_fail_count",
       "timezone",
       "ctag",
       "is_default",
