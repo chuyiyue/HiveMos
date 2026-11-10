@@ -206,11 +206,7 @@ async function buildActivity(db: D1Database, agentNames: Map<string, string>): P
 async function mcpActivity(db: D1Database): Promise<ActivityItem[]> {
   const rows = await allRows<{ at: number; agent_name: string | null; server_id: string; server_title: string | null; server_name: string | null }>(
     db,
-<<<<<<< HEAD
-    `SELECT f.created_at AS at, a.name AS agent_name, f.server_id, s.title AS server_title, s.name AS server_name
-=======
-    `SELECT f.created_at AS at, COALESCE(a.name, f.agent_name) AS agent_name, s.title AS server_title, s.name AS server_name
->>>>>>> task/agent-hard-delete
+    `SELECT f.created_at AS at, COALESCE(a.name, f.agent_name) AS agent_name, f.server_id, s.title AS server_title, s.name AS server_name
      FROM mcp_fetch_audit f
      LEFT JOIN agents a ON a.id = f.agent_id
      LEFT JOIN mcp_servers s ON s.id = f.server_id
