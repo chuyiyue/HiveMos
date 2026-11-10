@@ -48,8 +48,16 @@ function makeDb(withFts) {
   const sqlite = new DatabaseSync(":memory:");
   const mig = (name) => sqlite.exec(readFileSync(new URL("../migrations/" + name, import.meta.url), "utf8"));
   mig("0007_memory.sql");
+  mig("0010_soul.sql");
   mig("0017_memory_tiers.sql");
+  mig("0031_soul_version_manage.sql");
+  mig("0032_soul_pending.sql");
   if (withFts) mig("0040_memory_fts.sql");
+  mig("0060_memory_lifecycle.sql");
+  mig("0061_soul_sections.sql");
+  mig("0070_memory_vectors.sql");
+  mig("0071_memory_proposals.sql");
+  mig("0072_memory_ai_pending.sql");
   const db = {
     prepare(sql) {
       const stmt = sqlite.prepare(sql);

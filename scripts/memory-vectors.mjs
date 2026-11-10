@@ -101,7 +101,13 @@ function makeD1(raw) {
 
 const MIGRATIONS = [
   "0007_memory.sql",
+  "0010_soul.sql",
   "0017_memory_tiers.sql",
+  "0031_soul_version_manage.sql",
+  "0032_soul_pending.sql",
+  "0040_memory_fts.sql",
+  "0060_memory_lifecycle.sql",
+  "0061_soul_sections.sql",
   "0070_memory_vectors.sql",
   "0071_memory_proposals.sql",
   "0072_memory_ai_pending.sql",
