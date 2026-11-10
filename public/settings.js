@@ -17,6 +17,7 @@
     profile: null,
     profileInput: "",
     profileError: "",
+    avatarError: "",
     currentPassword: "",
     newPassword: "",
     confirmPassword: "",
@@ -197,8 +198,12 @@
     var accountBtn = document.querySelector(".account-btn");
     if (nameEl) nameEl.textContent = name;
     if (avatar) {
-      var value = String(name || "").trim();
-      avatar.textContent = value ? Array.from(value)[0].toUpperCase() : "管";
+      if (typeof C.paintAccountAvatar === "function") {
+        C.paintAccountAvatar(avatar, avatarMe());
+      } else {
+        var value = String(name || "").trim();
+        avatar.textContent = value ? Array.from(value)[0].toUpperCase() : "管";
+      }
     }
     if (accountBtn) {
       var title = name + " · 设置";
@@ -282,6 +287,7 @@
       '<div class="row-actions"><button type="submit"' +
       (state.busy ? " disabled" : "") +
       ">保存昵称</button></div></form>" +
+      avatarBlock() +
       C.facts([
         ["登录用户名", C.escapeHtml(profile.username || "未知")],
         ["角色", C.escapeHtml(roleText(profile.role))],
@@ -1417,6 +1423,7 @@
     var selectionStart = active && typeof active.selectionStart === "number" ? active.selectionStart : null;
     C.mount(C.layout(settingsLayout()));
     bind();
+    paintAvatarBits();
     var focusSelector = state.focus;
     state.focus = "";
     if (focusSelector) {
@@ -1446,6 +1453,7 @@
     page.addEventListener("input", onInput);
     page.addEventListener("click", onClick);
     page.addEventListener("submit", onSubmit);
+    page.addEventListener("change", onAvatarFileChange);
   }
 
   function onInput(event) {
@@ -1496,7 +1504,8 @@
     var control = target.closest("[data-action]");
     if (!control || state.busy) return;
     var action = control.getAttribute("data-action");
-    if (action === "reload-account") reloadAccount();
+    if (action === "avatar-remove") removeAvatar();
+    else if (action === "reload-account") reloadAccount();
     else if (action === "github-bind") bindGithub();
     else if (action === "github-rebind-open") openGithubRebind();
     else if (action === "github-rebind-cancel") closeGithubRebind();
@@ -1571,6 +1580,161 @@
       state.accountStatus = saved ? "昵称已保存" : "昵称已清除";
       paintSidebar(displayName(saved, state.profile.username));
       toast(state.accountStatus);
+      render();
+    });
+  }
+
+  function avatarMe() {
+    var profile = state.profile || {};
+    return {
+      avatar_data: typeof profile.avatar_data === "string" ? profile.avatar_data : null,
+      github_avatar_url:
+        (typeof profile.github_avatar_url === "string" && profile.github_avatar_url) ||
+        (state.github && typeof state.github.avatar_url === "string" && state.github.avatar_url) ||
+        null,
+      profile_username: typeof profile.profile_username === "string" ? profile.profile_username : "",
+      username: displayName(profile.profile_username, profile.username),
+      user: { username: typeof profile.username === "string" ? profile.username : "" },
+    };
+  }
+
+  function avatarBlock() {
+    var profile = state.profile || {};
+    var hasCustom = typeof profile.avatar_data === "string" && !!profile.avatar_data;
+    return (
+      '<div class="stack"><h3>头像</h3>' +
+      '<div class="avatar-row"><span id="avatar-preview" class="avatar-preview" aria-hidden="true"></span>' +
+      '<div class="row-actions">' +
+      '<label class="button secondary" for="avatar-file">上传头像</label>' +
+      '<input id="avatar-file" type="file" accept="image/*" hidden />' +
+      (hasCustom
+        ? '<button type="button" class="ghost" data-action="avatar-remove">移除自定义头像</button>'
+        : "") +
+      "</div></div>" +
+      '<p class="subtle">上传的图片会裁剪为正方形并缩小到 128×128，自定义头像优先于 GitHub 头像与按名生成的头像显示</p>' +
+      fieldError("avatar-error", state.avatarError) +
+      "</div>"
+    );
+  }
+
+  function paintAvatarBits() {
+    if (!state.profile || typeof C.paintAccountAvatar !== "function") return;
+    var preview = document.getElementById("avatar-preview");
+    if (preview) C.paintAccountAvatar(preview, avatarMe());
+  }
+
+  var AVATAR_DATA_LIMIT = 400 * 1024;
+
+  // Center-crop to a square and shrink to at most 128x128; if the exported
+  // data URL is still too large, step down in size and quality until it fits.
+  // Decoding prefers createImageBitmap: an <img> fed with a blob: URL is
+  // subject to the page's CSP, the bitmap decoder is not.
+  async function fileToAvatarDataUrl(file) {
+    var source = null;
+    var cleanup = function () {};
+    try {
+      if (typeof createImageBitmap === "function") {
+        try {
+          source = await createImageBitmap(file);
+        } catch (error) {
+          source = null;
+        }
+      }
+      if (!source) {
+        var url = URL.createObjectURL(file);
+        cleanup = function () {
+          URL.revokeObjectURL(url);
+        };
+        source = await new Promise(function (resolve, reject) {
+          var image = new Image();
+          image.onload = function () {
+            resolve(image);
+          };
+          image.onerror = function () {
+            reject(new Error("图片读取失败"));
+          };
+          image.src = url;
+        });
+      }
+      var width = source.naturalWidth != null ? source.naturalWidth : source.width;
+      var height = source.naturalHeight != null ? source.naturalHeight : source.height;
+      var side = Math.min(width, height);
+      if (!side) throw new Error("图片读取失败");
+      var sx = (width - side) / 2;
+      var sy = (height - side) / 2;
+      var sizes = [128, 96, 64];
+      var qualities = [0.85, 0.7, 0.55];
+      for (var i = 0; i < sizes.length; i++) {
+        var canvas = document.createElement("canvas");
+        canvas.width = sizes[i];
+        canvas.height = sizes[i];
+        var ctx = canvas.getContext("2d");
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, sizes[i], sizes[i]);
+        ctx.drawImage(source, sx, sy, side, side, 0, 0, sizes[i], sizes[i]);
+        for (var j = 0; j < qualities.length; j++) {
+          var dataUrl = canvas.toDataURL("image/jpeg", qualities[j]);
+          if (dataUrl.length <= AVATAR_DATA_LIMIT) return dataUrl;
+        }
+      }
+      throw new Error("图片过大，请控制在 400KB 以内");
+    } finally {
+      cleanup();
+      if (source && typeof source.close === "function") source.close();
+    }
+  }
+
+  function onAvatarFileChange(event) {
+    var target = event.target;
+    if (!target || target.id !== "avatar-file") return;
+    var file = target.files && target.files[0];
+    target.value = "";
+    if (file) uploadAvatar(file);
+  }
+
+  function uploadAvatar(file) {
+    state.avatarError = "";
+    if (!file.type || file.type.indexOf("image/") !== 0) {
+      state.avatarError = "请选择图片文件";
+      render();
+      return;
+    }
+    fileToAvatarDataUrl(file)
+      .then(function (dataUrl) {
+        return api("POST", "/api/account/avatar", { image: dataUrl }).then(function (result) {
+          if (!result.data || result.data.ok !== true) {
+            state.avatarError = C.explain(result.data && result.data.error, "头像上传失败，请重试");
+            render();
+            return;
+          }
+          if (!state.profile) state.profile = {};
+          state.profile.avatar_data =
+            typeof result.data.avatar_data === "string" ? result.data.avatar_data : dataUrl;
+          state.accountStatus = "头像已更新";
+          paintSidebar(displayName(state.profile.profile_username, state.profile.username));
+          toast("头像已更新");
+          render();
+        });
+      })
+      .catch(function (error) {
+        state.avatarError = error && error.message ? error.message : "头像上传失败，请重试";
+        render();
+      });
+  }
+
+  function removeAvatar() {
+    state.avatarError = "";
+    api("DELETE", "/api/account/avatar").then(function (result) {
+      if (!result.data || result.data.ok !== true) {
+        state.avatarError = C.explain(result.data && result.data.error, "移除头像失败，请重试");
+        render();
+        return;
+      }
+      if (!state.profile) state.profile = {};
+      state.profile.avatar_data = null;
+      state.accountStatus = "自定义头像已移除";
+      paintSidebar(displayName(state.profile.profile_username, state.profile.username));
+      toast("自定义头像已移除");
       render();
     });
   }

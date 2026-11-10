@@ -9,6 +9,7 @@ import {
   deleteUserSessions,
   deleteUserTotpTickets,
   findUserRecordById,
+  getGithubBinding,
   getProfileUsername,
   listUserSessions,
   loginRetryAfterSeconds,
@@ -17,6 +18,7 @@ import {
   updatePasswordHash,
 } from "./accounts";
 import type { UserRecord } from "./accounts";
+import { AVATAR_BODY_MAX, deleteAvatarData, getAvatarData, parseAvatarDataUrl, setAvatarData } from "./avatar";
 import { logOp } from "./oplog";
 import type { Env } from "./env";
 import { json, readJsonLimited, readLimitedBytes, rejectsSensitiveWrite } from "./http";
@@ -34,6 +36,7 @@ type PasswordCheck = "ok" | "bad" | "limited" | "missing";
 
 export async function handleAccountRequest(request: Request, env: Env, path: string): Promise<Response | null> {
   if (path === "/api/account/profile") return profile(request, env);
+  if (path === "/api/account/avatar") return avatar(request, env);
   if (path === "/api/account/password") return password(request, env);
   if (path === "/api/account/sessions") return sessions(request, env);
   if (path === "/api/account/sessions/revoke-others") return revokeOtherSessions(request, env);
@@ -47,6 +50,69 @@ async function profile(request: Request, env: Env): Promise<Response> {
   if (method === "GET") return readProfile(request, env);
   if (method === "POST") return updateProfile(request, env);
   return methodNotAllowed("GET, POST");
+}
+
+async function avatar(request: Request, env: Env): Promise<Response> {
+  const method = request.method.toUpperCase();
+  if (method === "POST") return uploadAvatar(request, env);
+  if (method === "DELETE") return deleteAvatar(request, env);
+  return methodNotAllowed("POST, DELETE");
+}
+
+async function uploadAvatar(request: Request, env: Env): Promise<Response> {
+  const user = await requireSensitiveUser(request, env);
+  if (user instanceof Response) return user;
+  const parsed = await readAvatarBody(request);
+  if ("response" in parsed) return parsed.response;
+  await setAvatarData(env.DB, parsed.image);
+  await logOp(env.DB, {
+    actor: user.username,
+    module: "设置",
+    action: "修改",
+    targetId: user.id,
+    targetName: user.username,
+    text: "更新了自定义头像",
+  });
+  return json({ ok: true, avatar_data: parsed.image });
+}
+
+async function deleteAvatar(request: Request, env: Env): Promise<Response> {
+  const user = await requireSensitiveUser(request, env);
+  if (user instanceof Response) return user;
+  await deleteAvatarData(env.DB);
+  await logOp(env.DB, {
+    actor: user.username,
+    module: "设置",
+    action: "修改",
+    targetId: user.id,
+    targetName: user.username,
+    text: "移除了自定义头像",
+  });
+  return json({ ok: true });
+}
+
+async function readAvatarBody(
+  request: Request,
+): Promise<{ image: string } | { response: Response }> {
+  const bytes = await readLimitedBytes(request, AVATAR_BODY_MAX);
+  if (bytes === null) return { response: json({ ok: false, error: "图片过大，请控制在 400KB 以内" }, 400) };
+  if (bytes.byteLength === 0) return { response: json({ ok: false, error: "请求体为空" }, 400) };
+  let value: unknown;
+  try {
+    value = JSON.parse(new TextDecoder().decode(bytes)) as unknown;
+  } catch {
+    return { response: json({ ok: false, error: "JSON 无法解析" }, 400) };
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { response: json({ ok: false, error: "请求体无效" }, 400) };
+  }
+  const image = (value as Record<string, unknown>).image;
+  if (typeof image !== "string" || image.length === 0) {
+    return { response: json({ ok: false, error: "请上传图片" }, 400) };
+  }
+  const parsed = parseAvatarDataUrl(image);
+  if (!parsed.ok) return { response: json({ ok: false, error: parsed.error }, 400) };
+  return { image: parsed.dataUrl };
 }
 
 async function password(request: Request, env: Env): Promise<Response> {
@@ -64,10 +130,14 @@ async function readProfile(request: Request, env: Env): Promise<Response> {
   if (user instanceof Response) return user;
   const profileUsername = await getProfileUsername(env.DB);
   const record = await findUserRecordById(env.DB, user.id);
+  const binding = await getGithubBinding(env.DB, user.id);
+  const avatarData = await getAvatarData(env.DB);
   return json({
     ok: true,
     username: user.username,
     profile_username: profileUsername,
+    avatar_data: avatarData,
+    github_avatar_url: binding?.github_avatar_url ?? null,
     role: user.role === "admin" ? "admin" : "member",
     disabled: (record?.disabled_at ?? user.disabled_at) != null,
     created_at: record?.created_at ?? null,

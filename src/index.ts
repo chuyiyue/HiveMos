@@ -12,6 +12,7 @@ import {
   clearLoginFailures,
   deleteSession,
   findTotpUser,
+  getGithubBinding,
   getProfileUsername,
   listUserRecords,
   loginIsLimited,
@@ -52,6 +53,7 @@ import { handleGithubAuthedRequest, handleGithubPublicRequest } from "./github";
 import { syncDueMirrors } from "./calendar";
 import { refreshActiveSnapshots } from "./registry";
 import { issueSession, publicUser, requireAdminUser } from "./session";
+import { getAvatarData } from "./avatar";
 
 const LOGIN_BODY_BYTES = 8 * 1024;
 
@@ -344,11 +346,15 @@ async function me(request: Request, env: Env): Promise<Response> {
   if (user instanceof Response) return user;
   const profileUsername = await getProfileUsername(env.DB);
   const username = profileUsername !== "" ? profileUsername : user.username;
+  const binding = await getGithubBinding(env.DB, user.id);
+  const avatarData = await getAvatarData(env.DB);
   return json({
     ok: true,
     user: publicUser(user),
     username,
     profile_username: profileUsername,
+    avatar_data: avatarData,
+    github_avatar_url: binding?.github_avatar_url ?? null,
   });
 }
 

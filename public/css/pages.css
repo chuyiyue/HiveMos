@@ -263,6 +263,25 @@ button.copy-btn:hover { background: var(--surface-hover); }
 
 /* 设置页管理员账号：两列各半 */
 .account-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; align-items: start; }
+.avatar-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.avatar-preview {
+  width: 56px;
+  height: 56px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--sidebar-active-bg);
+  color: var(--sidebar-text-strong);
+  font-weight: 600;
+}
+.avatar-preview img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
+}
 
 /* 设置页功能设置：定时任务频率与侧边栏上限各占一列 */
 .feature-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; align-items: start; }
