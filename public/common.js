@@ -496,6 +496,30 @@
   // moment they are flipped, PATCH with the complete set). The host only
   // picks where it opens (centered dialog vs side panel) and passes an
   // onChanged(message) callback so its own list can refresh.
+  // Permission model: a read/write matrix over nine domains plus an
+  // advanced set. The server stores permissions as an object
+  // ({domain: {read, write}, ..., advanced: {...}}); rows that have not
+  // been re-saved yet may still carry the legacy array form, which
+  // normalizePerms folds in (each listed domain = read-only; "registry"
+  // expands to mcp/skills/api; "soul_write_any" maps to the advanced
+  // flag of the same name).
+  var PERM_MATRIX = [
+    ["mcp", "MCP"],
+    ["skills", "Skills"],
+    ["api", "API"],
+    ["memory", "记忆"],
+    ["soul", "Soul"],
+    ["tasks", "任务"],
+    ["calendar", "日历"],
+    ["vault", "保险库"],
+    ["machines", "云计算资源"],
+  ];
+  var PERM_ADVANCED = [
+    ["machines_secret", "查看凭据", "查看服务器、云主机与 Workers 的明文凭据"],
+    ["soul_write_any", "代写他人 Soul", "写入其他 Agent 的 Soul，默认不给任何 Agent"],
+    ["vault_totp_code", "读取保险库验证码", "读取保险库中保存的两步验证码"],
+  ];
+  // Legacy triple list ([key, label, hint]) kept for the permDomains export.
   var PERM_DOMAINS = [
     ["mcp", "MCP", "MCP 注册表的搜索、列表与取配置"],
     ["skills", "Skills", "Skills 的列表与取用"],
@@ -508,6 +532,62 @@
     ["vault", "保险库", "保险库条目的取用"],
     ["machines", "云计算资源", "服务器、云主机与 Workers 的状态与操作"],
   ];
+
+  function emptyPerms() {
+    var out = {};
+    PERM_MATRIX.forEach(function (entry) {
+      out[entry[0]] = { read: false, write: false };
+    });
+    out.advanced = {};
+    PERM_ADVANCED.forEach(function (entry) {
+      out.advanced[entry[0]] = false;
+    });
+    return out;
+  }
+
+  function normalizePerms(input) {
+    var out = emptyPerms();
+    if (Array.isArray(input)) {
+      input.forEach(function (domain) {
+        if (domain === "registry") {
+          ["mcp", "skills", "api"].forEach(function (key) {
+            out[key].read = true;
+          });
+        } else if (domain === "soul_write_any") {
+          out.advanced.soul_write_any = true;
+        } else if (domain !== "advanced" && out[domain]) {
+          out[domain].read = true;
+        }
+      });
+      return out;
+    }
+    if (input && typeof input === "object") {
+      PERM_MATRIX.forEach(function (entry) {
+        var cell = input[entry[0]];
+        if (cell && typeof cell === "object") {
+          out[entry[0]].read = !!cell.read;
+          out[entry[0]].write = !!cell.write;
+        }
+      });
+      var adv = input.advanced;
+      if (adv && typeof adv === "object") {
+        PERM_ADVANCED.forEach(function (entry) {
+          out.advanced[entry[0]] = !!adv[entry[0]];
+        });
+      }
+    }
+    return out;
+  }
+
+  function clonePerms(perms) {
+    return normalizePerms(JSON.parse(JSON.stringify(perms || {})));
+  }
+
+  // Both sides always come from normalizePerms/clonePerms, so key order
+  // is fixed and a string compare is an exact compare.
+  function permsEqual(a, b) {
+    return JSON.stringify(a) === JSON.stringify(b);
+  }
 
   function agentApi(method, url, body) {
     var headers = { accept: "application/json" };
@@ -529,83 +609,74 @@
   }
 
   function permTextOf(agent) {
-    var perms = agent.permissions || [];
-    if (!perms.length) return "未开启任何功能";
-    var labels = perms.map(function (domain) {
-      var entry = PERM_DOMAINS.find(function (item) {
-        return item[0] === domain;
-      });
-      return entry ? entry[1] : domain;
+    var perms = normalizePerms(agent ? agent.permissions : null);
+    var parts = [];
+    PERM_MATRIX.forEach(function (entry) {
+      var cell = perms[entry[0]];
+      if (cell.read && cell.write) parts.push(entry[1] + " 读写");
+      else if (cell.read) parts.push(entry[1] + " 只读");
+      else if (cell.write) parts.push(entry[1] + " 只写");
     });
-    return perms.length + " / " + PERM_DOMAINS.length + "：" + labels.join("、");
+    return parts.length ? parts.join(" · ") : "无权限";
   }
 
-  function orderedPerms(set) {
-    return PERM_DOMAINS.map(function (entry) {
-      return entry[0];
-    }).filter(function (domain) {
-      return set.has(domain);
-    });
-  }
-
-  function permSetsEqual(a, b) {
-    if (a.size !== b.size) return false;
-    var same = true;
-    a.forEach(function (domain) {
-      if (!b.has(domain)) same = false;
-    });
-    return same;
-  }
-
-  function permTagsHtml(set) {
-    var chosen = PERM_DOMAINS.filter(function (entry) {
-      return set.has(entry[0]);
-    });
-    if (!chosen.length) return '<span class="subtle">未开启任何功能</span>';
-    return chosen
-      .map(function (entry) {
-        return (
-          '<span class="perm-tag">' +
-          escapeHtml(entry[1]) +
-          '<button type="button" class="perm-tag-x" data-perm-remove="' +
-          escapeHtml(entry[0]) +
-          '" aria-label="移除' +
-          escapeHtml(entry[1]) +
-          '权限">×</button></span>'
-        );
-      })
-      .join("");
-  }
-
-  function permPickerHtml(agent) {
-    var enabled = new Set(agent.permissions || []);
-    var items = PERM_DOMAINS.map(function (entry) {
-      var on = enabled.has(entry[0]);
+  function permMatrixHtml(agent) {
+    var perms = normalizePerms(agent ? agent.permissions : null);
+    var rows = PERM_MATRIX.map(function (entry) {
+      var key = entry[0];
+      var cell = perms[key];
       return (
-        '<button type="button" class="perm-item' +
-        (on ? " is-selected" : "") +
-        '" role="option" aria-selected="' +
-        (on ? "true" : "false") +
-        '" title="' +
-        escapeHtml(entry[0] + " · " + entry[2]) +
-        '" data-perm-item="' +
-        escapeHtml(entry[0]) +
-        '"><span class="perm-item-text"><strong>' +
+        '<div class="perm-mrow">' +
+        '<span class="perm-mname">' +
         escapeHtml(entry[1]) +
-        '</strong><span class="perm-item-sub">' +
-        escapeHtml(entry[0] + " · " + entry[2]) +
-        '</span></span></button>'
+        "</span>" +
+        '<label class="perm-check"><input type="checkbox" data-perm-cell="' +
+        key +
+        '" data-perm-op="read"' +
+        (cell.read ? " checked" : "") +
+        ' aria-label="' +
+        escapeHtml(entry[1] + " 读取") +
+        '" /></label>' +
+        '<label class="perm-check"><input type="checkbox" data-perm-cell="' +
+        key +
+        '" data-perm-op="write"' +
+        (cell.write ? " checked" : "") +
+        ' aria-label="' +
+        escapeHtml(entry[1] + " 写入") +
+        '" /></label></div>'
+      );
+    }).join("");
+    var advanced = PERM_ADVANCED.map(function (entry) {
+      var key = entry[0];
+      // vault_totp_code gates nothing until the vault-code phase lands;
+      // render it disabled so the toggle never promises a live effect.
+      var locked = key === "vault_totp_code";
+      return (
+        '<div class="perm-row"><div class="perm-meta"><strong>' +
+        escapeHtml(entry[1]) +
+        (locked ? ' <span class="subtle">即将推出</span>' : "") +
+        '</strong><span class="subtle">' +
+        escapeHtml(entry[2]) +
+        '</span></div><label class="perm-check"><input type="checkbox" data-perm-adv="' +
+        key +
+        '"' +
+        (perms.advanced[key] ? " checked" : "") +
+        (locked ? " disabled" : "") +
+        ' aria-label="' +
+        escapeHtml(entry[1]) +
+        '" /></label></div>'
       );
     }).join("");
     return (
-      '<div class="perm-picker" data-perm-picker>' +
-      '<input type="text" class="perm-search" data-perm-search placeholder="搜索权限" autocomplete="off" role="combobox" aria-expanded="false" aria-haspopup="listbox" aria-label="搜索并点选权限" />' +
-      '<div class="perm-menu" data-perm-menu role="listbox" aria-multiselectable="true" aria-label="权限列表" hidden>' +
-      items +
-      '<p class="perm-menu-empty" data-perm-menu-empty hidden>没有匹配的权限</p></div>' +
-      '<div class="perm-tags" data-perm-tags>' +
-      permTagsHtml(enabled) +
+      '<div class="perm-matrix" data-perm-matrix>' +
+      '<div class="perm-matrix-top"><button type="button" class="secondary perm-clear" data-perm-clear>全部关闭</button></div>' +
+      '<div class="perm-mgrid" aria-label="功能权限">' +
+      '<div class="perm-mrow perm-mhead"><span class="perm-mname">功能</span><span class="perm-mcol">读取</span><span class="perm-mcol">写入</span></div>' +
+      rows +
       "</div>" +
+      '<div class="perm-advanced"><div class="perm-advanced-title">高级权限</div><div class="perm-list">' +
+      advanced +
+      "</div></div>" +
       '<div class="perm-foot"><button type="button" class="perm-save" data-perm-save disabled>保存权限</button></div>' +
       "</div>"
     );
@@ -666,7 +737,7 @@
           "<div class=\"manage-actions\"><button type=\"button\" data-agent-act=\"enable\">启用</button></div>");
     var permSection = partial
       ? '<p class="subtle" data-perm-pending>权限读取中</p>'
-      : permPickerHtml(agent);
+      : permMatrixHtml(agent);
     return (
       "<p class=\"manage-status\" data-manage-status role=\"status\"></p>" +
       manageInfoHead({
@@ -875,10 +946,9 @@
     var busy = false;
     var interacted = false;
 
-    var permSaved = new Set(seed && seed.permissions ? seed.permissions : []);
-    var permDesired = new Set(permSaved);
+    var permSaved = normalizePerms(seed ? seed.permissions : null);
+    var permDesired = clonePerms(permSaved);
     var permSaving = false;
-    var permActiveKey = null;
     var promptOpen = false;
 
     function groupNameOf(target) {
@@ -936,34 +1006,29 @@
         .catch(function () {});
     }
 
-    // ---- Permission picker (local pending state; one PATCH on save) ----
+    // ---- Permission matrix (local pending state; one PATCH on save) ----
 
     function isPermDirty() {
-      return !partial && !permSetsEqual(permDesired, permSaved);
+      return !partial && !permsEqual(permDesired, permSaved);
     }
 
     function permEls() {
       return {
-        search: ctrl.bodyEl.querySelector("[data-perm-search]"),
-        menu: ctrl.bodyEl.querySelector("[data-perm-menu]"),
-        tags: ctrl.bodyEl.querySelector("[data-perm-tags]"),
+        matrix: ctrl.bodyEl.querySelector("[data-perm-matrix]"),
         save: ctrl.bodyEl.querySelector("[data-perm-save]"),
-        dirty: ctrl.bodyEl.querySelector("[data-perm-dirty]"),
         summary: ctrl.bodyEl.querySelector("[data-perm-summary]"),
-        empty: ctrl.bodyEl.querySelector("[data-perm-menu-empty]"),
       };
     }
 
     function syncPermUI() {
       var els = permEls();
-      if (els.tags) els.tags.innerHTML = permTagsHtml(permDesired);
-      if (els.menu) {
-        Array.prototype.forEach.call(els.menu.querySelectorAll("[data-perm-item]"), function (btn) {
-          var key = btn.getAttribute("data-perm-item");
-          var on = permDesired.has(key);
-          btn.classList.toggle("is-selected", on);
-          btn.setAttribute("aria-selected", on ? "true" : "false");
-          btn.classList.toggle("is-active", key === permActiveKey);
+      if (els.matrix) {
+        Array.prototype.forEach.call(els.matrix.querySelectorAll("[data-perm-cell]"), function (input) {
+          var cell = permDesired[input.getAttribute("data-perm-cell")];
+          input.checked = !!(cell && cell[input.getAttribute("data-perm-op")]);
+        });
+        Array.prototype.forEach.call(els.matrix.querySelectorAll("[data-perm-adv]"), function (input) {
+          input.checked = !!permDesired.advanced[input.getAttribute("data-perm-adv")];
         });
       }
       var dirty = isPermDirty();
@@ -971,7 +1036,6 @@
         els.save.disabled = !dirty || permSaving;
         els.save.classList.toggle("is-dirty", dirty);
       }
-      if (els.dirty) els.dirty.hidden = !dirty;
     }
 
     function updatePermSummary() {
@@ -979,74 +1043,24 @@
       if (els.summary && agent) els.summary.textContent = permTextOf(agent);
     }
 
-    function visiblePermItems() {
-      var els = permEls();
-      if (!els.menu) return [];
-      return Array.prototype.filter.call(els.menu.querySelectorAll("[data-perm-item]"), function (btn) {
-        return !btn.hidden;
-      });
-    }
-
-    function filterPermMenu(keyword) {
-      var els = permEls();
-      if (!els.menu) return;
-      var needle = String(keyword || "").trim().toLowerCase();
-      var shown = 0;
-      Array.prototype.forEach.call(els.menu.querySelectorAll("[data-perm-item]"), function (btn) {
-        var key = btn.getAttribute("data-perm-item");
-        var entry = PERM_DOMAINS.find(function (item) {
-          return item[0] === key;
-        });
-        var hay = entry ? (entry[1] + " " + entry[0] + " " + entry[2]).toLowerCase() : key;
-        var hit = !permDesired.has(key) && (!needle || hay.indexOf(needle) !== -1);
-        btn.hidden = !hit;
-        if (hit) shown += 1;
-      });
-      if (els.empty) {
-        els.empty.hidden = shown > 0;
-        if (shown === 0) els.empty.textContent = permDesired.size >= PERM_DOMAINS.length ? "已拥有全部权限" : "没有匹配的权限";
-      }
-      var visible = visiblePermItems();
-      if (
-        permActiveKey &&
-        !visible.some(function (btn) {
-          return btn.getAttribute("data-perm-item") === permActiveKey;
-        })
-      ) {
-        permActiveKey = visible.length ? visible[0].getAttribute("data-perm-item") : null;
-        syncPermUI();
-      }
-    }
-
-    function openPermMenu() {
-      var els = permEls();
-      if (!els.menu) return;
-      els.menu.hidden = false;
-      if (els.search) els.search.setAttribute("aria-expanded", "true");
-      if (!permActiveKey) permActiveKey = PERM_DOMAINS[0][0];
-      filterPermMenu(els.search ? els.search.value : "");
+    function setPermCell(domain, op, on) {
+      if (partial || !domain || !permDesired[domain]) return;
+      interacted = true;
+      permDesired[domain][op] = !!on;
       syncPermUI();
     }
 
-    function closePermMenu() {
-      var els = permEls();
-      if (!els.menu) return;
-      els.menu.hidden = true;
-      if (els.search) els.search.setAttribute("aria-expanded", "false");
-    }
-
-    function permMenuOpen() {
-      var els = permEls();
-      return !!els.menu && !els.menu.hidden;
-    }
-
-    function togglePerm(domain) {
-      if (partial || !domain) return;
+    function setPermAdvanced(key, on) {
+      if (partial || !key || !(key in permDesired.advanced)) return;
       interacted = true;
-      if (permDesired.has(domain)) permDesired.delete(domain);
-      else permDesired.add(domain);
-      var elsNow = permEls();
-      filterPermMenu(elsNow.search ? elsNow.search.value : "");
+      permDesired.advanced[key] = !!on;
+      syncPermUI();
+    }
+
+    function clearPerms() {
+      if (partial) return;
+      interacted = true;
+      permDesired = emptyPerms();
       syncPermUI();
     }
 
@@ -1069,7 +1083,7 @@
       if (!isPermDirty()) return Promise.resolve(true);
       permSaving = true;
       syncPermUI();
-      var target = orderedPerms(permDesired);
+      var target = clonePerms(permDesired);
       return agentApi("PATCH", "/api/agents/" + encodeURIComponent(agentId), { permissions: target })
         .then(function (result) {
           permSaving = false;
@@ -1082,8 +1096,8 @@
             syncPermUI();
             return false;
           }
-          permSaved = new Set(target);
-          if (agent) agent.permissions = target.slice();
+          permSaved = clonePerms(target);
+          if (agent) agent.permissions = clonePerms(target);
           updatePermSummary();
           syncPermUI();
           flashPermSaved();
@@ -1139,7 +1153,7 @@
           });
         });
         discardBtn.addEventListener("click", function () {
-          permDesired = new Set(permSaved);
+          permDesired = clonePerms(permSaved);
           syncPermUI();
           finish("discarded");
         });
@@ -1197,8 +1211,8 @@
           agent = fresh;
           partial = false;
           if (!isPermDirty() && !permSaving) {
-            permSaved = new Set(fresh.permissions || []);
-            permDesired = new Set(permSaved);
+            permSaved = normalizePerms(fresh.permissions);
+            permDesired = clonePerms(permSaved);
           }
           if (!dataChanged) return;
           if (silent && (interacted || busy)) return;
@@ -1916,23 +1930,14 @@
     ctrl.dialog.addEventListener("click", function (event) {
       var target = event.target;
       if (!(target instanceof Element)) return;
-      var removeBtn = target.closest("[data-perm-remove]");
-      if (removeBtn) {
-        togglePerm(removeBtn.getAttribute("data-perm-remove"));
-        return;
-      }
-      var itemBtn = target.closest("[data-perm-item]");
-      if (itemBtn) {
-        togglePerm(itemBtn.getAttribute("data-perm-item"));
-        var els = permEls();
-        if (els.search) els.search.focus();
+      if (target.closest("[data-perm-clear]")) {
+        clearPerms();
         return;
       }
       if (target.closest("[data-perm-save]")) {
         savePerms();
         return;
       }
-      if (!target.closest("[data-perm-picker]")) closePermMenu();
       var actBtn = target.closest("[data-agent-act]");
       if (!actBtn || busy || !agent) return;
       var act = actBtn.getAttribute("data-agent-act");
@@ -1945,45 +1950,16 @@
       else if (act === "avatar") doAvatar();
     });
 
-    ctrl.dialog.addEventListener("focusin", function (event) {
-      if (event.target instanceof Element && event.target.closest("[data-perm-search]")) openPermMenu();
-    });
-
-    ctrl.dialog.addEventListener("input", function (event) {
-      if (event.target instanceof Element && event.target.closest("[data-perm-search]")) {
-        openPermMenu();
-        filterPermMenu(event.target.value);
-      }
-    });
-
-    ctrl.dialog.addEventListener("keydown", function (event) {
+    ctrl.dialog.addEventListener("change", function (event) {
       var target = event.target;
-      if (!(target instanceof Element) || !target.closest("[data-perm-search]")) return;
-      if (event.key === "Escape") {
-        if (permMenuOpen()) {
-          event.preventDefault();
-          event.stopPropagation();
-          closePermMenu();
-        }
+      if (!(target instanceof Element)) return;
+      var cell = target.closest("[data-perm-cell]");
+      if (cell) {
+        setPermCell(cell.getAttribute("data-perm-cell"), cell.getAttribute("data-perm-op"), cell.checked);
         return;
       }
-      if (!permMenuOpen()) return;
-      var visible = visiblePermItems();
-      if (!visible.length) return;
-      var keys = visible.map(function (btn) {
-        return btn.getAttribute("data-perm-item");
-      });
-      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-        event.preventDefault();
-        var idx = keys.indexOf(permActiveKey);
-        idx = event.key === "ArrowDown" ? Math.min(idx + 1, keys.length - 1) : Math.max(idx - 1, 0);
-        permActiveKey = keys[idx];
-        syncPermUI();
-        if (visible[idx] && visible[idx].scrollIntoView) visible[idx].scrollIntoView({ block: "nearest" });
-      } else if (event.key === "Enter") {
-        event.preventDefault();
-        if (permActiveKey && keys.indexOf(permActiveKey) !== -1) togglePerm(permActiveKey);
-      }
+      var adv = target.closest("[data-perm-adv]");
+      if (adv) setPermAdvanced(adv.getAttribute("data-perm-adv"), adv.checked);
     });
 
     wireManageTabs(ctrl);
@@ -2653,6 +2629,8 @@
     wireManageTabs: wireManageTabs,
     mcpEndpoint: mcpEndpoint,
     permDomains: PERM_DOMAINS,
+    permSummaryOf: permTextOf,
+    normalizePerms: normalizePerms,
     metaGrid: metaGrid,
     iconSvg: iconSvg,
     agentAvatarHtml: agentAvatarHtml,

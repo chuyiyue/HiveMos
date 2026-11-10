@@ -425,6 +425,24 @@ dialog.action-menu::backdrop { background: var(--overlay); }
 .perm-save.is-dirty { background: var(--accent-button); color: var(--on-accent); border-color: transparent; }
 .perm-save.is-saved { background: var(--success-soft); color: var(--success-text); border-color: transparent; }
 
+/* Permission matrix: one row per domain with read/write checkboxes and
+   an advanced section below. Changes stay local until save commits. */
+.perm-matrix { display: grid; gap: 14px; }
+.perm-matrix-top { display: flex; justify-content: flex-end; }
+.perm-clear { min-height: 32px; padding: 0 12px; }
+.perm-mgrid { border: 1px solid var(--border); border-radius: var(--r-md); overflow: hidden; }
+.perm-mrow { display: grid; grid-template-columns: minmax(0, 1fr) 64px 64px; align-items: center; min-height: 44px; padding: 2px 6px 2px 12px; background: var(--surface); }
+.perm-mrow + .perm-mrow { border-top: 1px solid var(--border); }
+.perm-mhead { min-height: 34px; background: var(--bg-sunken); color: var(--text-3); font-size: var(--fs-sm); }
+.perm-mname { font-weight: 500; min-width: 0; }
+.perm-mhead .perm-mname { font-weight: 400; }
+.perm-mcol { text-align: center; }
+.perm-check { display: inline-flex; align-items: center; justify-content: center; justify-self: center; width: 40px; height: 40px; margin: 0; cursor: pointer; }
+.perm-check input { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); cursor: pointer; }
+.perm-check input:disabled { cursor: default; opacity: 0.55; }
+.perm-advanced { display: grid; gap: 4px; }
+.perm-advanced-title { font-weight: 600; }
+
 /* Reference device-card layout (SMSinBox): one column — head row, meta
    grid, button row. .record also has rules in pages.css; the article
    selector here outranks them. */

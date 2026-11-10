@@ -9,9 +9,6 @@
 (function () {
   var C = window.HiveCommon;
 
-  // Permission domains, mirroring PERMISSION_DOMAINS in src/registry.ts.
-  var PERM_DOMAINS = C.permDomains;
-
   var state = {
     loading: true,
     loadError: "",
@@ -58,15 +55,7 @@
   }
 
   function permText(agent) {
-    var perms = agent.permissions || [];
-    if (!perms.length) return "未开启任何功能";
-    var labels = perms.map(function (domain) {
-      var entry = PERM_DOMAINS.find(function (item) {
-        return item[0] === domain;
-      });
-      return entry ? entry[1] : domain;
-    });
-    return perms.length + " / " + PERM_DOMAINS.length + "：" + labels.join("、");
+    return C.permSummaryOf(agent);
   }
 
   function pinCorner(agent) {
