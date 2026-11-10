@@ -1,0 +1,35 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "openmos",
+  "main": "src/index.ts",
+  // 2026-10-30 is the newest date this Wrangler's workerd accepts.
+  "compatibility_date": "2026-10-30",
+  "workers_dev": true,
+  // No custom domain yet: OpenMos starts on its workers.dev address
+  // (openmos.lokfu.workers.dev) while the hivemos script is suspended.
+  // Bind a domain here once the owner picks one.
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "html_handling": "auto-trailing-slash",
+    "not_found_handling": "404-page",
+    "run_worker_first": ["/*"]
+  },
+  "ai": {
+    "binding": "AI"
+  },
+  // Same Vectorize index and D1 database as the hivemos worker: both
+  // scripts serve the same data; only the script name differs.
+  "vectorize": [{ "binding": "MEMORY_VECTORS", "index_name": "hivemos-memories" }],
+  "triggers": {
+    "crons": ["0 * * * *"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "hivemos",
+      "database_id": "6c07d734-ca39-41ea-ba81-2a392e4abdf2",
+      "migrations_dir": "migrations"
+    }
+  ]
+}
