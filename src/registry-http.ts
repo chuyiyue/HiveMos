@@ -10,7 +10,7 @@ import {
   createServer,
   deleteGroup,
   deleteServer,
-  disableAgent,
+  deleteAgent,
   listAgents,
   listAudit,
   listGroups,
@@ -274,17 +274,20 @@ async function agentOne(request: Request, env: Env, id: string): Promise<Respons
     if (gate) return gate;
     const listed = await listAgents(env.DB).catch(() => null);
     const before = listed?.find((agent) => agent.id === id);
-    const disabled = await disableAgent(env.DB, id);
-    if (!disabled.ok) return json({ ok: false, error: disabled.error }, disabled.status);
-    const name = before?.name ?? id;
+    if (!before) return json({ ok: false, error: "未找到" }, 404);
+    const name = before.name;
+    // The system log is written BEFORE the row disappears, so the deleted
+    // agent's name stays on record (target_name + text both carry it).
     await logOp(env.DB, {
       actor: await panelActor(request, env),
       module: "Agent",
-      action: "停用",
+      action: "删除",
       targetId: id,
       targetName: name,
-      text: `停用了 Agent「${name}」`,
+      text: `删除了 Agent「${name}」`,
     });
+    const deleted = await deleteAgent(env.DB, id);
+    if (!deleted.ok) return json({ ok: false, error: deleted.error }, deleted.status);
     return json({ ok: true });
   }
   return methodNotAllowed("PATCH, DELETE");

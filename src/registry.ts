@@ -1595,6 +1595,50 @@ export async function disableAgent(db: D1Database, id: string): Promise<{ ok: tr
   return { ok: true };
 }
 
+// Hard delete: the agents row goes away, and with it everything that only
+// makes sense while the agent exists — its Soul (souls are keyed by agent
+// name) with the full version history, and its uploaded avatar. Audit and
+// call history are NOT touched: agents_audit / calendar_audit / task_audit /
+// memory_audit / soul_audit / machines_audit keep their rows (their actor
+// is a bare agent id and the records feed already renders a missing agent
+// as 「已删除的 Agent」), and mcp_fetch_audit gets the agent's name
+// snapshotted into its agent_name column so the feed keeps showing who
+// made those calls. The caller (registry-http) writes the user_ops entry
+// before calling this, so the system log keeps the name as well.
+export async function deleteAgent(
+  db: D1Database,
+  id: string,
+): Promise<{ ok: true; name: string } | Failure> {
+  const row = await prepare(db, "SELECT id, name FROM agents WHERE id = ?", [id]).first<{
+    id: string;
+    name: string;
+  }>();
+  if (!row) return { ok: false, status: 404, error: "未找到" };
+  await auditAgentQuietly(db, id, "delete");
+  try {
+    await prepare(
+      db,
+      "UPDATE mcp_fetch_audit SET agent_name = ? WHERE agent_id = ? AND agent_name IS NULL",
+      [row.name, id],
+    ).run();
+  } catch {
+    // best-effort: the agent_name column arrives with migration 0035
+  }
+  try {
+    await db.batch([
+      prepare(db, "DELETE FROM soul_versions WHERE soul_id IN (SELECT id FROM souls WHERE agent_name = ?)", [
+        row.name,
+      ]),
+      prepare(db, "DELETE FROM souls WHERE agent_name = ?", [row.name]),
+      prepare(db, "DELETE FROM agent_avatars WHERE agent_id = ?", [id]),
+      prepare(db, "DELETE FROM agents WHERE id = ?", [id]),
+    ]);
+  } catch {
+    return dbFailure();
+  }
+  return { ok: true, name: row.name };
+}
+
 export async function authenticateAgent(
   db: D1Database,
   token: string,
