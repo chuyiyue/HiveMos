@@ -674,7 +674,7 @@
   function workerPlatformFields(platform, v, editing) {
     v = v || {};
     var tokenField =
-      "<label>API 令牌<input name=\"api_token\" type=\"password\" maxlength=\"16384\" autocomplete=\"new-password\" data-misub-token=\"1\" data-1p-ignore=\"true\" data-lpignore=\"true\" readonly placeholder=\"" +
+      "<label>API 令牌<input name=\"api_token\" type=\"password\" maxlength=\"16384\" autocomplete=\"off\" placeholder=\"" +
       (editing ? "留空表示不修改" : platform === "vercel" ? "有项目读取权限的 Vercel 令牌" : "有 Workers 读取权限的令牌") +
       "\" /></label>";
     if (platform === "vercel") {
@@ -892,7 +892,7 @@
   // 认证方式二选一：只渲染选中方式的输入框，另一个不出现在 DOM 里。
   function secretFieldHtml(authType, editing) {
     if (authType === "key") {
-      return "<label>私钥<textarea name=\"ssh_secret\" rows=\"5\" maxlength=\"16384\" autocomplete=\"new-password\" data-misub-token=\"1\" data-1p-ignore=\"true\" data-lpignore=\"true\" readonly placeholder=\"" + (editing ? "留空表示不修改" : "粘贴 OpenSSH 或 PEM 私钥") + "\"></textarea></label>";
+      return "<label>私钥<textarea name=\"ssh_secret\" rows=\"5\" maxlength=\"16384\" autocomplete=\"off\" placeholder=\"" + (editing ? "留空表示不修改" : "粘贴 OpenSSH 或 PEM 私钥") + "\"></textarea></label>";
     }
     return "<label>密码<input name=\"ssh_secret\" type=\"password\" maxlength=\"200\" autocomplete=\"off\" placeholder=\"" + (editing ? "留空表示不修改" : "SSH 登录密码") + "\" /></label>";
   }
@@ -2893,7 +2893,7 @@
         '<form data-misub-connect>' +
         '<div class="stack">' +
         '<label>MiSub 地址<input name="base_url" maxlength="2048" autocomplete="off" placeholder="https://你的 MiSub 域名" /></label>' +
-        '<label>令牌<input name="token" type="password" maxlength="16384" autocomplete="off" placeholder="在 MiSub 系统设置里创建的令牌" /></label>' +
+        '<label>令牌<input name="token" type="password" maxlength="16384" autocomplete="new-password" data-misub-token="1" data-1p-ignore="true" data-lpignore="true" readonly placeholder="在 MiSub 系统设置里创建的令牌" /></label>' +
         '<p class="subtle">令牌会密封保存，界面只显示末 4 位</p>' +
         '<p class="callout danger" data-misub-error role="alert" hidden></p>' +
         '<div class="add-bar">' +
@@ -3079,7 +3079,7 @@
         '<label>MiSub 地址<input name="base_url" maxlength="2048" autocomplete="off" placeholder="https://你的 MiSub 域名" value="' +
         C.escapeHtml(config.base_url || "") +
         '" /></label>' +
-        '<label>令牌<input name="token" type="password" maxlength="16384" autocomplete="off" placeholder="留空不修改（当前末 4 位 ' +
+        '<label>令牌<input name="token" type="password" maxlength="16384" autocomplete="new-password" data-misub-token="1" data-1p-ignore="true" data-lpignore="true" readonly placeholder="留空不修改（当前末 4 位 ' +
         C.escapeHtml(tokenTail) +
         '）" /></label>' +
         '<label class="misub-check"><input type="checkbox" name="refresh_enabled"' +
