@@ -525,7 +525,7 @@
   var PERM_ADVANCED = [
     ["agents_other", "操作其他 Agent"],
     ["soul_other", "操作其他 Soul"],
-    ["totp", "2FA"],
+    ["totp", "操作2FA"],
   ];
   // Legacy triple list ([key, label, hint]) kept for the permDomains export.
   var PERM_DOMAINS = [

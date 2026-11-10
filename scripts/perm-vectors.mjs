@@ -294,17 +294,17 @@ expect("旧 machines_secret 迁移后不给 machines 域（丢弃）", toolAcces
 
 // vault_2fa_*：除 vault read 外还要高级域 totp.read（2FA 与保险库域分开、互不附带）
 const vaultRead = parsePermissions('{"vault":{"read":true,"write":false}}');
-expect("vault read 无 totp：vault_2fa_list 被拒", toolAccessError("vault_2fa_list", vaultRead, "agent-a", {}), "该 Agent 没有 2FA 的读取权限，无法调用这个工具");
-expect("vault read 无 totp：vault_2fa_get_code 被拒", toolAccessError("vault_2fa_get_code", vaultRead, "agent-a", {}), "该 Agent 没有 2FA 的读取权限，无法调用这个工具");
+expect("vault read 无 totp：vault_2fa_list 被拒", toolAccessError("vault_2fa_list", vaultRead, "agent-a", {}), "该 Agent 没有「操作2FA」的读取权限，无法调用这个工具");
+expect("vault read 无 totp：vault_2fa_get_code 被拒", toolAccessError("vault_2fa_get_code", vaultRead, "agent-a", {}), "该 Agent 没有「操作2FA」的读取权限，无法调用这个工具");
 expect("vault read 无 totp：tools/list 无两个验证码工具", ["vault_2fa_list", "vault_2fa_get_code"].filter((name) => toolVisibleToAgent(name, vaultRead)), []);
-expect("vault write 不附带 totp：vault_2fa_list 仍被拒", toolAccessError("vault_2fa_list", parsePermissions('{"vault":{"read":true,"write":true}}'), "agent-a", {}), "该 Agent 没有 2FA 的读取权限，无法调用这个工具");
+expect("vault write 不附带 totp：vault_2fa_list 仍被拒", toolAccessError("vault_2fa_list", parsePermissions('{"vault":{"read":true,"write":true}}'), "agent-a", {}), "该 Agent 没有「操作2FA」的读取权限，无法调用这个工具");
 const vaultCode = parsePermissions('{"vault":{"read":true,"write":false},"advanced":{"totp":{"read":true,"write":false}}}');
 expect("vault read + totp.read：vault_2fa_list 放行", toolAccessError("vault_2fa_list", vaultCode, "agent-a", {}), null);
 expect("vault read + totp.read：vault_2fa_get_code 放行", toolAccessError("vault_2fa_get_code", vaultCode, "agent-a", { id: "totp_x" }), null);
 expect("vault read + totp.read：tools/list 有两个验证码工具", ["vault_2fa_list", "vault_2fa_get_code"].filter((name) => toolVisibleToAgent(name, vaultCode)), ["vault_2fa_list", "vault_2fa_get_code"]);
 expect("旧 vault_totp_code 迁移后：vault_2fa_get_code 放行", toolAccessError("vault_2fa_get_code", parsePermissions('{"vault":{"read":true,"write":false},"advanced":{"vault_totp_code":true}}'), "agent-a", { id: "totp_x" }), null);
 expect("只有 totp.read 没有 vault.read：仍被拒", toolAccessError("vault_2fa_get_code", parsePermissions('{"advanced":{"totp":{"read":true,"write":false}}}'), "agent-a", {}), "该 Agent 没有 vault 的读取权限，无法调用这个工具");
-expect("只有 totp.write：取码仍被拒（要 read）", toolAccessError("vault_2fa_get_code", parsePermissions('{"vault":{"read":true,"write":false},"advanced":{"totp":{"read":false,"write":true}}}'), "agent-a", {}), "该 Agent 没有 2FA 的读取权限，无法调用这个工具");
+expect("只有 totp.write：取码仍被拒（要 read）", toolAccessError("vault_2fa_get_code", parsePermissions('{"vault":{"read":true,"write":false},"advanced":{"totp":{"read":false,"write":true}}}'), "agent-a", {}), "该 Agent 没有「操作2FA」的读取权限，无法调用这个工具");
 
 // Soul 归属门：soul 域严格只覆盖自己名下（agent_name === 调用者名）的那一份。
 // 读他人要 soul_other.read，写他人（含以他人名义新建）要 soul_other.write。

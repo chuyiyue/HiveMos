@@ -88,7 +88,7 @@ export function toolAccessError(
     return "该 Agent 没有 " + permission.domain + " 的" + OP_LABEL[permission.op] + "权限，无法调用这个工具";
   }
   if (permission.advanced && !hasAdvanced(perms, permission.advanced.key, permission.advanced.op)) {
-    return "该 Agent 没有 2FA 的读取权限，无法调用这个工具";
+    return "该 Agent 没有「操作2FA」的读取权限，无法调用这个工具";
   }
   // Soul 归属门：soul 域严格只覆盖 agent_name 等于调用者本名的那一份 Soul。
   // 读/写他人的 Soul（含以他人名义新建）分别要 soul_other 的读/写；对 soul 域

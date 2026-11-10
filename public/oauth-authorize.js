@@ -10,7 +10,7 @@
   var ADV_LABELS = {
     agents_other: "操作其他 Agent",
     soul_other: "操作其他 Soul",
-    totp: "2FA",
+    totp: "操作2FA",
   };
   var domains = (P.domains || []).map(function (d) { return d.key; });
   var advancedKeys = (P.advanced || []).map(function (a) { return a.key; });
