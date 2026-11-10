@@ -16,3 +16,13 @@ if [ -n "${ADMIN_USERNAME:-}" ] && [ -n "${ADMIN_PASSWORD:-}" ]; then
   echo "== sync-admin =="
   node scripts/sync-admin.mjs || { echo "sync-admin FAILED" >&2; exit 1; }
 fi
+
+# GitHub OAuth app credentials (repository secrets are the source of
+# truth): when both are present in the environment, align them onto the
+# Worker as runtime secrets. Skipped when they are absent.
+if [ -n "${GITHUB_CLIENT_ID:-}" ] && [ -n "${GITHUB_CLIENT_SECRET:-}" ]; then
+  echo "== sync-github-secrets =="
+  printf %s "$GITHUB_CLIENT_ID" | npx wrangler secret put GITHUB_CLIENT_ID >/dev/null
+  printf %s "$GITHUB_CLIENT_SECRET" | npx wrangler secret put GITHUB_CLIENT_SECRET >/dev/null
+  echo "github secrets aligned"
+fi
