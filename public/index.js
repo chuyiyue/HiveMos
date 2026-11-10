@@ -102,6 +102,7 @@
     backup_auto_invalid: { tone: "warn", icon: "settings", href: "/settings.html" },
     agent_disabled: { tone: "info", icon: "bot", href: "agents.html" },
     backup_ok: { tone: "info", icon: "settings", href: "/settings.html" },
+    registry_probe_failed: { tone: "danger", icon: "plug", href: "/mcp-skills.html" },
   };
   var ALERT_ORDER = { danger: 0, warn: 1, info: 2 };
   function alertList(alerts) {

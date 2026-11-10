@@ -40,6 +40,7 @@ export interface ServerRow {
   snapshot_json: string | null;
   snapshot_at: number | string | null;
   snapshot_status: string;
+  snapshot_error: string | null;
   content_hash: string;
   ai_status: string;
   created_at: number | string;
@@ -67,6 +68,7 @@ export interface PublicServer {
   snapshot: { tools: RegistryTool[] } | null;
   snapshot_at: number | null;
   snapshot_status: string;
+  snapshot_error: string | null;
   ai_status: string;
   created_at: number;
   updated_at: number;
@@ -478,6 +480,7 @@ function toPublic(row: ServerRow): PublicServer {
     snapshot: row.snapshot_json ? { tools } : null,
     snapshot_at: asNumber(row.snapshot_at),
     snapshot_status: row.snapshot_status || "none",
+    snapshot_error: row.snapshot_error ?? null,
     ai_status: row.ai_status || "pending",
     created_at: asNumber(row.created_at) ?? 0,
     updated_at: asNumber(row.updated_at) ?? 0,
@@ -888,7 +891,7 @@ async function postRpc(
     signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
   });
   const text = await response.text();
-  if (!response.ok) throw new Error("status");
+  if (!response.ok) throw new Error(`status:${response.status}`);
   const body = parseRpcText(text, id);
   if (!body || (typeof body === "object" && body && "error" in body && (body as { error?: unknown }).error)) {
     throw new Error("rpc");
@@ -918,22 +921,62 @@ function parseRpcText(text: string, id: number): unknown {
   throw new Error("sse");
 }
 
+// 探活失败原因的人话版：probeTools/postRpc 抛的是短码（status:<码>、
+// rpc、tools……），这里统一翻译后落库，供总览告警展示；原因只作诊断，
+// 不参与任何判定。未知错误取原始 message 截断。
+function describeProbeError(error: unknown): string {
+  const name =
+    typeof error === "object" && error !== null ? (error as { name?: unknown }).name : undefined;
+  const message = error instanceof Error ? error.message : "";
+  let reason: string;
+  if (name === "TimeoutError" || name === "AbortError") {
+    reason = `探活超时（${PROBE_TIMEOUT_MS / 1000} 秒内无响应）`;
+  } else if (message.startsWith("status:")) {
+    reason = `端点返回 HTTP ${message.slice("status:".length)}`;
+  } else if (message === "rpc") {
+    reason = "端点返回 JSON-RPC 错误";
+  } else if (message === "tools") {
+    reason = "端点未返回可识别的工具列表";
+  } else if (message === "empty") {
+    reason = "端点响应为空";
+  } else if (message === "sse") {
+    reason = "端点响应格式无法解析";
+  } else if (error instanceof SyntaxError) {
+    reason = "端点响应不是有效的 JSON";
+  } else if (error instanceof TypeError) {
+    reason = "无法连接端点（网络请求失败）";
+  } else if (message) {
+    reason = message;
+  } else {
+    reason = "未知错误";
+  }
+  return reason.length > 200 ? `${reason.slice(0, 200)}…` : reason;
+}
+
 async function writeSnapshot(
   db: D1Database,
   row: ServerRow,
   tools: RegistryTool[] | null,
   status: "ok" | "failed",
+  errorReason: string | null = null,
 ): Promise<void> {
   const now = Date.now();
   if (status === "failed" || !tools) {
-    await prepare(db, "UPDATE mcp_servers SET snapshot_status = 'failed', snapshot_at = ? WHERE id = ?", [now, row.id]).run();
+    // 探活实际失败一次即停用（2026-11-10 Roye 定）：失败时间与原因一并
+    // 落库；定时清扫只选 active，停用后不再被重探，重试只走面板手动
+    // 刷新。已有的工具快照保留不动。
+    await prepare(
+      db,
+      "UPDATE mcp_servers SET snapshot_status = 'failed', snapshot_at = ?, status = 'disabled', snapshot_error = ? WHERE id = ?",
+      [now, errorReason, row.id],
+    ).run();
     return;
   }
   const snapshot = JSON.stringify({ tools });
   const hash = await hashIdentity(contentIdentity(row.name, row.title, row.description ?? "", row.config_json, tools.map((tool) => tool.name)));
   await prepare(
     db,
-    "UPDATE mcp_servers SET snapshot_json = ?, snapshot_at = ?, snapshot_status = 'ok', content_hash = ? WHERE id = ?",
+    "UPDATE mcp_servers SET snapshot_json = ?, snapshot_at = ?, snapshot_status = 'ok', snapshot_error = NULL, content_hash = ? WHERE id = ?",
     [snapshot, now, hash, row.id],
   ).run();
 }
@@ -954,9 +997,20 @@ export async function refreshServerSnapshot(
   try {
     const tools = await probeTools(row.endpoint_url);
     await writeSnapshot(env.DB, row, tools, "ok");
-  } catch {
+    // 探活成功且探活前是停用：只可能是面板手动刷新（清扫不选停用条目，
+    // create/update 探的是启用条目），按「手动重试成功即恢复」置回
+    // active。恢复这一步单独兜底：它失败不算探活失败（快照已经更新），
+    // 条目保持停用，下次手动刷新再恢复。
+    if (row.status === "disabled") {
+      try {
+        await prepare(env.DB, "UPDATE mcp_servers SET status = 'active' WHERE id = ?", [row.id]).run();
+      } catch {
+        // Stay disabled; the next manual refresh retries reactivation.
+      }
+    }
+  } catch (error) {
     try {
-      await writeSnapshot(env.DB, row, null, "failed");
+      await writeSnapshot(env.DB, row, null, "failed", describeProbeError(error));
     } catch {
       return dbFailure();
     }
@@ -1215,7 +1269,7 @@ export async function saveManualSnapshot(env: Env, ctx: WaitCtx, id: string, raw
   try {
     await prepare(
       env.DB,
-      "UPDATE mcp_servers SET snapshot_json = ?, snapshot_at = ?, snapshot_status = 'manual', content_hash = ? WHERE id = ?",
+      "UPDATE mcp_servers SET snapshot_json = ?, snapshot_at = ?, snapshot_status = 'manual', snapshot_error = NULL, content_hash = ? WHERE id = ?",
       [snapshot, now, hash, id],
     ).run();
   } catch {

@@ -370,6 +370,26 @@ async function buildAlerts(db: D1Database, now: number): Promise<AlertItem[]> {
     alerts.push({ kind: "task_stale", text: `任务「${task.title}」进行中超过 7 天没有进展`, at: task.updated_at });
   }
 
+  // 注册表条目因探活失败被自动停用（管理员手动停用且快照 ok/manual
+  // 的不在此列）：逐条列出名字、失败时间与原因。
+  const probeFailed = await allRows<{
+    name: string;
+    title: string;
+    snapshot_at: number | null;
+    snapshot_error: string | null;
+  }>(
+    db,
+    "SELECT name, title, snapshot_at, snapshot_error FROM mcp_servers WHERE status = 'disabled' AND snapshot_status = 'failed' ORDER BY snapshot_at ASC",
+  );
+  for (const server of probeFailed) {
+    const reason = server.snapshot_error ? `：${server.snapshot_error.slice(0, BACKUP_ERROR_MAX)}` : "";
+    alerts.push({
+      kind: "registry_probe_failed",
+      text: `MCP「${server.title || server.name}」探活失败，已自动停用${reason}`,
+      at: server.snapshot_at,
+    });
+  }
+
   alerts.push(...(await buildBackupAlerts(db)));
 
   return alerts;
