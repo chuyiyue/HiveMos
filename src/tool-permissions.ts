@@ -10,7 +10,7 @@ import type { AdvancedPermission, AgentPermissions, PermissionDomain, Permission
 export interface ToolPermission {
   domain: PermissionDomain;
   op: PermissionOp;
-  // advanced 开关（machines_secret / soul_write_any）；vault_totp_code 本阶段不参与校验
+  // advanced 开关（machines_secret / soul_write_any / vault_totp_code），个别工具另需一个。
   advanced?: AdvancedPermission;
 }
 
@@ -36,6 +36,8 @@ export const TOOL_PERMISSIONS: Record<string, ToolPermission> = {
   machines_list: { domain: "machines", op: "read" },
   machines_get: { domain: "machines", op: "read" },
   machines_get_access: { domain: "machines", op: "read", advanced: "machines_secret" },
+  vault_2fa_list: { domain: "vault", op: "read", advanced: "vault_totp_code" },
+  vault_2fa_get_code: { domain: "vault", op: "read", advanced: "vault_totp_code" },
 
   // ---- write ----
   memory_upsert: { domain: "memory", op: "write" },
@@ -80,6 +82,9 @@ export function toolAccessError(
   }
   if (permission.advanced === "machines_secret" && !hasAdvanced(perms, "machines_secret")) {
     return "该 Agent 没有查看机器接入凭据的高级权限，无法调用这个工具";
+  }
+  if (permission.advanced === "vault_totp_code" && !hasAdvanced(perms, "vault_totp_code")) {
+    return "该 Agent 没有读取保险库验证码的高级权限，无法调用这个工具";
   }
   // 归属判断沿用旧口径：身份取自 Bearer，写别人的 Soul 才要 soul_write_any。
   // 缺 agent_name 的请求放行到工具自身的参数校验（仍是原来的「请提供 agent_name」）。

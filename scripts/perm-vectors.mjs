@@ -127,7 +127,7 @@ expect("对象：write 不影响 read", compact(parsePermissions('{"memory":{"re
 expect("对象：未知键忽略", compact(parsePermissions('{"memory":{"read":true,"write":false},"nope":{"read":true},"registry":true}')), ["memory:r"]);
 expect("对象：非 true 的布尔值不算授予", compact(parsePermissions('{"memory":{"read":1,"write":"true"}}')), []);
 expect("对象：advanced 三个开关", advancedOn(parsePermissions('{"advanced":{"machines_secret":true,"soul_write_any":true,"vault_totp_code":false}}')), ["machines_secret", "soul_write_any"]);
-expect("对象：vault_totp_code 字段可存但本阶段不参与校验", advancedOn(parsePermissions('{"advanced":{"vault_totp_code":true}}')), ["vault_totp_code"]);
+expect("对象：vault_totp_code 字段可存（阶段 6 起参与校验）", advancedOn(parsePermissions('{"advanced":{"vault_totp_code":true}}')), ["vault_totp_code"]);
 
 // ---- serialize / 往返 --------------------------------------------------------
 
@@ -166,7 +166,7 @@ expect("PATCH null 拒绝", permissionsFromInput(null), { ok: false, status: 400
 // ---- 工具分类表自检 ---------------------------------------------------------
 
 const TOOL_NAMES = Object.keys(TOOL_PERMISSIONS);
-expect("工具分类共 30 个", TOOL_NAMES.length, 30);
+expect("工具分类共 32 个", TOOL_NAMES.length, 32);
 expect(
   "所有工具的域都在 PERMISSION_DOMAINS 内",
   TOOL_NAMES.filter((name) => !PERMISSION_DOMAINS.includes(TOOL_PERMISSIONS[name].domain)),
@@ -183,9 +183,19 @@ expect(
   [],
 );
 expect(
-  "只有 machines_get_access 带 advanced",
+  "带 advanced 的工具清单",
+  TOOL_NAMES.filter((name) => TOOL_PERMISSIONS[name].advanced).sort(),
+  ["machines_get_access", "vault_2fa_get_code", "vault_2fa_list"].sort(),
+);
+expect(
+  "machines_secret 只挂 machines_get_access",
   TOOL_NAMES.filter((name) => TOOL_PERMISSIONS[name].advanced === "machines_secret"),
   ["machines_get_access"],
+);
+expect(
+  "vault_totp_code 挂两个验证码工具",
+  TOOL_NAMES.filter((name) => TOOL_PERMISSIONS[name].advanced === "vault_totp_code").sort(),
+  ["vault_2fa_get_code", "vault_2fa_list"],
 );
 expect(
   "写工具清单与管理员裁定一致",
@@ -226,6 +236,17 @@ expect("machines read + secret：machines_get_access 放行", toolAccessError("m
 expect("machines read + secret：tools/list 有 machines_get_access", toolVisibleToAgent("machines_get_access", machinesSecret), true);
 expect("全关时 machines_get_access 也不出现", toolVisibleToAgent("machines_get_access", denied), false);
 
+// vault_2fa_*：除 vault read 外还要 advanced.vault_totp_code（照 machines_get_access）
+const vaultRead = parsePermissions('{"vault":{"read":true,"write":false}}');
+expect("vault read 无 totp_code：vault_2fa_list 被拒", toolAccessError("vault_2fa_list", vaultRead, "agent-a", {}), "该 Agent 没有读取保险库验证码的高级权限，无法调用这个工具");
+expect("vault read 无 totp_code：vault_2fa_get_code 被拒", toolAccessError("vault_2fa_get_code", vaultRead, "agent-a", {}), "该 Agent 没有读取保险库验证码的高级权限，无法调用这个工具");
+expect("vault read 无 totp_code：tools/list 无两个验证码工具", ["vault_2fa_list", "vault_2fa_get_code"].filter((name) => toolVisibleToAgent(name, vaultRead)), []);
+const vaultCode = parsePermissions('{"vault":{"read":true,"write":false},"advanced":{"vault_totp_code":true}}');
+expect("vault read + totp_code：vault_2fa_list 放行", toolAccessError("vault_2fa_list", vaultCode, "agent-a", {}), null);
+expect("vault read + totp_code：vault_2fa_get_code 放行", toolAccessError("vault_2fa_get_code", vaultCode, "agent-a", { id: "totp_x" }), null);
+expect("vault read + totp_code：tools/list 有两个验证码工具", ["vault_2fa_list", "vault_2fa_get_code"].filter((name) => toolVisibleToAgent(name, vaultCode)), ["vault_2fa_list", "vault_2fa_get_code"]);
+expect("只有 totp_code 没有 vault.read：仍被拒", toolAccessError("vault_2fa_get_code", parsePermissions('{"advanced":{"vault_totp_code":true}}'), "agent-a", {}), "该 Agent 没有 vault 的读取权限，无法调用这个工具");
+
 // soul_update：自己的 Soul 要 soul.write，写别人的还要 advanced.soul_write_any
 const soulWriter = parsePermissions('{"soul":{"read":false,"write":true}}');
 expect("soul 写自己：放行", toolAccessError("soul_update", soulWriter, "agent-a", { agent_name: "agent-a" }), null);
@@ -251,7 +272,7 @@ expect(
 const full = parsePermissions(
   JSON.stringify({
     ...Object.fromEntries(PERMISSION_DOMAINS.map((domain) => [domain, { read: true, write: true }])),
-    advanced: { machines_secret: true, soul_write_any: true, vault_totp_code: false },
+    advanced: { machines_secret: true, soul_write_any: true, vault_totp_code: true },
   }),
 );
 expect(
@@ -259,7 +280,7 @@ expect(
   TOOL_NAMES.filter((name) => toolAccessError(name, full, "agent-a", { agent_name: "agent-a" }) !== null),
   [],
 );
-expect("全域授予：tools/list 覆盖全部 30 个工具", TOOL_NAMES.filter((name) => toolVisibleToAgent(name, full)).length, 30);
+expect("全域授予：tools/list 覆盖全部 32 个工具", TOOL_NAMES.filter((name) => toolVisibleToAgent(name, full)).length, 32);
 
 // 分类表与「mcp_get / soul_get 不加高级权限」的裁定一致
 expect("mcp_get 无 advanced", TOOL_PERMISSIONS.mcp_get.advanced, undefined);
@@ -269,4 +290,4 @@ if (failures > 0) {
   console.error(`\n${failures}/${checks} 条不符`);
   process.exit(1);
 }
-console.log(`\n全部通过：${checks} 条检查（旧数组映射 / 垃圾输入全关 / 新对象直通 / parse-serialize 往返 / hasGrant-hasAdvanced / PATCH 过渡兼容 / 30 个工具的分类与校验矩阵）`);
+console.log(`\n全部通过：${checks} 条检查（旧数组映射 / 垃圾输入全关 / 新对象直通 / parse-serialize 往返 / hasGrant-hasAdvanced / PATCH 过渡兼容 / 32 个工具的分类与校验矩阵）`);

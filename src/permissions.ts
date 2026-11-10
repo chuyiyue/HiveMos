@@ -28,7 +28,7 @@ export const PERMISSION_DOMAINS = [
 export type PermissionDomain = (typeof PERMISSION_DOMAINS)[number];
 export type PermissionOp = "read" | "write";
 
-// vault_totp_code 本阶段只预留字段（保险库取码工具在后续阶段），不参与校验。
+// vault_totp_code 是保险库取码工具（vault_2fa_list / vault_2fa_get_code）的高级开关。
 export const ADVANCED_PERMISSIONS = ["machines_secret", "soul_write_any", "vault_totp_code"] as const;
 
 export type AdvancedPermission = (typeof ADVANCED_PERMISSIONS)[number];

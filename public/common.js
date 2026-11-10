@@ -648,20 +648,15 @@
     }).join("");
     var advanced = PERM_ADVANCED.map(function (entry) {
       var key = entry[0];
-      // vault_totp_code gates nothing until the vault-code phase lands;
-      // render it disabled so the toggle never promises a live effect.
-      var locked = key === "vault_totp_code";
       return (
         '<div class="perm-row"><div class="perm-meta"><strong>' +
         escapeHtml(entry[1]) +
-        (locked ? ' <span class="subtle">即将推出</span>' : "") +
         '</strong><span class="subtle">' +
         escapeHtml(entry[2]) +
         '</span></div><label class="perm-check"><input type="checkbox" data-perm-adv="' +
         key +
         '"' +
         (perms.advanced[key] ? " checked" : "") +
-        (locked ? " disabled" : "") +
         ' aria-label="' +
         escapeHtml(entry[1]) +
         '" /></label></div>'
