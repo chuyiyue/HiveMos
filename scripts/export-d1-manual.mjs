@@ -38,7 +38,13 @@ const virtualTables = new Set(
     .filter((r) => r.type === "table" && /^CREATE VIRTUAL TABLE/i.test(r.sql))
     .map((r) => r.name)
 );
-const dataTables = schemaRows.filter((r) => r.type === "table" && !virtualTables.has(r.name));
+// FTS shadow tables (memories_fts_data / _idx / _docsize / _config) deny
+// direct reads (SQLITE_AUTH); they are derived data and are regenerated
+// by the rebuild statement appended at the end, so skip them here.
+const isShadow = (name) => [...virtualTables].some((v) => name.startsWith(v + "_"));
+const dataTables = schemaRows.filter(
+  (r) => r.type === "table" && !virtualTables.has(r.name) && !isShadow(r.name)
+);
 
 const lines = [];
 lines.push("-- HiveMos D1 full export (manual dump; wrangler d1 export cannot handle FTS5)");
@@ -50,16 +56,21 @@ for (const r of schemaRows) lines.push(r.sql + ";");
 
 const counts = {};
 for (const t of dataTables) {
-  const cols = q(`SELECT name FROM pragma_table_info('${t.name.replaceAll("'", "''")}') ORDER BY cid`).map(
-    (c) => c.name
-  );
-  if (!cols.length) continue;
-  const expr = cols.map((c) => `quote("${c.replaceAll('"', '""')}")`).join(" || ',' || ");
-  const rows = q(
-    `SELECT 'INSERT INTO "${t.name.replaceAll('"', '""')}" VALUES(' || ${expr} || ');' AS line FROM "${t.name.replaceAll('"', '""')}"`
-  );
-  counts[t.name] = rows.length;
-  for (const r of rows) lines.push(r.line);
+  try {
+    const cols = q(`SELECT name FROM pragma_table_info('${t.name.replaceAll("'", "''")}') ORDER BY cid`).map(
+      (c) => c.name
+    );
+    if (!cols.length) continue;
+    const expr = cols.map((c) => `quote("${c.replaceAll('"', '""')}")`).join(" || ',' || ");
+    const rows = q(
+      `SELECT 'INSERT INTO "${t.name.replaceAll('"', '""')}" VALUES(' || ${expr} || ');' AS line FROM "${t.name.replaceAll('"', '""')}"`
+    );
+    counts[t.name] = rows.length;
+    for (const r of rows) lines.push(r.line);
+  } catch (e) {
+    console.error(`FAILED to dump table ${t.name}: ${e.message}`);
+    process.exit(1);
+  }
 }
 
 // AUTOINCREMENT high-water marks, if the table exists.
