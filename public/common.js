@@ -750,8 +750,8 @@
       (active
         ? "<button type=\"button\" class=\"secondary\" data-agent-act=\"disable\">停用</button>"
         : "<button type=\"button\" data-agent-act=\"enable\">启用</button>") +
-      "<button type=\"button\" class=\"secondary\" data-agent-act=\"move\">设置分组</button>" +
-      (active ? "<button type=\"button\" class=\"secondary\" data-agent-act=\"rotate\">轮换令牌</button>" : "") +
+      "<button type=\"button\" class=\"secondary\" data-agent-act=\"move\">分组</button>" +
+      (active ? "<button type=\"button\" class=\"secondary\" data-agent-act=\"rotate\">令牌</button>" : "") +
       "<button type=\"button\" class=\"danger\" data-agent-act=\"delete\">删除</button>" +
       "</div>" +
       (active ? "" : "<p class=\"subtle\">这个 Agent 已停用，启用后可继续调用</p>");
@@ -794,15 +794,6 @@
       "</div>" +
       "<div data-mpanel=\"overview\"" + (initialTab === "overview" ? "" : " hidden") + ">" +
       "<dl class=\"kv\">" +
-      "<div><dt>名称</dt><dd>" +
-      escapeHtml(agent.name) +
-      "</dd></div>" +
-      "<div><dt>状态</dt><dd>" +
-      (active ? "已启用" : "已停用") +
-      "</dd></div>" +
-      "<div><dt>分组</dt><dd>" +
-      (partial ? "读取中" : escapeHtml(groupName || "未分组")) +
-      "</dd></div>" +
       "<div><dt>权限</dt><dd><span data-perm-summary>" +
       (partial ? "读取中" : escapeHtml(permTextOf(agent))) +
       "</span></dd></div>" +
