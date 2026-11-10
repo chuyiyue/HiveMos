@@ -35,6 +35,14 @@ export interface MemoryRow {
   pinned_at: number | null;
   weight: number;
   ai_state: string;
+  kind: string | null;
+  agent_name: string | null;
+  expires_at: number | null;
+  last_accessed_at: number | null;
+  access_count: number;
+  content_hash: string | null;
+  supersedes_id: string | null;
+  invalidated: number;
   created_at: number;
   updated_at: number;
   deleted_at: number | null;
@@ -48,6 +56,10 @@ export interface MemoryFields {
   group_id?: string | null;
   pinned?: boolean;
   weight?: number;
+  kind?: string | null;
+  agent_name?: string | null;
+  expires_at?: number | null;
+  supersedes_id?: string | null;
 }
 
 const TITLE_MAX = 200;
@@ -191,6 +203,14 @@ export function memoryPublic(row: MemoryRow): Record<string, unknown> {
     weight: typeof row.weight === "number" ? row.weight : 0,
     ai_state: row.ai_state || "none",
     ai_summary: row.ai_summary ?? null,
+    kind: row.kind ?? null,
+    agent_name: row.agent_name ?? null,
+    expires_at: row.expires_at ?? null,
+    expired: row.expires_at != null && row.expires_at <= Date.now(),
+    invalidated: row.invalidated === 1,
+    supersedes_id: row.supersedes_id ?? null,
+    last_accessed_at: row.last_accessed_at ?? null,
+    access_count: typeof row.access_count === "number" ? row.access_count : 0,
     version: row.version,
     created_at: row.created_at,
     updated_at: row.updated_at,
@@ -273,6 +293,76 @@ function cleanGroupId(value: unknown): string | null | undefined {
   if (typeof value !== "string") throw new MemError("分组格式不正确");
   const groupId = value.trim();
   return groupId ? groupId : null;
+}
+
+// ---------------------------------------------------------------------------
+// 生命周期（P2）：kind / agent_name / expires_at / supersedes_id 的入参清洗、
+// content_hash 精确去重。hash 规范化口径：标题 trim、正文统一换行并 trim，
+// 以 "\n" 连接后取 SHA-256 hex；标题或正文任一变化都会得到不同 hash。
+
+export const MEMORY_KINDS = ["fact", "preference", "procedure", "episode"];
+
+function cleanKind(value: unknown): string | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  if (typeof value !== "string") throw new MemError("kind 格式不正确");
+  const kind = value.trim();
+  if (!kind) return null;
+  if (!MEMORY_KINDS.includes(kind)) throw new MemError("kind 只能是 fact、preference、procedure、episode");
+  return kind;
+}
+
+function cleanAgentNameField(value: unknown): string | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  if (typeof value !== "string") throw new MemError("agent_name 格式不正确");
+  const name = value.trim();
+  if (!name) return null;
+  if (name.length > 80) throw new MemError("agent_name 过长");
+  return name;
+}
+
+function cleanExpiresAt(value: unknown): number | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  if (typeof value === "number" && Number.isFinite(value) && value >= 0) return Math.floor(value);
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Date.parse(value.trim());
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  throw new MemError("expires_at 格式不正确");
+}
+
+function cleanSupersedesId(value: unknown): string | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  if (typeof value !== "string") throw new MemError("supersedes_id 格式不正确");
+  const id = value.trim();
+  return id ? id : null;
+}
+
+export async function computeContentHash(title: string, content: string): Promise<string> {
+  const normalized = title.trim() + "\n" + content.replace(/\r\n?/g, "\n").trim();
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(normalized));
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+// 精确去重键：同 scope + 同 agent_name（NULL 用 IS 做空值安全比较）、
+// 未删除未失效的同 hash 记忆。命中即视为同一条，不再重复插入。
+async function findActiveByContentHash(
+  db: D1Database,
+  scope: string,
+  agentName: string | null,
+  hash: string,
+): Promise<MemoryRow | null> {
+  const row = await prepare(
+    db,
+    "SELECT * FROM memories WHERE content_hash = ? AND scope = ? AND agent_name IS ? AND deleted_at IS NULL AND invalidated = 0",
+    [hash, scope, agentName],
+  ).first<MemoryRow>();
+  return row ?? null;
 }
 
 const GROUP_NAME_MAX = 40;
@@ -380,6 +470,7 @@ export interface PageOptions {
 export interface ListOptions extends PageOptions {
   scope?: string | null;
   since?: number | null;
+  now?: number | null;
 }
 
 // 面板列表与 MCP 全量读取、搜索共用：先置顶组、后普通组；组内权重降序，再更新时间降序。
@@ -406,7 +497,12 @@ export async function listMemories(db: D1Database, options: ListOptions = {}): P
     where.push("(updated_at > ? OR (deleted_at IS NOT NULL AND deleted_at > ?))");
     values.push(options.since, options.since);
   } else {
+    // 默认视图只看活记忆：被取代（invalidated）与已过期的不进列表。
+    // 增量（since）路径不走这里：失效行 updated_at 会变，同步方能感知。
     where.push("deleted_at IS NULL");
+    where.push("invalidated = 0");
+    where.push("(expires_at IS NULL OR expires_at > ?)");
+    values.push(options.now ?? Date.now());
   }
   if (options.scope) {
     where.push("scope = ?");
@@ -460,6 +556,9 @@ async function searchMemoriesFts(
     sql += "AND m.scope = ? ";
     values.push(scope);
   }
+  // 与 list/LIKE 同口径：被取代与已过期的记忆不进搜索结果。
+  sql += "AND m.invalidated = 0 AND (m.expires_at IS NULL OR m.expires_at > ?) ";
+  values.push(Date.now());
   // 候选窗口先按 bm25 取前 offset+limit 条，再按完整公式重排切页：
   // 公式里的衰减与权重不在 SQL 里算，窗口外的极弱命中本就进不了前列。
   sql += "ORDER BY fts_rank ASC LIMIT ?";
@@ -489,7 +588,8 @@ async function searchMemoriesLike(
   const like = "%" + query.replace(/[%_]/g, " ") + "%";
   const values: Array<string | number> = [like, like, like];
   let sql =
-    "SELECT * FROM memories WHERE deleted_at IS NULL AND (title LIKE ? OR content LIKE ? OR tags_json LIKE ?) ";
+    "SELECT * FROM memories WHERE deleted_at IS NULL AND (title LIKE ? OR content LIKE ? OR tags_json LIKE ?) AND invalidated = 0 AND (expires_at IS NULL OR expires_at > ?) ";
+  values.push(Date.now());
   if (scope) {
     sql += "AND scope = ? ";
     values.push(scope);
@@ -519,19 +619,31 @@ export async function searchMemories(
   }
   return searchMemoriesLike(db, query, scope, options);
 }
+// memory_get 的访问统计节流窗口：同一条记忆 1 小时内反复读只记一次。
+const ACCESS_TRACK_THROTTLE_MS = 60 * 60 * 1000;
 
 interface Channel {
   actor: string;
   source: string; // 'panel' | 'mcp'
   auditReads: boolean;
+  // MCP 通道带调用 Agent 名：写入记忆时作为 agent_name 缺省归属；
+  // 面板通道不带，缺省为全局（NULL）。入参显式给 agent_name 时优先。
+  agentName?: string | null;
 }
 
 export async function readMemory(db: D1Database, id: string, channel: Channel, now: number): Promise<MemoryRow | null> {
   const row = await getMemoryRow(db, id);
-  if (row && channel.auditReads) {
-    await audit(db, { memoryId: row.id, actor: channel.actor, action: "get", diff: { title: row.title, scope: row.scope, version: row.version } }, now);
+  if (!row) return null;
+  // 访问统计节流：距上次记录超过 1 小时才写库，避免每次读都触发一次写。
+  let current = row;
+  if (row.last_accessed_at == null || now - row.last_accessed_at > ACCESS_TRACK_THROTTLE_MS) {
+    await prepare(db, "UPDATE memories SET last_accessed_at = ?, access_count = access_count + 1 WHERE id = ?", [now, id]).run();
+    current = { ...row, last_accessed_at: now, access_count: (typeof row.access_count === "number" ? row.access_count : 0) + 1 };
   }
-  return row;
+  if (channel.auditReads) {
+    await audit(db, { memoryId: current.id, actor: channel.actor, action: "get", diff: { title: current.title, scope: current.scope, version: current.version } }, now);
+  }
+  return current;
 }
 
 export async function listMemoriesAudited(db: D1Database, options: ListOptions, channel: Channel, now: number): Promise<MemoryRow[]> {
@@ -562,6 +674,10 @@ interface TierFields {
   pinnedAt?: number | null;
   weight?: number;
   aiState?: string;
+  kind?: string | null;
+  agentName?: string | null;
+  expiresAt?: number | null;
+  supersedesId?: string | null;
 }
 
 async function insertMemory(
@@ -572,28 +688,49 @@ async function insertMemory(
   ai?: MemoryWriteOptions["ai"],
 ): Promise<MemoryRow> {
   const id = newId("mem");
-  await prepare(
-    db,
-    "INSERT INTO memories (id, title, scope, content, source, tags_json, version, created_at, updated_at, deleted_at, group_id, pinned_at, weight, ai_state) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, NULL, ?, ?, ?, ?)",
-    [
-      id,
-      fields.title,
-      fields.scope,
-      fields.content,
-      channel.source,
-      JSON.stringify(fields.tags),
-      now,
-      now,
-      fields.groupId ?? null,
-      fields.pinnedAt ?? null,
-      fields.weight ?? 0,
-      fields.aiState ?? "none",
-    ],
-  ).run();
+  const agentName = fields.agentName !== undefined ? fields.agentName : channel.agentName ?? null;
+  const hash = await computeContentHash(fields.title, fields.content);
+  const statements = [
+    prepare(
+      db,
+      "INSERT INTO memories (id, title, scope, content, source, tags_json, version, created_at, updated_at, deleted_at, group_id, pinned_at, weight, ai_state, kind, agent_name, expires_at, content_hash, supersedes_id) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      [
+        id,
+        fields.title,
+        fields.scope,
+        fields.content,
+        channel.source,
+        JSON.stringify(fields.tags),
+        now,
+        now,
+        fields.groupId ?? null,
+        fields.pinnedAt ?? null,
+        fields.weight ?? 0,
+        fields.aiState ?? "none",
+        fields.kind ?? null,
+        agentName,
+        fields.expiresAt ?? null,
+        hash,
+        fields.supersedesId ?? null,
+      ],
+    ),
+  ];
+  if (fields.supersedesId) {
+    // 取代与新建同一 batch 落库：旧记忆 invalidated 置 1，行保留可追溯。
+    const old = await getMemoryRow(db, fields.supersedesId);
+    if (!old) throw new MemError("要取代的记忆不存在", 400);
+    statements.push(
+      prepare(db, "UPDATE memories SET invalidated = 1, updated_at = ? WHERE id = ? AND deleted_at IS NULL", [now, fields.supersedesId]),
+    );
+  }
+  await db.batch(statements);
   const row = await getMemoryRow(db, id);
   if (!row) throw new MemError("写入后读取失败", 500);
   await audit(db, { memoryId: id, actor: channel.actor, action: "create", diff: { title: row.title, scope: row.scope } }, now);
   scheduleMemorySummary(ai, db, row);
+  if (fields.supersedesId) {
+    await audit(db, { memoryId: fields.supersedesId, actor: channel.actor, action: "supersede", diff: { by: id } }, now);
+  }
   return row;
 }
 
@@ -623,11 +760,33 @@ export async function createMemory(
   const weight = cleanWeight(input.weight) ?? 0;
   const pinned = cleanPinned(input.pinned);
   const aiState = typeof input.ai_state === "string" && input.ai_state ? input.ai_state : "none";
+  const kind = cleanKind(input.kind);
+  const agentNameInput = cleanAgentNameField(input.agent_name);
+  const expiresAt = cleanExpiresAt(input.expires_at);
+  const supersedesId = cleanSupersedesId(input.supersedes_id);
+  // 精确去重先于同名冲突：标题与正文都完全一致（同 hash）就是同一条，
+  // 直接返回既有行；同名但内容不同才走下面的 409。
+  const agentName = agentNameInput !== undefined ? agentNameInput : channel.agentName ?? null;
+  const duplicate = await findActiveByContentHash(db, scope, agentName, await computeContentHash(title, content));
+  if (duplicate) return duplicate;
   const existing = await findActiveByTitleScope(db, title, scope);
   if (existing) throw new MemError("同一作用域下已存在同名记忆，请改标题或用编辑", 409);
   return insertMemory(
     db,
-    { title, scope, content, tags, groupId, weight, pinnedAt: pinned === true ? now : null, aiState },
+    {
+      title,
+      scope,
+      content,
+      tags,
+      groupId,
+      weight,
+      pinnedAt: pinned === true ? now : null,
+      aiState,
+      kind: kind ?? null,
+      agentName,
+      expiresAt: expiresAt ?? null,
+      supersedesId: supersedesId ?? null,
+    },
     channel,
     now,
     options.ai,
@@ -662,9 +821,35 @@ async function applyUpdate(
   }
   // 正文变了，旧摘要立即作废（snippet 先退回正文截断），新摘要由旁路补。
   if (fields.content !== row.content) assignments.push("ai_summary = NULL");
+  if (fields.kind !== undefined) {
+    assignments.push("kind = ?");
+    params.push(fields.kind);
+  }
+  if (fields.agentName !== undefined) {
+    assignments.push("agent_name = ?");
+    params.push(fields.agentName);
+  }
+  if (fields.expiresAt !== undefined) {
+    assignments.push("expires_at = ?");
+    params.push(fields.expiresAt);
+  }
+  if (fields.supersedesId !== undefined) {
+    assignments.push("supersedes_id = ?");
+    params.push(fields.supersedesId);
+  }
+  assignments.push("content_hash = ?");
+  params.push(await computeContentHash(fields.title, fields.content));
   assignments.push("version = version + 1", "updated_at = ?", "deleted_at = NULL");
   params.push(now, row.id);
+  if (fields.supersedesId) {
+    const old = await getMemoryRow(db, fields.supersedesId);
+    if (!old) throw new MemError("要取代的记忆不存在", 400);
+  }
   await prepare(db, "UPDATE memories SET " + assignments.join(", ") + " WHERE id = ?", params).run();
+  if (fields.supersedesId && fields.supersedesId !== row.id) {
+    await prepare(db, "UPDATE memories SET invalidated = 1, updated_at = ? WHERE id = ? AND deleted_at IS NULL", [now, fields.supersedesId]).run();
+    await audit(db, { memoryId: fields.supersedesId, actor: channel.actor, action: "supersede", diff: { by: row.id } }, now);
+  }
   const updated = await getMemoryRow(db, row.id);
   if (!updated) throw new MemError("写入后读取失败", 500);
   await audit(db, { memoryId: row.id, actor: channel.actor, action, diff: { title: updated.title, scope: updated.scope, version: updated.version } }, now);
@@ -683,10 +868,20 @@ export async function upsertMemory(db: D1Database, input: Record<string, unknown
   if (groupId !== undefined) await requireGroup(db, groupId);
   const weight = cleanWeight(input.weight);
   const pinned = cleanPinned(input.pinned);
+  const kind = cleanKind(input.kind);
+  const agentNameInput = cleanAgentNameField(input.agent_name);
+  const expiresAt = cleanExpiresAt(input.expires_at);
+  const supersedesId = cleanSupersedesId(input.supersedes_id);
   const id = typeof input.id === "string" && input.id.trim() ? input.id.trim() : null;
   let target: MemoryRow | null = null;
   if (id) target = await getMemoryRow(db, id, true);
-  if (!target) target = await findActiveByTitleScope(db, title, scope);
+  if (!target) {
+    // 精确去重优先于标题匹配：内容完全一致就是同一条，直接返回，不再写入。
+    const agentName = agentNameInput !== undefined ? agentNameInput : channel.agentName ?? null;
+    target = await findActiveByContentHash(db, scope, agentName, await computeContentHash(title, content));
+    if (target) return target;
+    target = await findActiveByTitleScope(db, title, scope);
+  }
   if (!target) {
     await assertTagCapacity(db, tags ?? []);
     return insertMemory(
@@ -699,6 +894,10 @@ export async function upsertMemory(db: D1Database, input: Record<string, unknown
         groupId: groupId ?? null,
         weight: weight ?? 0,
         pinnedAt: pinned === true ? now : null,
+        kind: kind ?? null,
+        agentName: agentNameInput !== undefined ? agentNameInput : channel.agentName ?? null,
+        expiresAt: expiresAt ?? null,
+        supersedesId: supersedesId ?? null,
       },
       channel,
       now,
@@ -724,6 +923,10 @@ export async function upsertMemory(db: D1Database, input: Record<string, unknown
       groupId: groupId !== undefined ? groupId : target.group_id,
       weight,
       pinnedAt: pinned === undefined ? undefined : pinned ? now : null,
+      kind,
+      agentName: agentNameInput,
+      expiresAt,
+      supersedesId,
     },
     channel,
     target.deleted_at != null ? "upsert_revive" : "upsert",
@@ -744,6 +947,10 @@ export async function updateMemory(db: D1Database, id: string, input: Record<str
   if (groupId !== undefined) await requireGroup(db, groupId);
   const weight = cleanWeight(input.weight);
   const pinned = cleanPinned(input.pinned);
+  const kind = cleanKind(input.kind);
+  const agentNameInput = cleanAgentNameField(input.agent_name);
+  const expiresAt = cleanExpiresAt(input.expires_at);
+  const supersedesId = cleanSupersedesId(input.supersedes_id);
   if (title !== row.title || scope !== row.scope) {
     const clash = await findActiveByTitleScope(db, title, scope);
     if (clash && clash.id !== row.id) throw new MemError("同一作用域下已存在同名记忆", 409);
@@ -760,6 +967,10 @@ export async function updateMemory(db: D1Database, id: string, input: Record<str
       groupId: groupId !== undefined ? groupId : row.group_id,
       weight,
       pinnedAt: pinned === undefined ? undefined : pinned ? now : null,
+      kind,
+      agentName: agentNameInput,
+      expiresAt,
+      supersedesId,
     },
     channel,
     "update",
@@ -849,4 +1060,43 @@ export async function applyAiTags(
   if (!updated) throw new MemError("写入后读取失败", 500);
   await audit(db, { memoryId: id, actor: channel.actor, action: "ai_tag", diff: { tags, ai_state: nextState } }, now);
   return updated;
+}
+
+// ---------------------------------------------------------------------------
+// Memory 与 Soul 打通（P2）：Soul 的常驻核心记忆。取该 Agent 的置顶记忆
+// （agent_name 为本人或全局），排除删除、失效与过期，按统一读序返回；
+// 总字符预算 CORE_MEMORIES_CHAR_BUDGET，按 id+标题+摘要累计，超了就少回
+// 几条；只有第一条本身就超预算时才截短它的摘要，保证至少回一条。
+
+export const CORE_MEMORIES_CHAR_BUDGET = 4000;
+
+export interface CoreMemory {
+  id: string;
+  title: string;
+  snippet: string;
+}
+
+export async function listCoreMemories(db: D1Database, agentName: string, now: number): Promise<CoreMemory[]> {
+  const result = await prepare(
+    db,
+    "SELECT * FROM memories WHERE pinned_at IS NOT NULL AND deleted_at IS NULL AND invalidated = 0 AND (expires_at IS NULL OR expires_at > ?) AND (agent_name IS NULL OR agent_name = '' OR agent_name = ?) ORDER BY " +
+      MEMORY_READ_ORDER,
+    [now, agentName],
+  ).all<MemoryRow>();
+  const picked: CoreMemory[] = [];
+  let used = 0;
+  for (const row of rowsOf(result)) {
+    const full = row.ai_summary && row.ai_summary.trim() ? row.ai_summary : row.content.slice(0, 200);
+    let snippet = full;
+    let cost = row.id.length + row.title.length + snippet.length;
+    if (used + cost > CORE_MEMORIES_CHAR_BUDGET) {
+      const room = CORE_MEMORIES_CHAR_BUDGET - used - row.id.length - row.title.length;
+      if (picked.length > 0 || room <= 0) break;
+      snippet = full.slice(0, room);
+      cost = row.id.length + row.title.length + snippet.length;
+    }
+    picked.push({ id: row.id, title: row.title, snippet });
+    used += cost;
+  }
+  return picked;
 }
