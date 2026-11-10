@@ -71,6 +71,8 @@ import {
 } from "./machines";
 
 import { apiSummary, ExtraError, getApiForAgent, getSkillForAgent, listApis, listSkills, skillSummary } from "./extras";
+import { VaultError } from "./vault";
+import { getTotpCodeForAgent, listTotpForAgent } from "./vault-totp";
 
 const MAX_BODY_BYTES = 64 * 1024;
 
@@ -498,6 +500,21 @@ const TOOLS = [
       additionalProperties: false,
     },
   },
+  {
+    name: "vault_2fa_list",
+    description: "列出保险库中允许 AI 读取的验证码条目（id、服务名、账号、位数、周期、分组），不含密钥与验证码",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "vault_2fa_get_code",
+    description: "按 id 取一条验证码条目的当前码与剩余秒数，只返回验证码，不返回密钥。取码前先写一条访问记录。只在当前任务确实需要登录时调用，不要把验证码写入记忆、日志或文件",
+    inputSchema: {
+      type: "object",
+      properties: { id: { type: "string", description: "验证码条目 id" } },
+      required: ["id"],
+      additionalProperties: false,
+    },
+  },
 ];
 
 // 权限分类（域、操作、advanced 开关）在 src/tool-permissions.ts，单一事实
@@ -629,6 +646,14 @@ async function callTool(request: Request, env: Env, ctx: WaitCtx, id: unknown, p
       return await callMachinesTool(env, id, name, record as Record<string, unknown>, auth.agentId);
     } catch (error) {
       if (error instanceof MachineError) return toolResult(id, error.message, true);
+      throw error;
+    }
+  }
+  if (name.startsWith("vault_2fa_")) {
+    try {
+      return await callVaultTotpTool(env, id, name, record as Record<string, unknown>, auth.agentName);
+    } catch (error) {
+      if (error instanceof VaultError) return toolResult(id, error.message, true);
       throw error;
     }
   }
@@ -994,6 +1019,29 @@ async function callTasksTool(env: Env, id: unknown, name: string, args: Record<s
     if (!taskId) return toolResult(id, "请提供 task_id", true);
     const completed = await completeTask(env.DB, taskId, agentId, now);
     return toolResult(id, { task: taskPublic(completed) });
+  }
+  return toolResult(id, "未知工具", true);
+}
+
+async function callVaultTotpTool(
+  env: Env,
+  id: unknown,
+  name: string,
+  args: Record<string, unknown>,
+  agentName: string,
+): Promise<Response> {
+  if (name === "vault_2fa_list") {
+    const entries = await listTotpForAgent(env.DB);
+    return toolResult(id, { entries });
+  }
+  if (name === "vault_2fa_get_code") {
+    const now = Date.now();
+    const entryId = argString(args, "id") ?? "";
+    if (!entryId.trim()) return toolResult(id, "请提供 id", true);
+    const code = await getTotpCodeForAgent(env.DB, env, entryId.trim(), agentName, now);
+    // ai_read=0 与真的不存在同一口径，不暴露条目是否被关闭。
+    if (!code) return toolResult(id, "验证码条目不存在", true);
+    return toolResult(id, code);
   }
   return toolResult(id, "未知工具", true);
 }

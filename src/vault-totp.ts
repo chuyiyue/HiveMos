@@ -4,8 +4,13 @@
 //
 // 机密口径与条目密码一致：secret_enc 是 VAULT_KEY 信封的 AES-GCM 密文
 // （sealSecret / openSecret 复用 vault.ts），列表只回公开字段与当前码。
-// 密钥明文只有两条出路：/api/vault/reveal（kind=totp）与重验管理员密码的
-// 导出接口，两者都先写一条 vault_access_log（action 'reveal' / 'export'）。
+// 密钥明文只有三条出路：/api/vault/reveal（kind=totp）、重验管理员密码的
+// 导出接口，以及阶段 6 的 MCP 取码（vault_2fa_get_code）；前两条写
+// vault_access_log（action 'reveal' / 'export'），MCP 取码写同口径的
+// action 'reveal' 并把 actor 记成调用 Agent 的名字。
+//
+// MCP 面只开放「列出允许 AI 读取的条目」和「取当前码」，永不返回密钥；
+// ai_read=0 的条目在列表里看不到，取码按「不存在」处理。
 //
 // 判重只看 secret_hash：归一化密钥（base32 大写、无空格/横线/填充）的
 // SHA-256 十六进制。它不可逆推明文，也不进备份包，只用于「同一条密钥
@@ -490,6 +495,78 @@ export async function listTotpCodes(db: D1Database, env: Env, now: number): Prom
     });
   }
   return entries;
+}
+
+// ---- MCP 面（阶段 6） -------------------------------------------------------
+//
+// 只读工具的两个入口：列表只回公开字段（服务名、账号、位数、周期、分组），
+// 取码只回当前码与剩余秒数。与面板 reveal 的审计口径一致：先写
+// vault_access_log（target_kind 'totp'、action 'reveal'、actor 为 Agent 名），
+// 写不进就不解密、不生成码。
+
+export interface TotpAgentEntry {
+  id: string;
+  issuer: string;
+  account: string;
+  digits: number;
+  period: number;
+  group: string | null;
+}
+
+export async function listTotpForAgent(db: D1Database): Promise<TotpAgentEntry[]> {
+  const rows = rowsOf(
+    await prepare(
+      db,
+      "SELECT t.id, t.issuer, t.account, t.digits, t.period, g.name AS group_name " +
+        "FROM vault_totp t LEFT JOIN vault_groups g ON g.id = t.group_id " +
+        "WHERE t.ai_read = 1 ORDER BY t.issuer ASC, t.account ASC, t.id ASC",
+    ).all<{
+      id: string;
+      issuer: string;
+      account: string;
+      digits: number;
+      period: number;
+      group_name: string | null;
+    }>(),
+  );
+  return rows.map((row) => ({
+    id: row.id,
+    issuer: row.issuer,
+    account: row.account,
+    digits: Number(row.digits),
+    period: Number(row.period),
+    group: row.group_name ?? null,
+  }));
+}
+
+// ai_read=0 的条目对 Agent 按「不存在」处理：返回 null，由调用方给统一文案。
+export async function getTotpCodeForAgent(
+  db: D1Database,
+  env: Env,
+  id: string,
+  agentName: string,
+  now: number,
+): Promise<{ code: string; expires_in: number } | null> {
+  const row = await getTotpEntry(db, id);
+  if (!row || row.ai_read === 0) return null;
+  // 审计门在解密之前：写不进就抛错，验证码绝不出函数。actor 空串按「没有
+  // Agent」处理，与 vault_access_log「actor 非空才算 Agent」一致。
+  try {
+    await prepare(
+      db,
+      "INSERT INTO vault_access_log (id, target_kind, target_id, action, actor, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+      [newId("va"), "totp", row.id, "reveal", agentName.trim() || null, now],
+    ).run();
+  } catch {
+    throw new VaultError("访问记录写入失败，未返回验证码", 500);
+  }
+  assertVaultKey(env);
+  const secret = base32Decode(await openSecret(env, row.secret_enc));
+  if (!secret) throw new VaultError("验证码密钥无法解析，未返回验证码", 500);
+  const period = Number(row.period) || DEFAULT_PERIOD;
+  const nowSeconds = Math.floor(now / 1000);
+  const code = await hotp(secret, Math.floor(nowSeconds / period), row.digits, storedAlgorithm(row));
+  return { code, expires_in: period - (nowSeconds % period) };
 }
 
 // ---- 导入解析（阶段 3） -----------------------------------------------------

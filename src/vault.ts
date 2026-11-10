@@ -10,12 +10,12 @@
 // show smtp_secret_set. Reading one goes through revealSecret, which
 // writes a vault_access_log row first.
 //
-// There is still no MCP surface: agent access waits for the key-lease and
-// vault-permission work, so vault_entries/gateways/emails stay panel-only.
-// The TOTP table (migration 0033) already carries the shape that surface
-// needs — ai_read per entry and an actor column on vault_access_log — and
-// the panel paths leave actor NULL; stage 6 fills it in when agents are
-// allowed to read codes.
+// The only MCP surface is the TOTP code pair in vault-totp.ts
+// (vault_2fa_list / vault_2fa_get_code), gated by vault read plus the
+// advanced vault_totp_code switch. Entries, gateways and emails stay
+// panel-only: agent access waits for the key-lease and vault-permission
+// work. vault_access_log.actor is filled with the calling agent's name on
+// the MCP code path; panel paths leave it NULL.
 //
 // vault_access_log 只是审计事实源：读取记录的展示已归入系统日志（oplog
 // 的「保险库」board，见 revealSecret 里的 logOp 与 src/oplog.ts）。本表不再
