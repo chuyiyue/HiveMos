@@ -23,7 +23,6 @@
     calendar: "日历",
     vault: "保险库",
     machines: "云计算资源",
-    proxy: "代理",
   };
   const ADV_LABELS = {
     agents_other: "操作其他 Agent",

@@ -16,9 +16,8 @@
 (function () {
   var C = window.HiveCommon;
   var hashTab = location.hash;
-  if (hashTab === "#nodes") hashTab = "#proxy";
   if (hashTab === "#workers") hashTab = "#edge";
-  var activeTab = hashTab === "#hosts" ? "hosts" : hashTab === "#proxy" ? "proxy" : hashTab === "#edge" ? "edge" : "servers";
+  var activeTab = hashTab === "#hosts" ? "hosts" : hashTab === "#edge" ? "edge" : "servers";
   var API_KIND = { server: "server", host: "cloud", worker: "worker" };
   var TITLE_FOR = { server: "服务器", host: "云主机", worker: "Worker" };
 
@@ -603,9 +602,6 @@
       '<button class="page-tab" type="button" role="tab" data-tab="hosts" aria-selected="' +
       (activeTab === "hosts" ? "true" : "false") +
       '">云主机</button>' +
-      '<button class="page-tab" type="button" role="tab" data-tab="proxy" aria-selected="' +
-      (activeTab === "proxy" ? "true" : "false") +
-      '">代理</button>' +
       '<button class="page-tab" type="button" role="tab" data-tab="edge" aria-selected="' +
       (activeTab === "edge" ? "true" : "false") +
       '">边缘计算</button>' +
