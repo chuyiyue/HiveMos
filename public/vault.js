@@ -432,9 +432,43 @@
   function groupActions(group) {
     var id = C.escapeHtml(group.id);
     return (
-      "<button type=\"button\" class=\"secondary\" data-action=\"rename-vgroup\" data-id=\"" + id + "\">改名</button>" +
-      "<button type=\"button\" class=\"danger\" data-confirm-delete data-action=\"delete-vgroup\" data-id=\"" + id + "\">删除</button>"
+      "<button type=\"button\" class=\"icon-btn ghost group-menu-btn\" data-action=\"vgroup-menu\" data-id=\"" + id + "\" aria-label=\"分组操作\" aria-haspopup=\"menu\">" + GROUP_MENU_ICON + "</button>" +
+      "<span class=\"confirm-slot\" data-confirm-group=\"" + id + "\"></span>"
     );
+  }
+
+  // 分组头只留一个三条线菜单按钮：改名/删除收进 C.openActionMenu；
+  // 删除沿用机器页 deleteGroupFlow 的 askConfirm 文案做二次确认。
+  var GROUP_MENU_ICON =
+    '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>';
+
+  function confirmDeleteGroup(group, btn, run) {
+    var section = btn ? btn.closest("section") : null;
+    var slot = section ? section.querySelector('[data-confirm-group="' + group.id + '"]') : null;
+    C.askConfirm({
+      anchor: slot || btn,
+      title: "删除分组",
+      text: "确认删除分组「" + group.name + "」吗？组内条目会回到未分组，不会被删除",
+      confirmLabel: "删除",
+      danger: true,
+    }).then(function (yes) {
+      if (yes) run();
+    });
+  }
+
+  function openGroupMenu(group, btn) {
+    C.openActionMenu({
+      items: [
+        { label: "改名", onSelect: function () { openGroupDialog(group); } },
+        {
+          label: "删除",
+          danger: true,
+          onSelect: function () {
+            confirmDeleteGroup(group, btn, function () { deleteVaultGroup(group); });
+          },
+        },
+      ],
+    });
   }
 
   // 账号密码与模型网关按共用分组池分区展示，分组在前、未分组置后
@@ -941,8 +975,7 @@
       if (a2 === "add-secret") { openSecretDialog(null); return; }
       if (a2 === "add-gateway") { openGatewayDialog(null); return; }
       if (a2 === "add-vgroup") { openGroupDialog(null); return; }
-      if (a2 === "rename-vgroup" && gfound) { openGroupDialog(gfound); return; }
-      if (a2 === "delete-vgroup" && gfound) { deleteVaultGroup(gfound); return; }
+      if (a2 === "vgroup-menu" && gfound) { openGroupMenu(gfound, act2); return; }
     }
     var add = target.closest("[data-add]");
     if (add) {

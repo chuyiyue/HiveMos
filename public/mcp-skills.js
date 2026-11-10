@@ -420,23 +420,58 @@
     return function (group) {
       var prefix = scope === "mcp" || scope === "skills" || scope === "api" ? "" : "local-";
       var scopeAttr = scope === "mcp" ? "" : ' data-scope="' + scope + '"';
+      var gid = C.escapeHtml(group.id);
       return (
-        '<button type="button" class="secondary" data-action="' +
+        '<button type="button" class="icon-btn ghost group-menu-btn" data-action="' +
         prefix +
-        'rename-group" data-id="' +
-        C.escapeHtml(group.id) +
+        'group-menu" data-id="' +
+        gid +
         '"' +
         scopeAttr +
-        '>改名</button><button type="button" class="danger" data-confirm-delete data-action="' +
-        prefix +
-        'delete-group" data-id="' +
-        C.escapeHtml(group.id) +
-        '"' +
-        scopeAttr +
-        '>删除</button>'
+        ' aria-label="分组操作" aria-haspopup="menu">' +
+        GROUP_MENU_ICON +
+        "</button>" +
+        '<span class="confirm-slot" data-confirm-group="' +
+        gid +
+        '"></span>'
       );
     };
   }
+
+  // 分组头只留一个三条线菜单按钮：改名/删除收进 C.openActionMenu；
+  // 删除沿用机器页 deleteGroupFlow 的 askConfirm 文案做二次确认。
+  var GROUP_MENU_ICON =
+    '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>';
+
+  function confirmDeleteGroup(group, btn, run) {
+    var section = btn ? btn.closest("section") : null;
+    var slot = section ? section.querySelector('[data-confirm-group="' + group.id + '"]') : null;
+    C.askConfirm({
+      anchor: slot || btn,
+      title: "删除分组",
+      text: "确认删除分组「" + group.name + "」吗？组内条目会回到未分组，不会被删除",
+      confirmLabel: "删除",
+      danger: true,
+    }).then(function (yes) {
+      if (yes) run();
+    });
+  }
+
+  function openGroupMenu(group, btn, renameFn, deleteFn) {
+    C.openActionMenu({
+      items: [
+        { label: "改名", onSelect: renameFn },
+        {
+          label: "删除",
+          danger: true,
+          onSelect: function () {
+            confirmDeleteGroup(group, btn, deleteFn);
+          },
+        },
+      ],
+    });
+  }
+
 
   function groupedHtml(scope, groups, items, renderItem, emptyText) {
     return C.groupedSections({
@@ -667,12 +702,15 @@
     else if (action === "refresh") refresh(id);
     else if (action === "delete") removeServer(id, button);
     else if (action === "add-group") openGroupDialog();
-    else if (action === "rename-group") {
+    else if (action === "group-menu") {
       var group = findGroup(id);
-      if (group) openRenameGroupDialog(group);
-    } else if (action === "delete-group") {
-      var group2 = findGroup(id);
-      if (group2) deleteGroupFlow(group2);
+      if (group)
+        openGroupMenu(
+          group,
+          button,
+          function () { openRenameGroupDialog(group); },
+          function () { deleteGroupFlow(group); }
+        );
     } else if (action === "local-add") openLocalDialog(activeTab, null);
     else if (action === "local-add-group") openLocalGroupDialog(activeTab, null);
     else if (action === "local-edit") {
@@ -683,14 +721,16 @@
       var delScope2 = button.getAttribute("data-scope") || "";
       var delItem = findLocalItem(delScope2, id);
       if (delItem) deleteLocalItem(delScope2, delItem);
-    } else if (action === "local-rename-group") {
-      var renameScope = button.getAttribute("data-scope") || "";
-      var localGroup = findLocalGroup(renameScope, id);
-      if (localGroup) openLocalGroupDialog(renameScope, localGroup);
-    } else if (action === "local-delete-group") {
-      var deleteScope = button.getAttribute("data-scope") || "";
-      var localGroup2 = findLocalGroup(deleteScope, id);
-      if (localGroup2) deleteLocalGroup(deleteScope, localGroup2);
+    } else if (action === "local-group-menu") {
+      var menuScope = button.getAttribute("data-scope") || "";
+      var localGroup = findLocalGroup(menuScope, id);
+      if (localGroup)
+        openGroupMenu(
+          localGroup,
+          button,
+          function () { openLocalGroupDialog(menuScope, localGroup); },
+          function () { deleteLocalGroup(menuScope, localGroup); }
+        );
     }
   }
 

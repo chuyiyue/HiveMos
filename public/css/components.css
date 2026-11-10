@@ -276,6 +276,8 @@ dialog.modal::backdrop { background: var(--overlay); }
 /* Small actions parked at the right of a section head (group rename/delete). */
 .section-actions { display: flex; gap: 8px; margin-left: auto; }
 .section-actions button { min-height: 32px; padding: 4px 10px; font-size: var(--fs-sm); }
+.section-actions .group-menu-btn { width: 32px; min-width: 32px; min-height: 32px; padding: 0; }
+.section-actions .group-menu-btn .icon { width: 18px; height: 18px; }
 
 /* Centered floating action menu (openActionMenu). Deliberately not a
    drawer: it stays centered with margins on phones too. */
