@@ -30,6 +30,10 @@ export interface Env {
   AI_MODEL?: string;
   // Optional. Seals TOTP secrets. Blank stores them with a plain: prefix.
   CONTENT_KEY?: string;
+  // Optional GitHub OAuth secrets. Missing either one hides every GitHub
+  // entry point; the system keeps working with password login only.
+  GITHUB_CLIENT_ID?: string;
+  GITHUB_CLIENT_SECRET?: string;
 }
 
 export interface WaitCtx {
