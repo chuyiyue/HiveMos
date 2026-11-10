@@ -764,6 +764,7 @@
       "<button type=\"button\" class=\"page-tab\" role=\"tab\" data-mtab=\"overview\" aria-selected=\"" + (initialTab === "overview" ? "true" : "false") + "\">概览</button>" +
       "<button type=\"button\" class=\"page-tab\" role=\"tab\" data-mtab=\"perms\" aria-selected=\"" + (initialTab === "perms" ? "true" : "false") + "\">权限</button>" +
       "<button type=\"button\" class=\"page-tab\" role=\"tab\" data-mtab=\"records\" aria-selected=\"" + (initialTab === "records" ? "true" : "false") + "\">访问记录</button>" +
+      "<button type=\"button\" class=\"page-tab\" role=\"tab\" data-mtab=\"connections\" aria-selected=\"false\">连接</button>" +
       "<button type=\"button\" class=\"page-tab\" role=\"tab\" data-mtab=\"advanced\" aria-selected=\"" + (initialTab === "advanced" ? "true" : "false") + "\">高级设置</button>" +
       "</div>" +
       "<div data-mpanel=\"overview\"" + (initialTab === "overview" ? "" : " hidden") + ">" +
@@ -791,6 +792,11 @@
       "<div data-mpanel=\"records\"" + (initialTab === "records" ? "" : " hidden") + ">" +
       "<div data-agent-records-body>" +
       (opts && opts.recordsHtml ? opts.recordsHtml : '<p class="subtle">正在读取</p>') +
+      "</div>" +
+      "</div>" +
+      "<div data-mpanel=\"connections\" hidden>" +
+      "<div data-oauth-conn-body>" +
+      (opts && opts.connectionsHtml ? opts.connectionsHtml : '<p class="subtle">正在读取</p>') +
       "</div>" +
       "</div>" +
       "<div data-mpanel=\"perms\"" + (initialTab === "perms" ? "" : " hidden") + ">" +
@@ -1212,7 +1218,7 @@
           if (!dataChanged) return;
           if (silent && (interacted || busy)) return;
           ctrl.setTitle(fresh.name);
-          ctrl.setBody(agentManageBody(fresh, groupNameOf(fresh), { recordsHtml: agentRecordsHtml, tab: currentTab }));
+          ctrl.setBody(agentManageBody(fresh, groupNameOf(fresh), { recordsHtml: agentRecordsHtml, connectionsHtml: oauthConnHtml, tab: currentTab }));
           syncPermUI();
           applyEndpointToken();
         })
@@ -2052,8 +2058,134 @@
         });
     }
 
+
+    // ---- OAuth connections (阶段 4: list / reveal / revoke) ----
+
+    var oauthConnHtml = null;
+    var oauthBusy = false;
+
+    function fillOAuthConnections() {
+      if (!ctrl.bodyEl || oauthConnHtml === null) return;
+      var body = ctrl.bodyEl.querySelector("[data-oauth-conn-body]");
+      if (body) body.innerHTML = oauthConnHtml;
+    }
+
+    function oauthConnHtmlOf(connections) {
+      if (!connections.length) {
+        return '<p class="subtle">尚未授权外部 AI。当 Claude、Hermes 或其他 AI 通过 OAuth 连接这个 Agent 后，会显示在这里</p>';
+      }
+      return connections
+        .map(function (conn) {
+          var active = conn.status === "active";
+          var rows =
+            "<div><dt>客户端</dt><dd>" + escapeHtml(conn.client_name) + "</dd></div>" +
+            "<div><dt>状态</dt><dd>" + (active ? "已连接" : "已撤销") + "</dd></div>" +
+            "<div><dt>授权</dt><dd>" + escapeHtml(permTextOf({ permissions: conn.grants })) + "</dd></div>" +
+            "<div><dt>创建时间</dt><dd>" + escapeHtml(formatMinute(conn.created_at) || "未知") + "</dd></div>" +
+            "<div><dt>最近使用</dt><dd>" + escapeHtml(formatMinute(conn.last_used_at) || "还没有使用") + "</dd></div>" +
+            "<div><dt>访问令牌到期</dt><dd>" +
+            (conn.access_expires_at ? escapeHtml(formatMinute(conn.access_expires_at) || "") : "尚未签发") +
+            (conn.has_refresh ? "（刷新令牌有效）" : "") +
+            "</dd></div>";
+          var actions = active
+            ? '<div class="manage-actions">' +
+              '<button type="button" class="secondary" data-oauth-reveal="' + escapeHtml(conn.id) + '">查看令牌</button>' +
+              '<button type="button" class="danger" data-oauth-revoke="' + escapeHtml(conn.id) + '">撤销连接</button>' +
+              "</div>" +
+              '<div data-oauth-tokens="' + escapeHtml(conn.id) + '"></div>'
+            : "";
+          return '<div class="manage-info-card"><dl class="kv">' + rows + "</dl>" + actions + "</div>";
+        })
+        .join("");
+    }
+
+    function loadOAuthConnections() {
+      agentApi("GET", "/api/agents/" + encodeURIComponent(agentId) + "/oauth-connections")
+        .then(function (result) {
+          if (result.status === 401) {
+            location.assign("/login.html");
+            return;
+          }
+          var connections =
+            result.data && result.data.ok === true && Array.isArray(result.data.connections) ? result.data.connections : null;
+          oauthConnHtml = connections ? oauthConnHtmlOf(connections) : '<p class="subtle">连接列表暂时读不到</p>';
+          fillOAuthConnections();
+        })
+        .catch(function () {
+          oauthConnHtml = '<p class="subtle">连接列表暂时读不到</p>';
+          fillOAuthConnections();
+        });
+    }
+
+    ctrl.dialog.addEventListener("click", function (event) {
+      var target = event.target;
+      if (!(target instanceof Element)) return;
+      var revealBtn = target.closest("[data-oauth-reveal]");
+      if (revealBtn) {
+        if (oauthBusy) return;
+        oauthBusy = true;
+        var connId = revealBtn.getAttribute("data-oauth-reveal");
+        agentApi("POST", "/api/oauth/connections/" + encodeURIComponent(connId) + "/reveal-tokens")
+          .then(function (result) {
+            oauthBusy = false;
+            if (!result.data || result.data.ok !== true) {
+              setStatus((result.data && result.data.error) || "令牌暂时取不到", true);
+              return;
+            }
+            var slot = ctrl.bodyEl.querySelector('[data-oauth-tokens="' + connId + '"]');
+            if (!slot) return;
+            var html =
+              '<dl class="kv">' +
+              "<div><dt>访问令牌</dt><dd><span class=\"mono\">" + escapeHtml(result.data.access_token) + "</span> " +
+              '<button type="button" class="copy-btn" data-copy="' + escapeHtml(result.data.access_token) + '" data-label="复制">复制</button></dd></div>';
+            if (result.data.refresh_token) {
+              html +=
+                "<div><dt>刷新令牌</dt><dd><span class=\"mono\">" + escapeHtml(result.data.refresh_token) + "</span> " +
+                '<button type="button" class="copy-btn" data-copy="' + escapeHtml(result.data.refresh_token) + '" data-label="复制">复制</button></dd></div>';
+            }
+            slot.innerHTML = html + "</dl>";
+          })
+          .catch(function () {
+            oauthBusy = false;
+            setStatus("网络异常，请重试", true);
+          });
+        return;
+      }
+      var revokeBtn = target.closest("[data-oauth-revoke]");
+      if (revokeBtn) {
+        if (oauthBusy) return;
+        if (!revokeBtn.hasAttribute("data-armed")) {
+          revokeBtn.setAttribute("data-armed", "1");
+          var original = revokeBtn.textContent;
+          revokeBtn.textContent = "确认撤销";
+          setTimeout(function () {
+            revokeBtn.removeAttribute("data-armed");
+            revokeBtn.textContent = original;
+          }, 3500);
+          return;
+        }
+        oauthBusy = true;
+        var id = revokeBtn.getAttribute("data-oauth-revoke");
+        agentApi("POST", "/api/oauth/connections/" + encodeURIComponent(id) + "/revoke")
+          .then(function (result) {
+            oauthBusy = false;
+            if (!result.data || result.data.ok !== true) {
+              setStatus((result.data && result.data.error) || "撤销失败，请重试", true);
+              return;
+            }
+            setStatus("连接已撤销", false);
+            loadOAuthConnections();
+          })
+          .catch(function () {
+            oauthBusy = false;
+            setStatus("网络异常，请重试", true);
+          });
+      }
+    });
+
     var initialRefresh = refresh(seed ? { silent: true } : undefined);
     loadAgentRecords();
+    loadOAuthConnections();
     loadEndpointToken();
     return ctrl;
   }

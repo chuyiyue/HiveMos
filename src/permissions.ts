@@ -134,6 +134,18 @@ export function hasAdvanced(perms: AgentPermissions | null | undefined, key: Adv
   return perms?.advanced?.[key] === true;
 }
 
+// 两层授权的交集（Agent 基础 ∩ OAuth 连接）：每个域的 read/write 与每个
+// advanced 开关分别取与。连接里存的 grants 先经 parsePermissions 规范化，
+// 解析失败天然全关，交集只会更小，不会放大。
+export function intersectPermissions(a: AgentPermissions, b: AgentPermissions): AgentPermissions {
+  const out = denyAllPermissions();
+  for (const domain of PERMISSION_DOMAINS) {
+    out[domain] = { read: a[domain].read && b[domain].read, write: a[domain].write && b[domain].write };
+  }
+  for (const key of ADVANCED_PERMISSIONS) out.advanced[key] = a.advanced[key] && b.advanced[key];
+  return out;
+}
+
 // 旧面板仍会把旧数组发回来（列出的域原本就是「这个域全开」的意思）。
 // 过渡期沿用这个原意：列出的域 read+write 全开，registry 按三域展开，
 // soul_write_any 落到 advanced。未知项忽略。
