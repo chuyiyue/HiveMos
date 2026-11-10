@@ -84,8 +84,21 @@
     );
   }
 
+  // Card-only short form of C.formatMinute (MM-DD HH:mm, no year).
+  // The shared helper stays untouched: other views keep full timestamps.
+  function shortMinute(value) {
+    var time = Number(value);
+    if (!Number.isFinite(time) || time <= 0) return "";
+    var date = new Date(time);
+    if (Number.isNaN(date.getTime())) return "";
+    function pad(number) {
+      return String(number).padStart(2, "0");
+    }
+    return pad(date.getMonth() + 1) + "-" + pad(date.getDate()) + " " + pad(date.getHours()) + ":" + pad(date.getMinutes());
+  }
+
   function card(agent) {
-    var seen = C.formatMinute(agent.last_seen_at);
+    var seen = shortMinute(agent.last_seen_at);
     var active = agent.status === "active";
     return C.record({
       id: agent.id,
