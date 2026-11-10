@@ -428,7 +428,6 @@ dialog.action-menu::backdrop { background: var(--overlay); }
 /* Permission matrix: one row per domain with read/write checkboxes and
    an advanced section below. Changes stay local until save commits. */
 .perm-matrix { display: grid; gap: 14px; }
-.perm-matrix-top { display: flex; justify-content: flex-end; }
 .perm-clear { min-height: 32px; padding: 0 12px; }
 .perm-mgrid { border: 1px solid var(--border); border-radius: var(--r-md); overflow: hidden; }
 .perm-mrow { display: grid; grid-template-columns: minmax(0, 1fr) 64px 64px; align-items: center; min-height: 44px; padding: 2px 6px 2px 12px; background: var(--surface); }
