@@ -143,7 +143,7 @@ async function openSecret(env: Env, stored: string): Promise<string> {
 
 async function writeAudit(
   db: D1Database,
-  fields: { targetId: string; actor: string; action: string; detail?: unknown },
+  fields: { targetId: string; actor: string; action: string; detail?: unknown; source?: string },
   now: number,
 ): Promise<void> {
   await prepare(
@@ -153,7 +153,7 @@ async function writeAudit(
       crypto.randomUUID(),
       fields.targetId,
       fields.actor,
-      "panel",
+      fields.source ?? "panel",
       fields.action,
       fields.detail == null ? null : JSON.stringify(fields.detail),
       now,
@@ -521,10 +521,11 @@ export async function revealSubscriptionUrl(
   id: string,
   actor: string,
   now: number,
+  source = "panel",
 ): Promise<{ name: string; url: string }> {
   const row = await getSubscription(db, id);
   if (!row) throw new NodeError(404, "订阅不存在");
-  await writeAudit(db, { targetId: id, actor, action: "reveal", detail: { kind: "proxy_subscription", name: row.name } }, now);
+  await writeAudit(db, { targetId: id, actor, action: "reveal", detail: { kind: "proxy_subscription", name: row.name }, source }, now);
   const url = await openSecret(env, row.url_enc);
   return { name: row.name, url };
 }
@@ -571,10 +572,11 @@ export async function copyNodeRaw(
   id: string,
   actor: string,
   now: number,
+  source = "panel",
 ): Promise<{ name: string; raw: string }> {
   const row = await getNode(db, id);
   if (!row) throw new NodeError(404, "节点不存在");
-  await writeAudit(db, { targetId: id, actor, action: "copy", detail: { kind: "proxy_node", name: row.name } }, now);
+  await writeAudit(db, { targetId: id, actor, action: "copy", detail: { kind: "proxy_node", name: row.name }, source }, now);
   const raw = await openSecret(env, row.raw_enc);
   return { name: row.name, raw };
 }

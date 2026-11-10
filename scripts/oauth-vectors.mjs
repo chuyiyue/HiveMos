@@ -94,6 +94,12 @@ const appGrants = parsePermissions({
 expect("应用权限: memory 读写原样", [appGrants.memory.read, appGrants.memory.write], [true, true]);
 expect("应用权限: soul 只读原样", [appGrants.soul.read, appGrants.soul.write], [true, false]);
 expect("应用权限: 未勾的域全关", [appGrants.tasks.read, appGrants.tasks.write], [false, false]);
+expect("应用权限: 未勾的 proxy 域全关", [appGrants.proxy.read, appGrants.proxy.write], [false, false]);
+const proxyApp = parsePermissions({ proxy: { read: true, write: false } });
+expect("应用权限: proxy 只读原样", [proxyApp.proxy.read, proxyApp.proxy.write], [true, false]);
+expect("应用权限: proxy 只读时 proxy_list 可见", toolVisibleToAgent("proxy_list", proxyApp), true);
+expect("应用权限: proxy 只读时 proxy_copy_node 可见", toolVisibleToAgent("proxy_copy_node", proxyApp), true);
+expectTrue("应用权限: proxy 只读时写工具被拒", toolAccessError("proxy_create_subscription", proxyApp, "E2E App", {}) !== null);
 expect("应用权限: 高级 totp 读原样", appGrants.advanced.totp.read, true);
 expect("应用权限: 高级 soul_other 写原样", appGrants.advanced.soul_other.write, true);
 expect(

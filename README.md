@@ -22,7 +22,7 @@ HiveMos 是为多个 AI Agent 准备的「中枢」：每个 Agent 的身份、�
 
 - Agent 注册表：创建、启停、置顶、头像，标识为 `agt_` + 12 位十六进制
 - 令牌可经面板审计后取回明文（保险库同级加密密封保存，不做只显示一次）
-- 权限是按功能域划分的读写矩阵：每个域（MCP、Skills、API、记忆、Soul、任务、日历、保险库、云计算资源）分别勾选读与写，再加三个独立的高级权限——查看机器凭据、代写他人 Soul、读取保险库验证码
+- 权限是按功能域划分的读写矩阵：每个域（MCP、Skills、API、记忆、Soul、任务、日历、保险库、云计算资源、代理）分别勾选读与写，再加三个独立的高级权限——查看机器凭据、代写他人 Soul、读取保险库验证码
 - 每次 MCP 调用都有记录，被拒绝的调用同样留痕
 
 ### MCP 注册表、Skills 与 API
@@ -71,7 +71,7 @@ POST /mcp
 Authorization: Bearer <agent-token>
 ```
 
-也支持把令牌放在接入地址的 `?token=` 参数里（请求头优先）。`tools/list` 只返回该 Agent 权限覆盖的工具，`tools/call` 每次再按域与读写复查。共 67 个工具：
+也支持把令牌放在接入地址的 `?token=` 参数里（请求头优先）。`tools/list` 只返回该 Agent 权限覆盖的工具，`tools/call` 每次再按域与读写复查。共 76 个工具：
 
 | 域 | 工具 |
 | --- | --- |
@@ -85,6 +85,7 @@ Authorization: Bearer <agent-token>
 | 任务 | `tasks_list`、`tasks_get`、`tasks_create`、`tasks_update`、`tasks_complete` |
 | 日历 | `calendar_list_calendars`、`calendar_list_events`、`calendar_get_event`、`calendar_search`、`calendar_create_event`、`calendar_update_event`、`calendar_delete_event` |
 | 云计算资源 | `machines_list`、`machines_get`、`machines_report`、`machines_get_access`、`machines_create`、`machines_update`、`machines_delete` |
+| 代理 | `proxy_list`、`proxy_reveal_subscription`、`proxy_copy_node`、`proxy_create_subscription`、`proxy_update_subscription`、`proxy_delete_subscription`、`proxy_import_nodes`、`proxy_update_node_note`、`proxy_delete_node` |
 
 注册表的设计说明见 [docs/MCP_REGISTRY.md](docs/MCP_REGISTRY.md)，界面架构见 [docs/UI_ARCHITECTURE.md](docs/UI_ARCHITECTURE.md)。
 

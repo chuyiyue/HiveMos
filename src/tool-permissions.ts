@@ -52,6 +52,12 @@ export const TOOL_PERMISSIONS: Record<string, ToolPermission> = {
   machines_get: { domain: "machines", op: "read" },
   // 机器明文凭据并入 machines 域：只需读权限 + handler 内的审计，无高级门。
   machines_get_access: { domain: "machines", op: "read" },
+  // 代理（proxy 域）：list 返回的订阅与节点是 Public 形状、不带密封原文；
+  // reveal/copy 是敏感读，明文在 handler 里先写审计（machines_audit，复用
+  // nodes 的 revealSubscriptionUrl / copyNodeRaw，审计失败不放明文）。
+  proxy_list: { domain: "proxy", op: "read" },
+  proxy_reveal_subscription: { domain: "proxy", op: "read" },
+  proxy_copy_node: { domain: "proxy", op: "read" },
   // 保险库（vault 域）：条目/邮箱/网关的列表与明文读取。list 只回元信息，
   // get_* 的明文在 handler 里先写 vault_access_log 审计（fail-closed，
   // 复用 vault.ts 的 revealSecret），审计失败不放明文。
@@ -92,6 +98,12 @@ export const TOOL_PERMISSIONS: Record<string, ToolPermission> = {
   machines_create: { domain: "machines", op: "write" },
   machines_update: { domain: "machines", op: "write" },
   machines_delete: { domain: "machines", op: "write" },
+  proxy_create_subscription: { domain: "proxy", op: "write" },
+  proxy_update_subscription: { domain: "proxy", op: "write" },
+  proxy_delete_subscription: { domain: "proxy", op: "write" },
+  proxy_import_nodes: { domain: "proxy", op: "write" },
+  proxy_update_node_note: { domain: "proxy", op: "write" },
+  proxy_delete_node: { domain: "proxy", op: "write" },
   apis_create: { domain: "api", op: "write" },
   apis_update: { domain: "api", op: "write" },
   apis_delete: { domain: "api", op: "write" },

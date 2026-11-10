@@ -11,7 +11,8 @@
 // hasGrant/hasAdvanced，以及工具校验矩阵的关键格
 // （machines_get_access 无高级门、2FA 工具只认 totp.read 的纯高级域分类、
 // agents_* 工具只认 agents_other 的纯高级域分类（含自我门）、Soul 归属门：
-// soul 域只覆盖自己名下那一份、读/写他人分别要 soul_other 读/写）。
+// soul 域只覆盖自己名下那一份、读/写他人分别要 soul_other 读/写、
+// proxy 第 10 域的读写格与存量 JSON 缺 proxy 键默认双关）。
 //
 // 盒子上的源码用无扩展名的相对 import（`./permissions`），这是 Worker 打包器
 // 的习惯，直接 import 到 Node 会 ERR_MODULE_NOT_FOUND。这里和 totp-vectors
@@ -152,6 +153,27 @@ expect(
 expect("对象：新高级形状非 true 不算授予", advancedOn(parsePermissions('{"advanced":{"totp":{"read":1,"write":"true"}}}')), []);
 expect("对象：新高级键给布尔不算授予（只认 {read,write} 形状）", advancedOn(parsePermissions('{"advanced":{"totp":true}}')), []);
 
+
+// ---- proxy 第 10 域：存量 JSON 缺 proxy 键默认双关（从严，不自动给权） --------
+
+expect("普通域共 10 个", PERMISSION_DOMAINS.length, 10);
+expect("proxy 排在 machines 之后（矩阵末尾）", PERMISSION_DOMAINS[PERMISSION_DOMAINS.indexOf("machines") + 1], "proxy");
+expect(
+  "存量对象无 proxy 键：proxy 默认双关",
+  parsePermissions('{"mcp":{"read":true,"write":true},"machines":{"read":true,"write":true}}').proxy,
+  { read: false, write: false },
+);
+expect("存量对象无 proxy 键：hasGrant(proxy, read) 为 false", hasGrant(parsePermissions('{"mcp":{"read":true,"write":true}}'), "proxy", "read"), false);
+expect("存量对象无 proxy 键：hasGrant(proxy, write) 为 false", hasGrant(parsePermissions('{"mcp":{"read":true,"write":true}}'), "proxy", "write"), false);
+expect(
+  "旧数组列满九个旧域也不给 proxy",
+  parsePermissions('["mcp","skills","api","memory","soul","tasks","calendar","vault","machines"]').proxy,
+  { read: false, write: false },
+);
+expect("serialize 补齐 proxy 键且默认双关", JSON.parse(serializePermissions("{}")).proxy, { read: false, write: false });
+expect("proxy 对象直通（read/write 独立）", parsePermissions('{"proxy":{"read":true,"write":false}}').proxy, { read: true, write: false });
+expect("proxy 非 true 不算授予", parsePermissions('{"proxy":{"read":1,"write":"true"}}').proxy, { read: false, write: false });
+
 // ---- serialize / 往返 --------------------------------------------------------
 
 expect("serialize 固定顺序且补齐全部键", JSON.parse(serializePermissions("[]")), {
@@ -210,7 +232,7 @@ expect("PATCH null 拒绝", permissionsFromInput(null), { ok: false, status: 400
 // ---- 工具分类表自检 ---------------------------------------------------------
 
 const TOOL_NAMES = Object.keys(TOOL_PERMISSIONS);
-expect("工具分类共 67 个", TOOL_NAMES.length, 67);
+expect("工具分类共 76 个", TOOL_NAMES.length, 76);
 expect(
   "所有带普通域的工具，其域都在 PERMISSION_DOMAINS 内",
   TOOL_NAMES.filter((name) => TOOL_PERMISSIONS[name].domain !== undefined && !PERMISSION_DOMAINS.includes(TOOL_PERMISSIONS[name].domain)),
@@ -265,7 +287,7 @@ expect(
 expect(
   "写工具清单与管理员裁定一致（op=write 的普通域写工具；纯高级域写工具 op 缺席、看 advanced）",
   TOOL_NAMES.filter((name) => TOOL_PERMISSIONS[name].op === "write").sort(),
-  ["apis_create", "apis_delete", "apis_update", "calendar_create_event", "calendar_delete_event", "calendar_update_event", "machines_create", "machines_delete", "machines_report", "machines_update", "mcp_create", "mcp_delete", "mcp_update", "memory_delete", "memory_remember", "memory_upsert", "skills_create", "skills_delete", "skills_update", "soul_patch", "soul_update", "tasks_complete", "tasks_create", "tasks_update", "vault_create_email", "vault_create_entry", "vault_create_gateway", "vault_delete_email", "vault_delete_entry", "vault_delete_gateway", "vault_update_email", "vault_update_entry", "vault_update_gateway"].sort(),
+  ["apis_create", "apis_delete", "apis_update", "calendar_create_event", "calendar_delete_event", "calendar_update_event", "machines_create", "machines_delete", "machines_report", "machines_update", "mcp_create", "mcp_delete", "mcp_update", "memory_delete", "memory_remember", "memory_upsert", "skills_create", "skills_delete", "skills_update", "soul_patch", "soul_update", "tasks_complete", "tasks_create", "tasks_update", "vault_create_email", "vault_create_entry", "vault_create_gateway", "vault_delete_email", "vault_delete_entry", "vault_delete_gateway", "vault_update_email", "vault_update_entry", "vault_update_gateway", "proxy_create_subscription", "proxy_delete_node", "proxy_delete_subscription", "proxy_import_nodes", "proxy_update_node_note", "proxy_update_subscription"].sort(),
 );
 expect(
   "纯高级域写工具清单（agents_other.write）",
@@ -385,6 +407,39 @@ expect("machines 只写：machines_update 放行", toolAccessError("machines_upd
 expect("machines 只写：machines_delete 放行", toolAccessError("machines_delete", machinesWrite, "agent-a", {}), null);
 expect("machines 只写：machines_list 仍需 read", toolAccessError("machines_list", machinesWrite, "agent-a", {}), "该 Agent 没有 machines 的读取权限，无法调用这个工具");
 
+
+// proxy 域工具（第 10 个普通域）：list/reveal/copy 要 proxy read，订阅与
+// 节点的增删改、导入、改备注要 proxy write；machines 域不替代 proxy，
+// proxy 也不带任何 advanced（明文审计在 handler 内）。
+const proxyRead = parsePermissions('{"proxy":{"read":true,"write":false}}');
+expect("proxy read：proxy_list 放行", toolAccessError("proxy_list", proxyRead, "agent-a", {}), null);
+expect("proxy read：proxy_reveal_subscription 放行", toolAccessError("proxy_reveal_subscription", proxyRead, "agent-a", {}), null);
+expect("proxy read：proxy_copy_node 放行", toolAccessError("proxy_copy_node", proxyRead, "agent-a", {}), null);
+expect("proxy read：proxy_create_subscription 被拒", toolAccessError("proxy_create_subscription", proxyRead, "agent-a", {}), "该 Agent 没有 proxy 的写入权限，无法调用这个工具");
+expect("proxy read：proxy_update_subscription 被拒", toolAccessError("proxy_update_subscription", proxyRead, "agent-a", {}), "该 Agent 没有 proxy 的写入权限，无法调用这个工具");
+expect("proxy read：proxy_delete_subscription 被拒", toolAccessError("proxy_delete_subscription", proxyRead, "agent-a", {}), "该 Agent 没有 proxy 的写入权限，无法调用这个工具");
+expect("proxy read：proxy_import_nodes 被拒", toolAccessError("proxy_import_nodes", proxyRead, "agent-a", {}), "该 Agent 没有 proxy 的写入权限，无法调用这个工具");
+expect("proxy read：proxy_update_node_note 被拒", toolAccessError("proxy_update_node_note", proxyRead, "agent-a", {}), "该 Agent 没有 proxy 的写入权限，无法调用这个工具");
+expect("proxy read：proxy_delete_node 被拒", toolAccessError("proxy_delete_node", proxyRead, "agent-a", {}), "该 Agent 没有 proxy 的写入权限，无法调用这个工具");
+expect("proxy read：tools/list 无 proxy_create_subscription", toolVisibleToAgent("proxy_create_subscription", proxyRead), false);
+expect("proxy read：tools/list 有 proxy_list", toolVisibleToAgent("proxy_list", proxyRead), true);
+const proxyWrite = parsePermissions('{"proxy":{"read":false,"write":true}}');
+expect("proxy 只写：proxy_create_subscription 放行", toolAccessError("proxy_create_subscription", proxyWrite, "agent-a", {}), null);
+expect("proxy 只写：proxy_update_subscription 放行", toolAccessError("proxy_update_subscription", proxyWrite, "agent-a", {}), null);
+expect("proxy 只写：proxy_delete_subscription 放行", toolAccessError("proxy_delete_subscription", proxyWrite, "agent-a", {}), null);
+expect("proxy 只写：proxy_import_nodes 放行", toolAccessError("proxy_import_nodes", proxyWrite, "agent-a", {}), null);
+expect("proxy 只写：proxy_update_node_note 放行", toolAccessError("proxy_update_node_note", proxyWrite, "agent-a", {}), null);
+expect("proxy 只写：proxy_delete_node 放行", toolAccessError("proxy_delete_node", proxyWrite, "agent-a", {}), null);
+expect("proxy 只写：proxy_list 仍需 read", toolAccessError("proxy_list", proxyWrite, "agent-a", {}), "该 Agent 没有 proxy 的读取权限，无法调用这个工具");
+expect("proxy 只写：proxy_reveal_subscription 仍需 read", toolAccessError("proxy_reveal_subscription", proxyWrite, "agent-a", {}), "该 Agent 没有 proxy 的读取权限，无法调用这个工具");
+expect("proxy 只写：proxy_copy_node 仍需 read", toolAccessError("proxy_copy_node", proxyWrite, "agent-a", {}), "该 Agent 没有 proxy 的读取权限，无法调用这个工具");
+expect("全关：proxy_list 被拒", toolAccessError("proxy_list", denied, "agent-a", {}), "该 Agent 没有 proxy 的读取权限，无法调用这个工具");
+expect("全关：proxy_create_subscription 被拒", toolAccessError("proxy_create_subscription", denied, "agent-a", {}), "该 Agent 没有 proxy 的写入权限，无法调用这个工具");
+expect("machines 读写不替代 proxy：proxy_list 被拒", toolAccessError("proxy_list", parsePermissions('{"machines":{"read":true,"write":true}}'), "agent-a", {}), "该 Agent 没有 proxy 的读取权限，无法调用这个工具");
+expect("proxy_list 无 advanced", TOOL_PERMISSIONS.proxy_list.advanced, undefined);
+expect("proxy_reveal_subscription 无 advanced（审计在 handler 内）", TOOL_PERMISSIONS.proxy_reveal_subscription.advanced, undefined);
+expect("proxy_copy_node 无 advanced（审计在 handler 内）", TOOL_PERMISSIONS.proxy_copy_node.advanced, undefined);
+
 // agents_* 工具：纯高级域 agents_other；读要其 read、写要其 write，普通
 // 域全开也替代不了。自我门按 agent_id / name 判（写侧的 name 定位在
 // handler 里按同一文案复判，纯函数这里只覆盖 id 预判与 agents_get）。
@@ -485,7 +540,7 @@ expect(
 );
 expect("全域授予：soul_update 写他人也放行", toolAccessError("soul_update", full, "agent-a", { agent_name: "agent-b" }), null);
 expect("全域授予：soul_get 读他人也放行", toolAccessError("soul_get", full, "agent-a", { agent_name: "agent-b" }), null);
-expect("全域授予：tools/list 覆盖全部 67 个工具", TOOL_NAMES.filter((name) => toolVisibleToAgent(name, full)).length, 67);
+expect("全域授予：tools/list 覆盖全部 76 个工具", TOOL_NAMES.filter((name) => toolVisibleToAgent(name, full)).length, 76);
 
 // 分类表与裁定一致：mcp_get 无高级门；soul 归属门不在分类表、在 toolAccessError
 expect("mcp_get 无 advanced", TOOL_PERMISSIONS.mcp_get.advanced, undefined);
@@ -495,4 +550,4 @@ if (failures > 0) {
   console.error(`\n${failures}/${checks} 条不符`);
   process.exit(1);
 }
-console.log(`\n全部通过：${checks} 条检查（旧数组映射 / 旧布尔高级迁移 / 垃圾输入全关 / 新对象直通 / parse-serialize 往返 / hasGrant-hasAdvanced / PATCH 过渡兼容 / 67 个工具的分类与校验矩阵）`);
+console.log(`\n全部通过：${checks} 条检查（旧数组映射 / 旧布尔高级迁移 / 垃圾输入全关 / 新对象直通 / parse-serialize 往返 / hasGrant-hasAdvanced / PATCH 过渡兼容 / 76 个工具的分类与校验矩阵）`);

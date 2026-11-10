@@ -503,7 +503,7 @@
   // moment they are flipped, PATCH with the complete set). The host only
   // picks where it opens (centered dialog vs side panel) and passes an
   // onChanged(message) callback so its own list can refresh.
-  // Permission model: a read/write matrix over nine domains plus three
+  // Permission model: a read/write matrix over ten domains plus three
   // advanced domains (agents_other / soul_other / totp), each also a
   // read/write pair in its own separate menu. The server stores
   // permissions as an object ({domain: {read, write}, ..., advanced:
@@ -523,6 +523,7 @@
     ["calendar", "日历"],
     ["vault", "保险库"],
     ["machines", "云计算资源"],
+    ["proxy", "代理"],
   ];
   var PERM_ADVANCED = [
     ["agents_other", "操作其他 Agent"],
@@ -541,6 +542,7 @@
     ["calendar", "日历", "日程的查看与编辑"],
     ["vault", "保险库", "保险库条目的取用"],
     ["machines", "云计算资源", "服务器、云主机与 Workers 的状态与操作"],
+    ["proxy", "代理", "代理订阅与节点的查看与管理"],
   ];
 
   function emptyPerms() {
