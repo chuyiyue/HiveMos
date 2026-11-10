@@ -29,6 +29,7 @@ import { handleMcp } from "./mcp";
 import { handleRegistryRequest } from "./registry-http";
 import { handleCalendarFeed, handleCalendarRequest } from "./calendar-http";
 import { handleMemoryRequest } from "./memory-http";
+import { runMemoryMaintenance } from "./memory-jobs";
 import { handleSoulRequest } from "./soul-http";
 import { handleTasksRequest } from "./tasks-http";
 import { handleMachinesRequest } from "./machines-http";
@@ -182,6 +183,13 @@ export default {
       await maybeRunScheduledBackup(env, Date.now());
     } catch {
       // 备份失败不阻塞本轮其它任务；下一次定时任务按门控重试。
+    }
+    try {
+      // 记忆后台整理：补全 pending 拆分/打标、向量回填（每批 ≤50）、扫提案。
+      // 只产出提案，绝不自动落库改动；与其它 sweep 共用这里的频率门控。
+      await runMemoryMaintenance(env, Date.now());
+    } catch {
+      // 记忆后台任务单项失败由模块内部吞掉；这里再兜一层，不影响其它 sweep。
     }
     try {
       // Evidence stamp for the settings page: cron status there is read

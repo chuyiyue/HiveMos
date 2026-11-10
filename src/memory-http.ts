@@ -19,6 +19,12 @@ import {
   updateMemory,
 } from "./memory";
 import { ingestMemories, mergeSimilarTags, tagOneMemory, tagUntaggedMemories } from "./memory-ai";
+import { embedMemoryNow } from "./memory-vector";
+import {
+  approveProposal,
+  listProposalViews,
+  rejectProposal,
+} from "./memory-proposals";
 import { logOp, panelActor } from "./oplog";
 
 const MAX_BODY_BYTES = 256 * 1024;
@@ -31,9 +37,12 @@ export async function handleMemoryRequest(request: Request, env: Env, ctx: WaitC
   try {
     if (path === "/api/memory") return await memories(request, env, ctx);
     // 具体路径必须排在 /api/memory/:id 通配之前，否则 ingest、groups、
-    // tag-untagged 会被当成记忆 id 吃掉。
+    // tag-untagged、proposals 会被当成记忆 id 吃掉。
     if (path === "/api/memory/ingest") return await ingest(request, env, ctx);
     if (path === "/api/memory/tag-untagged") return await tagUntagged(request, env);
+    if (path === "/api/memory/proposals") return await proposalsList(request, env);
+    const proposalAct = /^\/api\/memory\/proposals\/([A-Za-z0-9_-]+)\/(approve|reject)$/.exec(path);
+    if (proposalAct && proposalAct[1] && proposalAct[2]) return await proposalActOne(request, env, proposalAct[1], proposalAct[2]);
     // 存量近义合并。单数写法是本模块的路由约定，双数别名对角兼容旧写法。
     if (path === "/api/memory/tags/merge" || path === "/api/memories/tags/merge") return await mergeTags(request, env);
     if (path === "/api/memory/groups") return await groups(request, env);
@@ -93,14 +102,66 @@ async function ingest(request: Request, env: Env, ctx: WaitCtx): Promise<Respons
     action: "添加",
     targetId: null,
     targetName: null,
-    text: result.split
-      ? `通过智能录入添加了记忆，AI 拆成 ${result.memories.length} 条`
-      : "通过智能录入添加了 1 条记忆（AI 不可用，整段保存）",
+    text: result.pending
+      ? "通过智能录入添加了 1 条记忆（AI 拆分与打标待后台补全）"
+      : result.split
+        ? `通过智能录入添加了记忆，AI 拆成 ${result.memories.length} 条`
+        : "通过智能录入添加了 1 条记忆（AI 不可用，整段保存）",
   });
+  // 写入路径顺手补当前一条向量，失败不影响返回（回填由 cron 兜底）。
+  for (const memory of result.memories) {
+    ctx.waitUntil(embedMemoryNow(env, memory.id).catch(() => undefined));
+  }
   return json(
-    { ok: true, split: result.split, count: result.memories.length, memories: result.memories.map(memoryPublic) },
+    {
+      ok: true,
+      split: result.split,
+      pending: result.pending,
+      count: result.memories.length,
+      memories: result.memories.map(memoryPublic),
+    },
     201,
   );
+}
+
+async function proposalsList(request: Request, env: Env): Promise<Response> {
+  if (request.method.toUpperCase() !== "GET") {
+    return json({ ok: false, error: "方法不允许" }, 405, { allow: "GET" });
+  }
+  const url = new URL(request.url);
+  const status = (url.searchParams.get("status") || "pending").trim() || "pending";
+  const proposals = await listProposalViews(env.DB, status);
+  return json({ ok: true, proposals });
+}
+
+async function proposalActOne(request: Request, env: Env, id: string, action: string): Promise<Response> {
+  if (request.method.toUpperCase() !== "POST") {
+    return json({ ok: false, error: "方法不允许" }, 405, { allow: "POST" });
+  }
+  const actor = await panelActor(request, env);
+  const now = Date.now();
+  if (action === "approve") {
+    const result = await approveProposal(env, id, actor, now);
+    await logOp(env.DB, {
+      actor,
+      module: "记忆",
+      action: "批准提案",
+      targetId: id,
+      targetName: null,
+      text: `批准了记忆整理提案（${result.proposal.type}），动作：${result.action}`,
+    });
+    return json({ ok: true, proposal: result.proposal, action: result.action, updated: result.updated });
+  }
+  const rejected = await rejectProposal(env.DB, id, actor, now);
+  await logOp(env.DB, {
+    actor,
+    module: "记忆",
+    action: "拒绝提案",
+    targetId: id,
+    targetName: null,
+    text: `拒绝了记忆整理提案（${rejected.type}）`,
+  });
+  return json({ ok: true, proposal: rejected });
 }
 
 async function tagUntagged(request: Request, env: Env): Promise<Response> {

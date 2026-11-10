@@ -16,6 +16,8 @@
   "ai": {
     "binding": "AI"
   },
+  // 记忆向量索引已在部署账号上建好（1024 维、cosine），这里只声明绑定。
+  "vectorize": [{ "binding": "MEMORY_VECTORS", "index_name": "hivemos-memories" }],
   "triggers": {
     // The Worker is triggered hourly; the scheduled handler then honours the
     // interval chosen in 功能设置 (default 6 hours) and returns without

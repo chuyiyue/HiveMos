@@ -7,6 +7,8 @@
 import { prepare } from "./registry";
 import type { D1Database, Env, WaitCtx } from "./env";
 import { readChatResponse, resolveAiModel } from "./ai-model";
+import type { D1Database, Env } from "./env";
+import { markMemoryVectorDirty, rrfFuse, vectorSearchIds } from "./memory-vector";
 
 function rowsOf<T>(value: { results?: T[] } | T[] | null | undefined): T[] {
   if (Array.isArray(value)) return value;
@@ -43,6 +45,7 @@ export interface MemoryRow {
   content_hash: string | null;
   supersedes_id: string | null;
   invalidated: number;
+  ai_pending_at: number | null;
   created_at: number;
   updated_at: number;
   deleted_at: number | null;
@@ -63,6 +66,7 @@ export interface MemoryFields {
 }
 
 const TITLE_MAX = 200;
+const DERIVED_TITLE_MAX = 60;
 const SCOPE_MAX = 40;
 const CONTENT_MAX = 200 * 1024;
 export const DEFAULT_SCOPE = "全局";
@@ -211,6 +215,7 @@ export function memoryPublic(row: MemoryRow): Record<string, unknown> {
     supersedes_id: row.supersedes_id ?? null,
     last_accessed_at: row.last_accessed_at ?? null,
     access_count: typeof row.access_count === "number" ? row.access_count : 0,
+    ai_pending_at: row.ai_pending_at ?? null,
     version: row.version,
     created_at: row.created_at,
     updated_at: row.updated_at,
@@ -240,6 +245,12 @@ function cleanTitle(value: unknown): string {
   if (!title) throw new MemError("请填写标题");
   if (title.length > TITLE_MAX) throw new MemError("标题过长");
   return title;
+}
+
+// 没有标题时取正文开头。ingest 拆分与 memory_remember 共用同一口径。
+export function deriveMemoryTitle(text: string): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  return (flat.slice(0, DERIVED_TITLE_MAX) || "未命名记忆").trim();
 }
 
 function cleanScope(value: unknown): string {
@@ -669,6 +680,87 @@ export async function searchMemoriesAudited(
   return rows;
 }
 
+// 手工排序参数：置顶恒在最前；组内按 相关度 × (1 + α·weight/100) × 时间衰减。
+// 时间衰减用半衰期，口径集中在这里，避免检索、面板两处各自算。
+export const HYBRID_WEIGHT_ALPHA = 0.5;
+export const HYBRID_DECAY_HALF_LIFE_DAYS = 30;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function hybridRelevance(row: MemoryRow, fusedScore: number, now: number): number {
+  const weight = typeof row.weight === "number" ? row.weight : 0;
+  const weightFactor = 1 + HYBRID_WEIGHT_ALPHA * weight / 100;
+  const ageDays = Math.max(0, now - (row.updated_at || now)) / DAY_MS;
+  const decay = Math.pow(0.5, ageDays / HYBRID_DECAY_HALF_LIFE_DAYS);
+  return fusedScore * weightFactor * decay;
+}
+
+function sortHybridRows(rows: MemoryRow[], scoreById: Map<string, number>, now: number): MemoryRow[] {
+  const compare = (a: MemoryRow, b: MemoryRow): number => {
+    const scoreA = hybridRelevance(a, scoreById.get(a.id) ?? 0, now);
+    const scoreB = hybridRelevance(b, scoreById.get(b.id) ?? 0, now);
+    if (scoreB !== scoreA) return scoreB - scoreA;
+    const weightA = typeof a.weight === "number" ? a.weight : 0;
+    const weightB = typeof b.weight === "number" ? b.weight : 0;
+    if (weightB !== weightA) return weightB - weightA;
+    return (b.updated_at || 0) - (a.updated_at || 0);
+  };
+  const pinned = rows.filter((row) => row.pinned_at != null).sort(compare);
+  const rest = rows.filter((row) => row.pinned_at == null).sort(compare);
+  return [...pinned, ...rest];
+}
+
+async function rowsByIds(db: D1Database, ids: string[], scope?: string | null): Promise<MemoryRow[]> {
+  if (!ids.length) return [];
+  const placeholders = ids.map(() => "?").join(", ");
+  let sql = "SELECT * FROM memories WHERE id IN (" + placeholders + ") AND deleted_at IS NULL";
+  const values: Array<string | number | null> = [...ids];
+  if (scope) {
+    sql += " AND scope = ?";
+    values.push(scope);
+  }
+  sql += " AND invalidated = 0 AND (expires_at IS NULL OR expires_at > ?)";
+  values.push(Date.now());
+  return rowsOf(await prepare(db, sql, values).all<MemoryRow>());
+}
+
+// 混合检索：词法（当前 searchMemories，日后换 FTS 也只改这一处）与向量结果
+// 用 RRF（k=60）融合，再按工排序。向量不可用/为空时直接走词法，行为不变。
+export async function searchMemoriesHybrid(
+  db: D1Database,
+  env: Env,
+  query: string,
+  scope?: string | null,
+  options: PageOptions = {},
+  now: number = Date.now(),
+): Promise<MemoryRow[]> {
+  const vectorIds = await vectorSearchIds(env, query);
+  if (!vectorIds.length) return searchMemories(db, query, scope, options);
+  // 词法侧取一个足够宽的尾部忠实序列表，作为 RRF 的一路输入。
+  const lexical = await searchMemories(db, query, scope, { limit: 200, offset: 0 });
+  const fused = rrfFuse(lexical.map((row) => row.id), vectorIds);
+  const rows = await rowsByIds(db, fused.map((hit) => hit.id), scope);
+  const scoreById = new Map(fused.map((hit) => [hit.id, hit.score]));
+  const ranked = sortHybridRows(rows, scoreById, now);
+  const offset = pageOffset(options.offset);
+  const limit = pageLimit(options.limit, 200, 201);
+  return ranked.slice(offset, offset + limit);
+}
+
+export async function searchMemoriesHybridAudited(
+  env: Env,
+  query: string,
+  scope: string | null,
+  options: PageOptions,
+  channel: Channel,
+  now: number,
+): Promise<MemoryRow[]> {
+  const rows = await searchMemoriesHybrid(env.DB, env, query, scope, options, now);
+  if (channel.auditReads) {
+    await audit(env.DB, { memoryId: null, actor: channel.actor, action: "search", diff: { query, scope, count: rows.length } }, now);
+  }
+  return rows;
+}
+
 interface TierFields {
   groupId?: string | null;
   pinnedAt?: number | null;
@@ -678,6 +770,7 @@ interface TierFields {
   agentName?: string | null;
   expiresAt?: number | null;
   supersedesId?: string | null;
+  aiPendingAt?: number | null;
 }
 
 async function insertMemory(
@@ -693,7 +786,7 @@ async function insertMemory(
   const statements = [
     prepare(
       db,
-      "INSERT INTO memories (id, title, scope, content, source, tags_json, version, created_at, updated_at, deleted_at, group_id, pinned_at, weight, ai_state, kind, agent_name, expires_at, content_hash, supersedes_id) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO memories (id, title, scope, content, source, tags_json, version, created_at, updated_at, deleted_at, group_id, pinned_at, weight, ai_state, kind, agent_name, expires_at, content_hash, supersedes_id, ai_pending_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       [
         id,
         fields.title,
@@ -712,6 +805,7 @@ async function insertMemory(
         fields.expiresAt ?? null,
         hash,
         fields.supersedesId ?? null,
+        fields.aiPendingAt ?? null,
       ],
     ),
   ];
@@ -726,6 +820,7 @@ async function insertMemory(
   await db.batch(statements);
   const row = await getMemoryRow(db, id);
   if (!row) throw new MemError("写入后读取失败", 500);
+  await markMemoryVectorDirty(db, id);
   await audit(db, { memoryId: id, actor: channel.actor, action: "create", diff: { title: row.title, scope: row.scope } }, now);
   scheduleMemorySummary(ai, db, row);
   if (fields.supersedesId) {
@@ -769,6 +864,9 @@ export async function createMemory(
   const agentName = agentNameInput !== undefined ? agentNameInput : channel.agentName ?? null;
   const duplicate = await findActiveByContentHash(db, scope, agentName, await computeContentHash(title, content));
   if (duplicate) return duplicate;
+  const aiPendingAt = typeof input.ai_pending_at === "number" && Number.isFinite(input.ai_pending_at)
+    ? input.ai_pending_at
+    : null;
   const existing = await findActiveByTitleScope(db, title, scope);
   if (existing) throw new MemError("同一作用域下已存在同名记忆，请改标题或用编辑", 409);
   return insertMemory(
@@ -787,10 +885,44 @@ export async function createMemory(
       expiresAt: expiresAt ?? null,
       supersedesId: supersedesId ?? null,
     },
+    { title, scope, content, tags, groupId, weight, pinnedAt: pinned === true ? now : null, aiState, aiPendingAt },
     channel,
     now,
     options.ai,
   );
+}
+
+// memory_remember 的落库口径：同步创建一条 ai_state=pending 的记忆，拆分/打标/
+// 摘要交给 cron。标题撞车时加后缀，避免 Agent 随手记被同名冲突挡住。
+export async function rememberMemory(
+  db: D1Database,
+  input: Record<string, unknown>,
+  channel: Channel,
+  now: number,
+): Promise<MemoryRow> {
+  const text = typeof input.text === "string" ? input.text.trim() : "";
+  if (!text) throw new MemError("请填写要记住的内容");
+  if (text.length > CONTENT_MAX) throw new MemError("内容过长");
+  const providedTitle = typeof input.title === "string" ? input.title.trim() : "";
+  const baseTitle = providedTitle || deriveMemoryTitle(text);
+  const tags = cleanTags(input.tags) ?? [];
+  const scope = cleanScope(input.scope);
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const title = attempt === 0 ? baseTitle : baseTitle.slice(0, TITLE_MAX - 4) + "（" + (attempt + 1) + "）";
+    try {
+      return await createMemory(
+        db,
+        { title, scope, content: text, tags, weight: 0, pinned: false, ai_state: "pending", ai_pending_at: now },
+        channel,
+        now,
+        { enforceTagCap: false },
+      );
+    } catch (error) {
+      if (error instanceof MemError && error.status === 409 && attempt < 19) continue;
+      throw error;
+    }
+  }
+  throw new MemError("同名记忆过多，请指定标题", 409);
 }
 
 async function applyUpdate(
@@ -850,6 +982,7 @@ async function applyUpdate(
     await prepare(db, "UPDATE memories SET invalidated = 1, updated_at = ? WHERE id = ? AND deleted_at IS NULL", [now, fields.supersedesId]).run();
     await audit(db, { memoryId: fields.supersedesId, actor: channel.actor, action: "supersede", diff: { by: row.id } }, now);
   }
+  await markMemoryVectorDirty(db, row.id);
   const updated = await getMemoryRow(db, row.id);
   if (!updated) throw new MemError("写入后读取失败", 500);
   await audit(db, { memoryId: row.id, actor: channel.actor, action, diff: { title: updated.title, scope: updated.scope, version: updated.version } }, now);
@@ -980,13 +1113,87 @@ export async function updateMemory(db: D1Database, id: string, input: Record<str
 }
 
 export async function deleteMemory(db: D1Database, id: string, channel: Channel, now: number): Promise<MemoryRow> {
+  return invalidateMemoryWithAudit(db, id, channel, now, "delete");
+}
+
+// 软删除 + 指定审计动作。后台拆分取代原文、合并提案落地都复用这里，
+// 保证“失效”永远留墓碑与审计，不会物理消失。
+export async function invalidateMemoryWithAudit(
+  db: D1Database,
+  id: string,
+  channel: Channel,
+  now: number,
+  action: string,
+  diff: Record<string, unknown> = {},
+): Promise<MemoryRow> {
   const row = await getMemoryRow(db, id);
   if (!row) throw new MemError("记忆不存在或已删除", 404);
   await prepare(db, "UPDATE memories SET deleted_at = ?, updated_at = ?, version = version + 1 WHERE id = ?", [now, now, id]).run();
   const deleted = await getMemoryRow(db, id, true);
   if (!deleted) throw new MemError("写入后读取失败", 500);
-  await audit(db, { memoryId: id, actor: channel.actor, action: "delete", diff: { title: row.title, scope: row.scope } }, now);
+  await audit(db, { memoryId: id, actor: channel.actor, action, diff: { title: row.title, scope: row.scope, ...diff } }, now);
   return deleted;
+}
+
+// 合并提案的执行点：保留方吸收被并方的正文与标签，被并方软删除留墓碑。
+// 只合并不自动产生提案；调用方（提案批准）负责权限与日志。
+export async function mergeMemories(
+  db: D1Database,
+  keepId: string,
+  dropIds: string[],
+  channel: Channel,
+  now: number,
+): Promise<MemoryRow> {
+  const keep = await getMemoryRow(db, keepId);
+  if (!keep) throw new MemError("保留的记忆不存在或已删除", 404);
+  const drops: MemoryRow[] = [];
+  for (const id of dropIds) {
+    if (id === keepId) continue;
+    const row = await getMemoryRow(db, id);
+    if (row) drops.push(row);
+  }
+  if (!drops.length) throw new MemError("要合并的记忆不存在或已删除", 404);
+  const contents: string[] = [];
+  if (keep.content.trim()) contents.push(keep.content.trim());
+  for (const row of drops) if (row.content.trim()) contents.push(row.content.trim());
+  const tags: string[] = [];
+  const seen = new Set<string>();
+  for (const tag of [...parseTags(keep.tags_json), ...drops.flatMap((row) => parseTags(row.tags_json))]) {
+    const key = normalizeTagKey(tag);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    tags.push(tag.trim().replace(/\s+/g, " "));
+  }
+  await prepare(
+    db,
+    "UPDATE memories SET content = ?, tags_json = ?, version = version + 1, updated_at = ? WHERE id = ?",
+    [contents.join("\n\n"), JSON.stringify(tags), now, keepId],
+  ).run();
+  await markMemoryVectorDirty(db, keepId);
+  for (const row of drops) {
+    await invalidateMemoryWithAudit(db, row.id, channel, now, "merge", { keep_id: keepId });
+  }
+  const updated = await getMemoryRow(db, keepId);
+  if (!updated) throw new MemError("写入后读取失败", 500);
+  await audit(db, { memoryId: keepId, actor: channel.actor, action: "merge", diff: { dropped: drops.map((row) => row.id) } }, now);
+  return updated;
+}
+
+// summarize 提案的执行点：payload 已经带摘要，批准时不再调用 AI。
+export async function applyMemorySummary(
+  db: D1Database,
+  id: string,
+  summary: string,
+  channel: Channel,
+  now: number,
+): Promise<MemoryRow> {
+  const row = await getMemoryRow(db, id);
+  if (!row) throw new MemError("记忆不存在或已删除", 404);
+  await prepare(db, "UPDATE memories SET ai_summary = ?, version = version + 1, updated_at = ? WHERE id = ?", [summary, now, id]).run();
+  const updated = await getMemoryRow(db, id);
+  if (!updated) throw new MemError("写入后读取失败", 500);
+  await audit(db, { memoryId: id, actor: channel.actor, action: "ai_summary", diff: { summary } }, now);
+  return updated;
 }
 
 
@@ -1040,6 +1247,7 @@ function scheduleMemorySummary(ai: MemoryWriteOptions["ai"], db: D1Database, row
 
 // AI 补打标的落库点：只改 tags 与 ai_state，内容不动。拆分来的记忆保持
 // split 状态，其余成功后记 tagged；失败不调用本函数，状态原样保留。
+// 同时清空 ai_pending_at：补全完成即离开待补全队列。
 export async function applyAiTags(
   db: D1Database,
   id: string,
@@ -1050,7 +1258,7 @@ export async function applyAiTags(
   const row = await getMemoryRow(db, id);
   if (!row) throw new MemError("记忆不存在或已删除", 404);
   const nextState = row.ai_state === "split" ? "split" : "tagged";
-  await prepare(db, "UPDATE memories SET tags_json = ?, ai_state = ?, version = version + 1, updated_at = ? WHERE id = ?", [
+  await prepare(db, "UPDATE memories SET tags_json = ?, ai_state = ?, ai_pending_at = NULL, version = version + 1, updated_at = ? WHERE id = ?", [
     JSON.stringify(tags),
     nextState,
     now,
@@ -1099,4 +1307,14 @@ export async function listCoreMemories(db: D1Database, agentName: string, now: n
     used += cost;
   }
   return picked;
+// 后台拆分完成后拉取待补全记忆；只跑少量，失败保留 pending 由下一轮重试。
+export async function listPendingAiMemories(db: D1Database, limit = 10): Promise<MemoryRow[]> {
+  const rows = rowsOf(
+    await prepare(
+      db,
+      "SELECT * FROM memories WHERE deleted_at IS NULL AND ai_state = 'pending' ORDER BY ai_pending_at ASC, updated_at ASC LIMIT ?",
+      [Math.max(1, limit)],
+    ).all<MemoryRow>(),
+  );
+  return rows;
 }

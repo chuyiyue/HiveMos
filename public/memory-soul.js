@@ -37,6 +37,10 @@
   var memTagFilter = "";
   var memNotice = "";
   var memNoticeKind = "ok";
+  // 后台整理提案：只展示 pending，批准后才由服务端执行动作。
+  var PROPOSALS = [];
+  var proposalsLoaded = false;
+  var proposalsError = "";
 
   function api(method, url, body) {
     var headers = { accept: "application/json" };
@@ -85,6 +89,25 @@
   }
   function refreshMemories() {
     loadMemories();
+  }
+
+  function loadProposals() {
+    api("GET", "/api/memory/proposals")
+      .then(function (result) {
+        proposalsLoaded = true;
+        if (result.data && result.data.ok && Array.isArray(result.data.proposals)) {
+          PROPOSALS = result.data.proposals;
+          proposalsError = "";
+        } else {
+          proposalsError = (result.data && result.data.error) || "提案加载失败";
+        }
+        render();
+      })
+      .catch(function () {
+        proposalsLoaded = true;
+        proposalsError = "提案加载失败";
+        render();
+      });
   }
 
   function setMemNotice(text, kind) {
@@ -183,7 +206,8 @@
       ["更新时间", C.escapeHtml(fmtTime(item.updated_at))],
     ];
     if (item.weight) facts.push(["权重", String(item.weight)]);
-    if (item.ai_state === "split") facts.push(["AI", "已拆分打标"]);
+    if (item.ai_state === "pending") facts.push(["AI", "待后台补全"]);
+    else if (item.ai_state === "split") facts.push(["AI", "已拆分打标"]);
     else if (item.ai_state === "tagged") facts.push(["AI", "已打标"]);
     else if (item.ai_state === "failed") facts.push(["AI", "处理失败，已整段保存"]);
     return facts;
@@ -302,11 +326,50 @@
     return html;
   }
 
+  var PROPOSAL_TYPE_LABELS = { merge: "合并", expire: "过期", supersede: "取代", summarize: "摘要" };
+
+  function proposalTypeLabel(item) {
+    if (item.type === "merge" && item.payload && item.payload.kind === "tags") return "标签整理";
+    return PROPOSAL_TYPE_LABELS[item.type] || item.type;
+  }
+
+  function proposalCard(item) {
+    var id = C.escapeHtml(item.id);
+    var titles = (item.memories || [])
+      .map(function (memory) { return memory.title; })
+      .filter(function (title) { return !!title; })
+      .join("、");
+    var facts = [["类型", proposalTypeLabel(item)]];
+    if (titles) facts.push(["涉及记忆", titles]);
+    else if (item.payload && item.payload.kind === "tags") {
+      facts.push(["涉及", "标签库" + (item.payload.mapping ? "（" + Object.keys(item.payload.mapping).length + " 项改写）" : "")]);
+    }
+    return C.record({
+      id: "proposal-" + item.id,
+      className: "prop-card",
+      title: proposalTypeLabel(item),
+      lede: item.reason || "后台整理生成的待确认提案",
+      facts: facts,
+      actions:
+        "<button type=\"button\" class=\"secondary\" data-prop-act=\"approve\" data-prop-id=\"" + id + "\">批准</button>" +
+        "<button type=\"button\" class=\"secondary\" data-prop-act=\"reject\" data-prop-id=\"" + id + "\">拒绝</button>",
+    });
+  }
+
+  // 待确认提案区：标题带 pending 数量；没有提案时给出与其它卡片一致的空态。
+  function proposalsSectionHtml() {
+    var title = "待确认提案" + (PROPOSALS.length ? "（" + PROPOSALS.length + "）" : "");
+    if (proposalsError) return C.section(title, "", C.emptyState("提案加载失败", proposalsError));
+    if (!proposalsLoaded) return C.section(title, "", C.emptyState("正在加载提案", ""));
+    if (!PROPOSALS.length) return C.section(title, "由后台整理生成，批准后才生效", C.emptyState("没有待确认的提案", "后台巡检发现可整理的内容时会显示在这里"));
+    return C.section(title, "批准后才生效，拒绝只标记不落库", C.cardList(PROPOSALS.map(proposalCard).join("")));
+  }
+
   function render() {
     var memoryHtml =
       "<div class=\"stack\">" +
       memorySectionsHtml() +
-      C.section("冲突", "", C.emptyState("没有待合并的记忆", "")) +
+      proposalsSectionHtml() +
       "<div id=\"memory-confirm\"></div>" +
       "</div>";
     var soulCards = SOULS.map(function (item) {
@@ -500,9 +563,11 @@
                   return "<li>" + C.escapeHtml(m.title) + "</li>";
                 })
                 .join("");
-              var head = result.data.split
-                ? "已保存，AI 拆成了 " + result.data.count + " 条记忆"
-                : "AI 暂不可用，已把整段保存为一条记忆，之后可用「AI 打标签」补标";
+              var head = result.data.pending
+                ? "已保存，AI 会在后台拆分与打标；稍后刷新即可看到整理结果"
+                : result.data.split
+                  ? "已保存，AI 拆成了 " + result.data.count + " 条记忆"
+                  : "AI 暂不可用，已把整段保存为一条记忆，之后可用「AI 打标签」补标";
               ctrl.showResult("<p>" + head + "</p>" + (titles ? "<ul>" + titles + "</ul>" : ""), "完成");
               refreshMemories();
             } else {
@@ -1238,6 +1303,25 @@
     
   }
 
+  function decideProposal(id, action, srcEl) {
+    if (srcEl) srcEl.disabled = true;
+    api("POST", "/api/memory/proposals/" + encodeURIComponent(id) + "/" + action)
+      .then(function (result) {
+        if (result.data && result.data.ok) {
+          setMemNotice(action === "approve" ? "已批准提案，改动已落库并写入审计" : "已拒绝提案", "ok");
+          loadProposals();
+          if (action === "approve") refreshMemories();
+        } else {
+          setMemNotice((result.data && result.data.error) || "操作失败，请重试", "danger");
+          render();
+        }
+      })
+      .catch(function () {
+        setMemNotice("操作失败，请重试", "danger");
+        render();
+      });
+  }
+
   var page = document.getElementById("page");
   page.addEventListener("click", handleClick);
 
@@ -1278,6 +1362,11 @@
       else if (memAct.getAttribute("data-mem-act") === "merge-tags") mergeMemoryTags(memAct);
       return;
     }
+    var propAct = target.closest("[data-prop-act]");
+    if (propAct) {
+      decideProposal(propAct.getAttribute("data-prop-id") || "", propAct.getAttribute("data-prop-act") || "", propAct);
+      return;
+    }
     var zone = target.closest("[data-manage]");
     if (zone && !target.closest("button, a, input, select, textarea")) {
       openManage(zone.getAttribute("data-manage"));
@@ -1303,5 +1392,6 @@
   }
   render();
   loadMemories();
+  loadProposals();
   loadSouls();
 })();
