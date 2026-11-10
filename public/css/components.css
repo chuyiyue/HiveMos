@@ -425,6 +425,7 @@ dialog.action-menu::backdrop { background: var(--overlay); }
 .perm-foot > button { flex: 1 1 0; min-height: 40px; }
 .perm-save.is-dirty { background: var(--accent-button); color: var(--on-accent); border-color: transparent; }
 .perm-save.is-saved { background: var(--success-soft); color: var(--success-text); border-color: transparent; }
+.perm-clear.is-open { background: var(--accent-button); color: var(--on-accent); border-color: transparent; }
 
 /* Permission matrix: one row per domain with read/write checkboxes and
    an advanced section below. Changes stay local until save commits. */

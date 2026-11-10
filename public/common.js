@@ -1057,7 +1057,11 @@
         els.save.disabled = !dirty || permSaving;
         els.save.classList.toggle("is-dirty", dirty);
       }
-      if (els.clear) els.clear.textContent = anyPermChecked() ? "全部关闭" : "全部开启";
+      if (els.clear) {
+        var anyOn = anyPermChecked();
+        els.clear.textContent = anyOn ? "全部关闭" : "全部开启";
+        els.clear.classList.toggle("is-open", !anyOn);
+      }
     }
 
     function anyPermChecked() {
