@@ -5,11 +5,10 @@
   // 2026-10-30 is the newest date this Wrangler's workerd accepts.
   "compatibility_date": "2026-10-30",
   "workers_dev": true,
-  // Custom domain mos.oonn.pp.ua is PENDING: its zone is on Cloudflare
-  // but not visible from this account's deploy token (wrangler error
-  // 10082 "Can't infer zone from route", 2026-11-10), so the route is
-  // intentionally not declared yet. Adding it back is a one-line change
-  // once the zone/account question is resolved.
+  // Custom domain mos.1791147.xyz (zone is in this account; picked by
+  // the owner 2026-11-10 as the OpenMos entry while mos.oonn.pp.ua's
+  // zone lives in another account and hivemos stays suspended).
+  "routes": [{ "pattern": "mos.1791147.xyz", "custom_domain": true }],
   "assets": {
     "directory": "./public",
     "binding": "ASSETS",
@@ -23,9 +22,9 @@
   // Same Vectorize index and D1 database as the hivemos worker: both
   // scripts serve the same data; only the script name differs.
   "vectorize": [{ "binding": "MEMORY_VECTORS", "index_name": "hivemos-memories" }],
-  "triggers": {
-    "crons": ["0 * * * *"]
-  },
+  // No cron triggers for now: this account is at the Workers Free limit
+  // of 5 cron triggers, and a failed trigger update fails the whole
+  // deploy step. Add the hourly trigger back once a slot frees up.
   "d1_databases": [
     {
       "binding": "DB",
