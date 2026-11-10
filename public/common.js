@@ -1167,37 +1167,45 @@
         });
     }
 
-    function promptPendingPerms(saveLabel, discardLabel) {
+    function promptPendingPerms() {
       if (!isPermDirty()) return Promise.resolve("saved");
       if (promptOpen) return Promise.resolve("stay");
       promptOpen = true;
       return new Promise(function (resolve) {
-        var slot = ctrl.confirmSlot;
-        var panel = document.createElement("div");
-        panel.className = "confirm-panel";
-        panel.setAttribute("role", "group");
-        panel.setAttribute("aria-label", "权限未保存");
+        var dialog = document.createElement("dialog");
+        dialog.className = "modal size-sm unsaved-dialog";
+        dialog.setAttribute("aria-label", "权限未保存");
+        var card = document.createElement("div");
+        card.className = "modal-card";
+        var heading = document.createElement("h2");
+        heading.className = "modal-title";
+        heading.textContent = "权限未保存";
         var text = document.createElement("p");
         text.textContent = "权限改动还没有保存，离开前要保存吗？";
         var actions = document.createElement("div");
-        actions.className = "confirm-actions";
+        actions.className = "unsaved-actions";
         var saveBtn = document.createElement("button");
         saveBtn.type = "button";
-        saveBtn.textContent = saveLabel;
-        var discardBtn = document.createElement("button");
-        discardBtn.type = "button";
-        discardBtn.className = "secondary";
-        discardBtn.textContent = discardLabel;
+        saveBtn.textContent = "保存";
         var stayBtn = document.createElement("button");
         stayBtn.type = "button";
         stayBtn.className = "secondary";
         stayBtn.textContent = "继续编辑";
-        actions.append(saveBtn, discardBtn, stayBtn);
-        panel.append(text, actions);
-        slot.append(panel);
+        var discardBtn = document.createElement("button");
+        discardBtn.type = "button";
+        discardBtn.className = "danger";
+        discardBtn.textContent = "不保存";
+        actions.append(saveBtn, stayBtn, discardBtn);
+        card.append(heading, text, actions);
+        dialog.append(card);
+        document.body.append(dialog);
+        var done = false;
         function finish(value) {
+          if (done) return;
+          done = true;
           promptOpen = false;
-          panel.remove();
+          if (dialog.open) dialog.close();
+          dialog.remove();
           resolve(value);
         }
         saveBtn.addEventListener("click", function () {
@@ -1214,20 +1222,29 @@
         stayBtn.addEventListener("click", function () {
           finish("stay");
         });
+        dialog.addEventListener("cancel", function (event) {
+          // 强弹窗：Esc 不关，只能点按钮做选择
+          event.preventDefault();
+        });
+        dialog.addEventListener("close", function () {
+          finish("stay");
+        });
+        dialog.showModal();
         saveBtn.focus();
       });
     }
 
+
     function guardClose() {
       if (!isPermDirty()) return true;
-      return promptPendingPerms("保存并退出", "不保存退出").then(function (r) {
+      return promptPendingPerms().then(function (r) {
         return r !== "stay";
       });
     }
 
     function guardAction() {
       if (!isPermDirty()) return Promise.resolve(true);
-      return promptPendingPerms("保存并继续", "不保存").then(function (r) {
+      return promptPendingPerms().then(function (r) {
         return r !== "stay";
       });
     }
