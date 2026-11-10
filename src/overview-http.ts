@@ -10,6 +10,7 @@
 
 import { json } from "./http";
 import type { D1Database, Env, WaitCtx } from "./env";
+import { deniedToolName } from "./registry";
 
 const ACTIVITY_LIMIT = 20;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -200,9 +201,9 @@ async function buildActivity(db: D1Database, agentNames: Map<string, string>): P
 }
 
 async function mcpActivity(db: D1Database): Promise<ActivityItem[]> {
-  const rows = await allRows<{ at: number; agent_name: string | null; server_title: string | null; server_name: string | null }>(
+  const rows = await allRows<{ at: number; agent_name: string | null; server_id: string; server_title: string | null; server_name: string | null }>(
     db,
-    `SELECT f.created_at AS at, a.name AS agent_name, s.title AS server_title, s.name AS server_name
+    `SELECT f.created_at AS at, a.name AS agent_name, f.server_id, s.title AS server_title, s.name AS server_name
      FROM mcp_fetch_audit f
      LEFT JOIN agents a ON a.id = f.agent_id
      LEFT JOIN mcp_servers s ON s.id = f.server_id
@@ -210,6 +211,11 @@ async function mcpActivity(db: D1Database): Promise<ActivityItem[]> {
   );
   return rows.map((row) => {
     const actor = row.agent_name ?? "未知 Agent";
+    // 权限不足被拒的调用（server_id = "denied:<工具名>"）单独文案。
+    const deniedTool = deniedToolName(row.server_id);
+    if (deniedTool) {
+      return { at: row.at, module: "mcp", module_label: "MCP", actor, text: `调用「${deniedTool}」时权限不足，被拒绝` };
+    }
     const server = row.server_title || row.server_name || "未知服务";
     return { at: row.at, module: "mcp", module_label: "MCP", actor, text: `取用了「${server}」的配置` };
   });

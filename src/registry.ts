@@ -5,6 +5,8 @@ import { sha256Hex } from "./auth";
 import { decryptString, resolveContentKey, sealString } from "./crypto";
 import { readChatResponse, resolveAiModel } from "./ai-model";
 import type { D1Database, Env, WaitCtx } from "./env";
+import { permissionsFromInput, parsePermissions, serializePermissions } from "./permissions";
+import type { AgentPermissions } from "./permissions";
 
 export interface Tag {
   text: string;
@@ -99,7 +101,7 @@ export interface PublicAgent {
   name: string;
   status: string;
   group_id: string | null;
-  permissions: string[];
+  permissions: AgentPermissions;
   last_seen_at: number | null;
   pinned_at: number | null;
   created_at: number;
@@ -1265,45 +1267,9 @@ export async function deleteGroup(db: D1Database, id: string): Promise<{ ok: tru
   return { ok: true };
 }
 
-// System feature domains an agent can be granted, one per board. Stored on
-// the agent as a JSON array; anything not listed is denied at the MCP edge.
-// soul_write_any is additive: it unlocks writing other agents' souls and is
-// never granted by default, so existing agents keep their stored grants.
-export const PERMISSION_DOMAINS = ["mcp", "skills", "api", "memory", "soul", "soul_write_any", "tasks", "calendar", "vault", "machines"];
-
-// The old single "registry" domain covered the whole MCP 与 Skills board;
-// it now splits per tab (MCP / Skills / API). Stored grants expand on read.
-const LEGACY_REGISTRY_EXPANSION = ["mcp", "skills", "api"];
-
-// Stored JSON that is missing or unreadable falls back to the historical
-// capability set: registry only.
-export function parsePermissions(raw: string | null | undefined): string[] {
-  let parsed: unknown = null;
-  if (typeof raw === "string" && raw.trim()) {
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      parsed = null;
-    }
-  }
-  if (!Array.isArray(parsed)) return [...LEGACY_REGISTRY_EXPANSION];
-  const wanted = new Set(parsed.filter((item): item is string => typeof item === "string"));
-  if (wanted.has("registry")) {
-    for (const domain of LEGACY_REGISTRY_EXPANSION) wanted.add(domain);
-  }
-  return PERMISSION_DOMAINS.filter((domain) => wanted.has(domain));
-}
-
-// PATCH input must be a wholesale replacement drawn from the known domains.
-function readPermissionsInput(value: unknown): { ok: true; permissions: string[] } | Failure {
-  if (!Array.isArray(value)) return { ok: false, status: 400, error: "权限格式不正确" };
-  for (const item of value) {
-    if (typeof item !== "string" || !PERMISSION_DOMAINS.includes(item)) {
-      return { ok: false, status: 400, error: "权限包含未知项" };
-    }
-  }
-  return { ok: true, permissions: PERMISSION_DOMAINS.filter((domain) => value.includes(domain)) };
-}
+// 权限的存储格式、解析与序列化统一走 src/permissions.ts；这里只负责
+// agents 表读写与审计。旧数组在新格式下按「只读」解析，与面板 PATCH 的
+// 过渡映射分开放在 permissions.ts，避免两处口径漂移。
 
 function toPublicAgent(row: AgentRow): PublicAgent {
   return {
@@ -1397,6 +1363,8 @@ export async function createAgent(env: Env, value: unknown): Promise<{ ok: true;
   if (!resolved.ok) return resolved;
   const token = randomAgentToken();
   const now = Date.now();
+  // 新建 Agent 默认全部关闭（以前默认 [mcp, skills, api]，现在是全 false）。
+  const permissions = parsePermissions(null);
   let id = newAgentId();
   for (let attempt = 0; attempt < 5 && (await getAgentRow(db, id)); attempt++) id = newAgentId();
   const tokenEnc = await sealAgentToken(env, token);
@@ -1407,7 +1375,7 @@ export async function createAgent(env: Env, value: unknown): Promise<{ ok: true;
       await sha256Hex(token),
       tokenEnc,
       resolved.groupId,
-      JSON.stringify(["mcp", "skills", "api"]),
+      serializePermissions(permissions),
       now,
     ]).run();
   } catch (error) {
@@ -1415,7 +1383,7 @@ export async function createAgent(env: Env, value: unknown): Promise<{ ok: true;
     return dbFailure();
   }
   await auditAgentQuietly(db, id, "create");
-  return { ok: true, agent: { id, name, status: "active", group_id: resolved.groupId, permissions: ["mcp", "skills", "api"], last_seen_at: null, pinned_at: null, created_at: now, call_count: 0, avatar_icon: null, avatar_url: null, has_custom_avatar: false, token } };
+  return { ok: true, agent: { id, name, status: "active", group_id: resolved.groupId, permissions, last_seen_at: null, pinned_at: null, created_at: now, call_count: 0, avatar_icon: null, avatar_url: null, has_custom_avatar: false, token } };
 }
 
 export async function updateAgent(db: D1Database, id: string, value: unknown): Promise<{ ok: true; agent: PublicAgent } | Failure> {
@@ -1437,7 +1405,8 @@ export async function updateAgent(db: D1Database, id: string, value: unknown): P
   }
   let permissions = parsePermissions(existing.permissions);
   if ("permissions" in body) {
-    const parsedPermissions = readPermissionsInput(body.permissions);
+    // 对象：严格按布尔收；旧数组：过渡期按「列出的域 = read+write 全开」映射。
+    const parsedPermissions = permissionsFromInput(body.permissions);
     if (!parsedPermissions.ok) return parsedPermissions;
     permissions = parsedPermissions.permissions;
   }
@@ -1483,7 +1452,7 @@ export async function updateAgent(db: D1Database, id: string, value: unknown): P
     }
   }
   try {
-    await prepare(db, "UPDATE agents SET name = ?, group_id = ?, permissions = ?, pinned_at = ?, status = ?, avatar_icon = ?, avatar_url = ? WHERE id = ?", [name, groupId, JSON.stringify(permissions), pinnedAt, status, avatarIcon, avatarUrl, id]).run();
+    await prepare(db, "UPDATE agents SET name = ?, group_id = ?, permissions = ?, pinned_at = ?, status = ?, avatar_icon = ?, avatar_url = ? WHERE id = ?", [name, groupId, serializePermissions(permissions), pinnedAt, status, avatarIcon, avatarUrl, id]).run();
   } catch (error) {
     if (isUniqueError(error)) return { ok: false, status: 409, error: "这个名字已存在" };
     return dbFailure();
@@ -1599,7 +1568,7 @@ export async function authenticateAgent(
   db: D1Database,
   token: string,
   now: number,
-): Promise<{ ok: true; agentId: string; agentName: string; permissions: string[] } | Failure> {
+): Promise<{ ok: true; agentId: string; agentName: string; permissions: AgentPermissions } | Failure> {
   const row = await prepare(db, "SELECT id, name, status, permissions, last_seen_at FROM agents WHERE token_hash = ?", [await sha256Hex(token)]).first<{
     id: string;
     name: string;
@@ -1675,4 +1644,30 @@ export async function fetchConfigForAgent(
     now,
   ]).run();
   return { ok: true, config: toAgentConfig(row) };
+}
+
+// 被拒绝的 MCP 工具调用也要能在「调用记录」里看到。mcp_fetch_audit 只有
+// id / agent_id / server_id / created_at 四列（没有状态列），这里沿用既有
+// 表与既有列：server_id 写保留前缀 "denied:<工具名>"，records 与总览按
+// 前缀识别为「调用被拒」。不新建表、不加迁移；写失败静默，绝不让审计
+// 连累 403 响应。
+const DENIED_TOOL_PREFIX = "denied:";
+
+export function deniedToolName(serverId: string | null | undefined): string | null {
+  if (typeof serverId !== "string" || !serverId.startsWith(DENIED_TOOL_PREFIX)) return null;
+  const name = serverId.slice(DENIED_TOOL_PREFIX.length);
+  return name || null;
+}
+
+export async function recordToolDenied(db: D1Database, agentId: string, toolName: string, now: number): Promise<void> {
+  try {
+    await prepare(db, "INSERT INTO mcp_fetch_audit (id, agent_id, server_id, created_at) VALUES (?, ?, ?, ?)", [
+      crypto.randomUUID(),
+      agentId,
+      DENIED_TOOL_PREFIX + toolName,
+      now,
+    ]).run();
+  } catch {
+    // 旁路写入：审计失败不影响拒绝本身
+  }
 }

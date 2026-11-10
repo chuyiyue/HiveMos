@@ -509,6 +509,24 @@
     ["machines", "云计算资源", "服务器、云主机与 Workers 的状态与操作"],
   ];
 
+  // transitional: 后端已把 agent.permissions 升级为
+  // {域:{read,write}, advanced:{…}}，权限矩阵 UI 由另一个并行任务重写。
+  // 这里只负责「怎么读」：把新对象折回旧面板认识的「已开启域」列表
+  // （read 或 write 任一为 true 即算开着；advanced 里只有 soul_write_any 旧面板认识），
+  // 旧数组原样透传。选择器本身、保存载荷与交互都不动。
+  function permissionDomains(value) {
+    if (Array.isArray(value)) return value.slice();
+    if (!value || typeof value !== "object") return [];
+    var enabled = PERM_DOMAINS.map(function (entry) {
+      return entry[0];
+    }).filter(function (domain) {
+      var grant = value[domain];
+      return !!grant && (grant.read === true || grant.write === true);
+    });
+    if (value.advanced && value.advanced.soul_write_any === true) enabled.push("soul_write_any");
+    return enabled;
+  }
+
   function agentApi(method, url, body) {
     var headers = { accept: "application/json" };
     var init = { method: method, headers: headers, cache: "no-store" };
@@ -529,7 +547,7 @@
   }
 
   function permTextOf(agent) {
-    var perms = agent.permissions || [];
+    var perms = permissionDomains(agent && agent.permissions);
     if (!perms.length) return "未开启任何功能";
     var labels = perms.map(function (domain) {
       var entry = PERM_DOMAINS.find(function (item) {
@@ -578,7 +596,7 @@
   }
 
   function permPickerHtml(agent) {
-    var enabled = new Set(agent.permissions || []);
+    var enabled = new Set(permissionDomains(agent && agent.permissions));
     var items = PERM_DOMAINS.map(function (entry) {
       var on = enabled.has(entry[0]);
       return (
@@ -875,7 +893,7 @@
     var busy = false;
     var interacted = false;
 
-    var permSaved = new Set(seed && seed.permissions ? seed.permissions : []);
+    var permSaved = new Set(seed ? permissionDomains(seed.permissions) : []);
     var permDesired = new Set(permSaved);
     var permSaving = false;
     var permActiveKey = null;
@@ -1197,7 +1215,7 @@
           agent = fresh;
           partial = false;
           if (!isPermDirty() && !permSaving) {
-            permSaved = new Set(fresh.permissions || []);
+            permSaved = new Set(permissionDomains(fresh.permissions));
             permDesired = new Set(permSaved);
           }
           if (!dataChanged) return;
@@ -2653,6 +2671,7 @@
     wireManageTabs: wireManageTabs,
     mcpEndpoint: mcpEndpoint,
     permDomains: PERM_DOMAINS,
+    permissionDomains: permissionDomains,
     metaGrid: metaGrid,
     iconSvg: iconSvg,
     agentAvatarHtml: agentAvatarHtml,
