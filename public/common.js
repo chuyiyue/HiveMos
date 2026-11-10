@@ -515,9 +515,9 @@
     ["machines", "云计算资源"],
   ];
   var PERM_ADVANCED = [
-    ["machines_secret", "查看凭据", "查看服务器、云主机与 Workers 的明文凭据"],
-    ["soul_write_any", "代写他人 Soul", "写入其他 Agent 的 Soul，默认不给任何 Agent"],
-    ["vault_totp_code", "读取保险库验证码", "读取保险库中保存的两步验证码"],
+    ["machines_secret", "查看凭据", "查看服务器、云主机与 Workers 的明文凭据", "read"],
+    ["soul_write_any", "代写他人 Soul", "写入其他 Agent 的 Soul，默认不给任何 Agent", "write"],
+    ["vault_totp_code", "读取保险库验证码", "读取保险库中保存的两步验证码", "read"],
   ];
   // Legacy triple list ([key, label, hint]) kept for the permDomains export.
   var PERM_DOMAINS = [
@@ -648,18 +648,24 @@
     }).join("");
     var advanced = PERM_ADVANCED.map(function (entry) {
       var key = entry[0];
-      return (
-        '<div class="perm-row"><div class="perm-meta"><strong>' +
-        escapeHtml(entry[1]) +
-        '</strong><span class="subtle">' +
-        escapeHtml(entry[2]) +
-        '</span></div><label class="perm-check"><input type="checkbox" data-perm-adv="' +
+      var col = entry[3];
+      var live =
+        '<label class="perm-check"><input type="checkbox" data-perm-adv="' +
         key +
         '"' +
         (perms.advanced[key] ? " checked" : "") +
         ' aria-label="' +
+        escapeHtml(entry[1] + (col === "read" ? " 读取" : " 写入")) +
+        '" /></label>';
+      var dead = '<label class="perm-check"><input type="checkbox" disabled /></label>';
+      return (
+        '<div class="perm-mrow">' +
+        '<span class="perm-mname">' +
         escapeHtml(entry[1]) +
-        '" /></label></div>'
+        "</span>" +
+        (col === "read" ? live : dead) +
+        (col === "write" ? live : dead) +
+        "</div>"
       );
     }).join("");
     return (
@@ -667,10 +673,8 @@
       '<div class="perm-mgrid" aria-label="功能权限">' +
       '<div class="perm-mrow perm-mhead"><span class="perm-mname">功能</span><span class="perm-mcol">读取</span><span class="perm-mcol">写入</span></div>' +
       rows +
-      "</div>" +
-      '<div class="perm-advanced"><div class="perm-advanced-title">高级权限</div><div class="perm-list">' +
       advanced +
-      "</div></div>" +
+      "</div>" +
       '<div class="perm-foot"><button type="button" class="secondary perm-clear" data-perm-clear>全部关闭</button><button type="button" class="perm-save" data-perm-save disabled>保存权限</button></div>' +
       "</div>"
     );
