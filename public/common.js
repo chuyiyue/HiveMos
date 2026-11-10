@@ -752,16 +752,16 @@
       "<div><dt>状态</dt><dd>" +
       statusPill(active ? "enabled" : "disabled") +
       "</dd></div>" +
-      "<div><dt>标识</dt><dd><span class=\"mono\">" +
+      "<div><dt>标识</dt><dd><span class=\"mono copy-text\" data-copy=\"" +
       escapeHtml(agent.id) +
-      "</span> <button type=\"button\" class=\"copy-btn\" data-copy=\"" +
+      "\" title=\"点击复制\">" +
       escapeHtml(agent.id) +
-      "\" data-label=\"复制\">复制</button></dd></div>" +
-      "<div><dt>接入地址</dt><dd><span class=\"mono\" data-agent-endpoint>" +
+      "</span></dd></div>" +
+      "<div><dt>接入地址</dt><dd><span class=\"mono copy-text\" data-agent-endpoint data-copy=\"" +
       escapeHtml(endpoint) +
-      "</span> <button type=\"button\" class=\"copy-btn\" data-agent-endpoint-copy data-copy=\"" +
-      escapeHtml(endpoint) +
-      "\" data-label=\"复制\">复制</button></dd></div>" +
+      "\" title=\"点击复制\">…" +
+      escapeHtml(endpoint.slice(-16)) +
+      "</span></dd></div>" +
       "</dl></div>" +
       "<div class=\"page-tabs manage-tabs\" role=\"tablist\" aria-label=\"Agent 管理\">" +
       "<button type=\"button\" class=\"page-tab\" role=\"tab\" data-mtab=\"overview\" aria-selected=\"" + (initialTab === "overview" ? "true" : "false") + "\">概览</button>" +
@@ -996,9 +996,10 @@
     function applyEndpointToken() {
       var url = endpointWithToken || mcpEndpoint();
       var text = ctrl.bodyEl.querySelector("[data-agent-endpoint]");
-      if (text) text.textContent = url;
-      var copyBtn = ctrl.bodyEl.querySelector("[data-agent-endpoint-copy]");
-      if (copyBtn) copyBtn.setAttribute("data-copy", url);
+      if (text) {
+        text.textContent = "…" + url.slice(-16);
+        text.setAttribute("data-copy", url);
+      }
     }
     function loadEndpointToken() {
       agentApi("POST", "/api/agents/" + encodeURIComponent(agentId) + "/reveal-token")
