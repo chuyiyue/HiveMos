@@ -82,6 +82,7 @@ export interface VaultGroupRow {
   name: string;
   created_at: number;
   member_count: number;
+  sort_order: number;
 }
 
 export interface EmailRow {
@@ -188,13 +189,14 @@ export function groupPublic(row: VaultGroupRow): Record<string, unknown> {
     name: row.name,
     created_at: row.created_at,
     member_count: row.member_count,
+    sort_order: row.sort_order ?? 0,
   };
 }
 
 export async function getGroup(db: D1Database, id: string): Promise<VaultGroupRow | null> {
   const row = await prepare(
     db,
-    "SELECT id, name, created_at, " +
+    "SELECT id, name, created_at, sort_order, " +
       "(SELECT COUNT(*) FROM vault_entries WHERE group_id = vault_groups.id) + " +
       "(SELECT COUNT(*) FROM gateways WHERE group_id = vault_groups.id) AS member_count " +
       "FROM vault_groups WHERE id = ?",
@@ -208,10 +210,10 @@ export async function listGroups(db: D1Database): Promise<VaultGroupRow[]> {
   const rows = rowsOf(
     await prepare(
       db,
-      "SELECT id, name, created_at, " +
+      "SELECT id, name, created_at, sort_order, " +
         "(SELECT COUNT(*) FROM vault_entries WHERE group_id = vault_groups.id) + " +
         "(SELECT COUNT(*) FROM gateways WHERE group_id = vault_groups.id) AS member_count " +
-        "FROM vault_groups ORDER BY created_at ASC, id ASC",
+        "FROM vault_groups ORDER BY sort_order ASC, created_at ASC, id ASC",
     ).all<VaultGroupRow>(),
   );
   const totpCounts = await totpGroupCounts(db);
@@ -220,14 +222,32 @@ export async function listGroups(db: D1Database): Promise<VaultGroupRow[]> {
 }
 
 export async function createGroup(db: D1Database, body: Record<string, unknown>, now: number): Promise<VaultGroupRow> {
+  const tail = await prepare(db, "SELECT COALESCE(MAX(sort_order), 0) AS m FROM vault_groups").first<{ m: number | string }>();
   const row: VaultGroupRow = {
     id: newId("vg"),
     name: reqText(body, "name", NAME_MAX, "分组名"),
     created_at: now,
     member_count: 0,
+    sort_order: (tail ? Number(tail.m) || 0 : 0) + 10,
   };
-  await prepare(db, "INSERT INTO vault_groups (id, name, created_at) VALUES (?, ?, ?)", [row.id, row.name, row.created_at]).run();
+  await prepare(db, "INSERT INTO vault_groups (id, name, created_at, sort_order) VALUES (?, ?, ?, ?)", [row.id, row.name, row.created_at, row.sort_order]).run();
   return row;
+}
+
+// Reorder persists the panel's drag / arrow order: ids is the full new
+// order for the vault pool; every id must exist. sort_order is rewritten
+// densely (10, 20, 30…) so later inserts can still append.
+export async function reorderGroups(db: D1Database, ids: unknown): Promise<void> {
+  if (!Array.isArray(ids) || ids.length > 500 || ids.some((id) => typeof id !== "string" || !id)) {
+    throw new VaultError("排序格式不正确");
+  }
+  const unique = [...new Set(ids as string[])];
+  const rows = rowsOf(await prepare(db, "SELECT id FROM vault_groups").all<{ id: string }>());
+  const known = new Set(rows.map((row) => row.id));
+  if (unique.some((id) => !known.has(id))) throw new VaultError("分组不存在", 404);
+  for (let i = 0; i < unique.length; i++) {
+    await prepare(db, "UPDATE vault_groups SET sort_order = ? WHERE id = ?", [(i + 1) * 10, unique[i]]).run();
+  }
 }
 
 export async function updateGroup(db: D1Database, id: string, body: Record<string, unknown>): Promise<VaultGroupRow> {

@@ -276,8 +276,6 @@ dialog.modal::backdrop { background: var(--overlay); }
 /* Small actions parked at the right of a section head (group rename/delete). */
 .section-actions { display: flex; gap: 8px; margin-left: auto; }
 .section-actions button { min-height: 32px; padding: 4px 10px; font-size: var(--fs-sm); }
-.section-actions .group-menu-btn { width: 32px; min-width: 32px; min-height: 32px; padding: 0; }
-.section-actions .group-menu-btn .icon { width: 18px; height: 18px; }
 
 /* Centered floating action menu (openActionMenu). Deliberately not a
    drawer: it stays centered with margins on phones too. */
@@ -1039,3 +1037,37 @@ article.record .card-actions { margin-top: auto; }
   .manage-actions { gap: 6px; }
   .manage-actions > button { padding: 0 2px; font-size: var(--fs-sm); }
 }
+
+/* Group manager popover （分组管理）: anchored panel from each page's
+   分组管理 button. Rows: drag handle | name (rename) + count | ↑ ↓ |
+   round delete; footer creates a group. The list keeps the project's
+   thin scrollbar (it is not a modal card). */
+.group-manager-pop { position: fixed; z-index: 70; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg); box-shadow: var(--shadow-2); padding: 10px; }
+.gm-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.gm-title { font-weight: 700; font-size: var(--fs-md); }
+.gm-close { width: 28px; height: 28px; min-height: 0; padding: 0; display: inline-flex; align-items: center; justify-content: center; background: none; border: 0; color: var(--text-3); cursor: pointer; }
+.gm-close .icon { width: 16px; height: 16px; }
+.gm-close:hover { color: var(--text); }
+.gm-list { max-height: 300px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+.gm-list::-webkit-scrollbar { width: 10px; }
+.gm-list::-webkit-scrollbar-track { background: transparent; }
+.gm-list::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 8px; border: 3px solid transparent; background-clip: padding-box; }
+.gm-list.is-dragging { overflow: hidden; }
+.gm-row { display: flex; align-items: center; gap: 6px; padding: 6px 4px; border-top: 1px solid var(--border); background: var(--surface); }
+.gm-row:first-child { border-top: 0; }
+.gm-row.is-dragging { position: relative; z-index: 2; box-shadow: var(--shadow-1); border-radius: var(--r-md); border-top-color: transparent; }
+.gm-handle { touch-action: none; cursor: grab; color: var(--text-3); display: inline-flex; padding: 4px 2px; flex: 0 0 auto; }
+.gm-handle .icon { width: 18px; height: 18px; }
+.gm-name { flex: 1 1 auto; min-width: 0; min-height: 0; display: flex; align-items: baseline; gap: 8px; background: none; border: 0; padding: 4px 2px; text-align: left; color: var(--text); cursor: pointer; font: inherit; }
+.gm-name-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gm-count { color: var(--text-3); font-size: var(--fs-sm); flex: 0 0 auto; }
+.gm-move { width: 28px; height: 28px; min-height: 0; padding: 0; display: inline-flex; align-items: center; justify-content: center; background: none; border: 1px solid var(--border); border-radius: var(--r-md); color: var(--text-2); cursor: pointer; flex: 0 0 auto; }
+.gm-move .icon { width: 15px; height: 15px; }
+.gm-move:disabled { opacity: 0.35; cursor: default; }
+.gm-del { width: 28px; height: 28px; min-height: 0; padding: 0; display: inline-flex; align-items: center; justify-content: center; background: none; border: 1px solid var(--border); border-radius: 50%; color: var(--danger); cursor: pointer; flex: 0 0 auto; }
+.gm-del .icon { width: 14px; height: 14px; }
+.gm-del:hover { border-color: var(--danger); }
+.gm-empty { color: var(--text-3); text-align: center; padding: 14px 0; margin: 0; }
+.gm-confirm-slot .confirm-panel { margin-top: 8px; }
+.gm-foot { margin-top: 10px; }
+.gm-create { width: 100%; min-height: 38px; }

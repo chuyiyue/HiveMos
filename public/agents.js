@@ -121,30 +121,28 @@
     });
   }
 
-  function groupActions(group) {
-    var gid = C.escapeHtml(group.id);
-    return (
-      '<button type="button" class="icon-btn ghost group-menu-btn" data-action="group-menu" data-id="' +
-      gid +
-      '" aria-label="分组操作" aria-haspopup="menu">' +
-      GROUP_MENU_ICON +
-      "</button>" +
-      '<span class="confirm-slot" data-confirm-group="' +
-      gid +
-      '"></span>'
-    );
+  // 分组头不再放按钮：分组的排序/改名/删除/新建统一走页头「分组管理」
+  // 按钮打开的 C.openGroupManager 面板（Agents 页签管后端 scope=agent
+  // 分组池，应用页签管页内 state.apps.groups）。
+  function memberCounts(items) {
+    var counts = {};
+    (items || []).forEach(function (item) {
+      if (item.group_id) counts[item.group_id] = (counts[item.group_id] || 0) + 1;
+    });
+    return counts;
   }
 
-  // 分组头只留一个三条线菜单按钮：改名/删除收进 C.openActionMenu；
-  // 删除沿用机器页 deleteGroupFlow 的 askConfirm 文案做二次确认。
-  var GROUP_MENU_ICON =
-    '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>';
+  function groupCounts(groups) {
+    var counts = {};
+    (groups || []).forEach(function (g) {
+      counts[g.id] = g.member_count || 0;
+    });
+    return counts;
+  }
 
-  function confirmDeleteGroup(group, btn, run) {
-    var section = btn ? btn.closest("section") : null;
-    var slot = section ? section.querySelector('[data-confirm-group="' + group.id + '"]') : null;
+  function confirmDeleteGroupBySlot(group, slot, run) {
     C.askConfirm({
-      anchor: slot || btn,
+      anchor: slot,
       title: "删除分组",
       text: "确认删除分组「" + group.name + "」吗？组内条目会回到未分组，不会被删除",
       confirmLabel: "删除",
@@ -154,21 +152,56 @@
     });
   }
 
-  function openGroupMenu(group, btn, renameFn, deleteFn) {
-    C.openActionMenu({
-      items: [
-        { label: "改名", onSelect: renameFn },
-        {
-          label: "删除",
-          danger: true,
-          onSelect: function () {
-            confirmDeleteGroup(group, btn, deleteFn);
-          },
-        },
-      ],
+  function openAgentGroupManager(btn) {
+    C.openGroupManager({
+      anchor: btn,
+      groups: state.groups,
+      counts: groupCounts(state.groups),
+      onCreate: function () { openGroup(); },
+      onRename: function (group) { openRenameGroup(group); },
+      onDelete: function (group, slot) {
+        confirmDeleteGroupBySlot(group, slot, function () { deleteGroup(group); });
+      },
+      onReorder: function (ids) {
+        api("POST", "/api/groups/reorder", { scope: "agent", ids: ids })
+          .then(function (result) {
+            if (!result.data || result.data.ok !== true) {
+              state.notice = (result.data && result.data.error) || "排序没有保存，请重试";
+              state.noticeKind = "danger";
+            }
+            loadAll();
+          })
+          .catch(function () { loadAll(); });
+      },
+      onSettled: function () {
+        return { groups: state.groups, counts: groupCounts(state.groups) };
+      },
     });
   }
 
+  function openAppGroupManager(btn) {
+    C.openGroupManager({
+      anchor: btn,
+      groups: state.apps.groups,
+      counts: memberCounts(allApps()),
+      onCreate: function () { openAppGroupDialog(null); },
+      onRename: function (group) { openAppGroupDialog(group); },
+      onDelete: function (group, slot) {
+        confirmDeleteGroupBySlot(group, slot, function () { deleteAppGroup(group); });
+      },
+      onReorder: function (ids) {
+        var byId = {};
+        state.apps.groups.forEach(function (g) { byId[g.id] = g; });
+        state.apps.groups = ids
+          .map(function (id) { return byId[id]; })
+          .filter(Boolean);
+        render();
+      },
+      onSettled: function () {
+        return { groups: state.apps.groups, counts: memberCounts(allApps()) };
+      },
+    });
+  }
 
   function render() {
     var body;
@@ -185,7 +218,6 @@
           return agent.group_id || null;
         },
         renderItem: card,
-        groupActions: groupActions,
         ungroupedTitle: "未分组",
         emptyGroupText: "添加 Agent时选择这个分组即可归入",
         emptyTitle: "还没有设备",
@@ -270,7 +302,7 @@
       var action = button.getAttribute("data-action");
       var id = button.getAttribute("data-id") || "";
       if (action === "open-create") openCreate();
-      else if (action === "add-group") openGroup();
+      else if (action === "add-group") openAgentGroupManager(button);
       else if (action === "copy-token") {
         var agentC = findAgent(id);
         if (agentC) copyToken(agentC, button);
@@ -283,32 +315,14 @@
       else if (action === "pin") {
         var agent3 = findAgent(id);
         if (agent3) togglePin(agent3);
-      } else if (action === "group-menu") {
-        var group = findGroup(id);
-        if (group)
-          openGroupMenu(
-            group,
-            button,
-            function () { openRenameGroup(group); },
-            function () { deleteGroup(group); }
-          );
       } else if (action === "app-add") openAppDialog(null);
-      else if (action === "app-add-group") openAppGroupDialog(null);
+      else if (action === "app-add-group") openAppGroupManager(button);
       else if (action === "app-edit") {
         var app = findApp(id);
         if (app) openAppDialog(app);
       } else if (action === "app-delete") {
         var app2 = findApp(id);
         if (app2) deleteApp(app2);
-      } else if (action === "app-group-menu") {
-        var appGroup = findAppGroup(id);
-        if (appGroup)
-          openGroupMenu(
-            appGroup,
-            button,
-            function () { openAppGroupDialog(appGroup); },
-            function () { deleteAppGroup(appGroup); }
-          );
       }
   }
 
@@ -1041,19 +1055,6 @@
     });
   }
 
-  function appGroupActions(group) {
-    var gid = C.escapeHtml(group.id);
-    return (
-      '<button type="button" class="icon-btn ghost group-menu-btn" data-action="app-group-menu" data-id="' +
-      gid +
-      '" aria-label="分组操作" aria-haspopup="menu">' +
-      GROUP_MENU_ICON +
-      "</button>" +
-      '<span class="confirm-slot" data-confirm-group="' +
-      gid +
-      '"></span>'
-    );
-  }
 
   function appsHtml() {
     return (
@@ -1066,7 +1067,6 @@
           return item.group_id || null;
         },
         renderItem: appCard,
-        groupActions: appGroupActions,
         ungroupedTitle: "未分组",
         emptyGroupText: "添加应用时选择这个分组即可归入",
         emptyTitle: "还没有应用",

@@ -117,6 +117,7 @@ export interface PublicGroup {
   name: string;
   created_at: number;
   member_count: number;
+  sort_order: number;
 }
 
 interface GroupRow {
@@ -125,6 +126,7 @@ interface GroupRow {
   name: string;
   created_at: number | string;
   member_count?: number | string | null;
+  sort_order?: number | string | null;
 }
 
 interface AgentRow {
@@ -1185,13 +1187,14 @@ function toPublicGroup(row: GroupRow): PublicGroup {
     name: row.name,
     created_at: asNumber(row.created_at) ?? 0,
     member_count: asNumber(row.member_count) ?? 0,
+    sort_order: asNumber(row.sort_order) ?? 0,
   };
 }
 
 const GROUP_MEMBER_TABLES: Record<string, string> = { agent: "agents", mcp: "mcp_servers", machines: "machines" };
 
 export async function getGroup(db: D1Database, id: string): Promise<GroupRow | null> {
-  return prepare(db, "SELECT id, scope, name, created_at FROM groups WHERE id = ?", [id]).first<GroupRow>();
+  return prepare(db, "SELECT id, scope, name, created_at, sort_order FROM groups WHERE id = ?", [id]).first<GroupRow>();
 }
 
 async function countGroupMembers(db: D1Database, scope: string, groupId: string): Promise<number> {
@@ -1204,9 +1207,9 @@ export async function listGroups(db: D1Database, scope: string): Promise<PublicG
   const table = GROUP_MEMBER_TABLES[scope] ?? "mcp_servers";
   const listed = await prepare(
     db,
-    "SELECT g.id, g.scope, g.name, g.created_at, (SELECT COUNT(*) FROM " +
+    "SELECT g.id, g.scope, g.name, g.created_at, g.sort_order, (SELECT COUNT(*) FROM " +
       table +
-      " AS m WHERE m.group_id = g.id) AS member_count FROM groups AS g WHERE g.scope = ? ORDER BY g.created_at ASC, g.name ASC",
+      " AS m WHERE m.group_id = g.id) AS member_count FROM groups AS g WHERE g.scope = ? ORDER BY g.sort_order ASC, g.created_at ASC, g.name ASC",
     [scope],
   ).all<GroupRow>();
   return rowsOf(listed).map(toPublicGroup);
@@ -1225,13 +1228,15 @@ export async function createGroup(db: D1Database, scope: string, value: unknown)
   if (!parsed.ok) return parsed;
   const id = newId("grp_");
   const now = Date.now();
+  const tail = await prepare(db, "SELECT COALESCE(MAX(sort_order), 0) AS m FROM groups WHERE scope = ?", [scope]).first<{ m: number | string }>();
+  const sortOrder = (asNumber(tail?.m) ?? 0) + 10;
   try {
-    await prepare(db, "INSERT INTO groups (id, scope, name, created_at) VALUES (?, ?, ?, ?)", [id, scope, parsed.name, now]).run();
+    await prepare(db, "INSERT INTO groups (id, scope, name, created_at, sort_order) VALUES (?, ?, ?, ?, ?)", [id, scope, parsed.name, now, sortOrder]).run();
   } catch (error) {
     if (isUniqueError(error)) return { ok: false, status: 409, error: "这个分组名已存在" };
     return dbFailure();
   }
-  return { ok: true, group: { id, scope, name: parsed.name, created_at: now, member_count: 0 } };
+  return { ok: true, group: { id, scope, name: parsed.name, created_at: now, member_count: 0, sort_order: sortOrder } };
 }
 
 export async function renameGroup(db: D1Database, id: string, value: unknown): Promise<{ ok: true; group: PublicGroup } | Failure> {
@@ -1248,7 +1253,14 @@ export async function renameGroup(db: D1Database, id: string, value: unknown): P
   const count = await countGroupMembers(db, existing.scope, id);
   return {
     ok: true,
-    group: { id, scope: existing.scope, name: parsed.name, created_at: asNumber(existing.created_at) ?? 0, member_count: count },
+    group: {
+      id,
+      scope: existing.scope,
+      name: parsed.name,
+      created_at: asNumber(existing.created_at) ?? 0,
+      member_count: count,
+      sort_order: asNumber(existing.sort_order) ?? 0,
+    },
   };
 }
 
@@ -1261,6 +1273,29 @@ export async function deleteGroup(db: D1Database, id: string): Promise<{ ok: tru
     await prepare(db, "UPDATE mcp_servers SET group_id = NULL WHERE group_id = ?", [id]).run();
     await prepare(db, "UPDATE machines SET group_id = NULL WHERE group_id = ?", [id]).run();
     await prepare(db, "DELETE FROM groups WHERE id = ?", [id]).run();
+  } catch {
+    return dbFailure();
+  }
+  return { ok: true };
+}
+
+// Reorder persists the panel's drag / arrow order: ids is the full new
+// order for one scope; every id must belong to that scope. sort_order is
+// rewritten densely (10, 20, 30…) so later inserts can still append.
+export async function reorderGroups(db: D1Database, scope: string, value: unknown): Promise<{ ok: true } | Failure> {
+  if (!value || typeof value !== "object") return { ok: false, status: 400, error: "请求格式不正确" };
+  const ids = (value as { ids?: unknown }).ids;
+  if (!Array.isArray(ids) || ids.length > 500 || ids.some((id) => typeof id !== "string" || !id)) {
+    return { ok: false, status: 400, error: "排序格式不正确" };
+  }
+  const unique = [...new Set(ids as string[])];
+  const existing = await prepare(db, "SELECT id FROM groups WHERE scope = ?", [scope]).all<{ id: string }>();
+  const known = new Set(rowsOf(existing).map((row) => row.id));
+  if (unique.some((id) => !known.has(id))) return { ok: false, status: 400, error: "分组不存在" };
+  try {
+    for (let i = 0; i < unique.length; i++) {
+      await prepare(db, "UPDATE groups SET sort_order = ? WHERE id = ?", [(i + 1) * 10, unique[i]]).run();
+    }
   } catch {
     return dbFailure();
   }

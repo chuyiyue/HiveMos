@@ -533,25 +533,34 @@
     return card(uiKind, item, facts);
   }
 
-  function groupActionsHtml(group) {
-    var gid = C.escapeHtml(group.id);
-    return (
-      "<button type=\"button\" class=\"icon-btn ghost group-menu-btn\" data-mgroup=\"menu\" data-id=\"" + gid + "\" aria-label=\"分组操作\" aria-haspopup=\"menu\">" + GROUP_MENU_ICON + "</button>" +
-      "<span class=\"confirm-slot\" data-confirm-group=\"" + gid + "\"></span>"
-    );
+  // 分组头不再放按钮：分组的排序/改名/删除/新建统一走页头「分组管理」
+  // 按钮打开的 C.openGroupManager 面板，管 scope=machines 共用分组池。
+  // 删除仍走 deleteGroupFlow（内含 askConfirm 二次确认，文案不变），
+  // 面板把确认槽元素传给它作锚点。
+  function machineGroupCounts() {
+    var counts = {};
+    state.groups.forEach(function (g) {
+      counts[g.id] = g.member_count || 0;
+    });
+    return counts;
   }
 
-  var GROUP_MENU_ICON =
-    '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>';
-
-  // 分组头只留一个三条线菜单按钮；改名/删除仍走原来的 openGroupDialog /
-  // deleteGroupFlow（内含 askConfirm 二次确认，文案不变）。
-  function openGroupMenu(group, btn) {
-    C.openActionMenu({
-      items: [
-        { label: "改名", onSelect: function () { openGroupDialog(group); } },
-        { label: "删除", danger: true, onSelect: function () { deleteGroupFlow(group, btn); } },
-      ],
+  function openMachineGroupManager(btn) {
+    C.openGroupManager({
+      anchor: btn,
+      groups: state.groups,
+      counts: machineGroupCounts(),
+      onCreate: function () { openGroupDialog(null); },
+      onRename: function (group) { openGroupDialog(group); },
+      onDelete: function (group, slot) { deleteGroupFlow(group, slot); },
+      onReorder: function (ids) {
+        api("POST", "/api/groups/reorder", { scope: "machines", ids: ids })
+          .then(function () { load(); })
+          .catch(function () { load(); });
+      },
+      onSettled: function () {
+        return { groups: state.groups, counts: machineGroupCounts() };
+      },
     });
   }
 
@@ -563,7 +572,6 @@
       items: byKind(uiKind),
       groupOf: function (item) { return item.group_id || null; },
       renderItem: function (item) { return cardFor(uiKind, item); },
-      groupActions: groupActionsHtml,
       ungroupedTitle: state.groups.length ? "未分组" : title,
       cardGrid: true,
       emptyTitle: "暂无内容",
@@ -608,7 +616,7 @@
           '<button type="button" class="secondary" data-nhead="import">导入节点</button>' +
           '<button type="button" class="add-button" data-nhead="add">添加订阅</button>'
         : (activeTab === "hosts" ? '<button type="button" class="secondary add-group-button" data-providers>服务商</button>' : "") +
-          '<button type="button" class="secondary add-group-button" data-add-group>添加分组</button>' +
+          '<button type="button" class="secondary add-group-button" data-add-group>分组管理</button>' +
           (activeTab === "servers"
             ? '<button type="button" class="add-button" data-add="server">添加服务器</button>'
             : activeTab === "hosts"
@@ -1014,11 +1022,9 @@
     });
   }
 
-  function deleteGroupFlow(group, btn) {
-    var section = btn.closest("section");
-    var slot = section ? section.querySelector('[data-confirm-group="' + group.id + '"]') : null;
+  function deleteGroupFlow(group, anchor) {
     C.askConfirm({
-      anchor: slot || btn,
+      anchor: anchor,
       title: "删除分组",
       text: "确认删除分组「" + group.name + "」吗？组内条目会回到未分组，不会被删除",
       confirmLabel: "删除",
@@ -3012,17 +3018,7 @@
     var provBtn = target.closest("[data-providers]");
     if (provBtn) return void openProvidersPanel();
     var addGroupBtn = target.closest("[data-add-group]");
-    if (addGroupBtn) { openGroupDialog(null); return; }
-    var mgroup = target.closest("[data-mgroup]");
-    if (mgroup) {
-      var mgroupId = mgroup.getAttribute("data-id");
-      var mgroupFound = null;
-      state.groups.forEach(function (entry) { if (entry.id === mgroupId) mgroupFound = entry; });
-      if (mgroupFound) {
-        if (mgroup.getAttribute("data-mgroup") === "menu") openGroupMenu(mgroupFound, mgroup);
-      }
-      return;
-    }
+    if (addGroupBtn) { openMachineGroupManager(addGroupBtn); return; }
     var add = target.closest("[data-add]");
     if (add) {
       var addKind = add.getAttribute("data-add");

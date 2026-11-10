@@ -429,45 +429,44 @@
     return name;
   }
 
-  function groupActions(group) {
-    var id = C.escapeHtml(group.id);
-    return (
-      "<button type=\"button\" class=\"icon-btn ghost group-menu-btn\" data-action=\"vgroup-menu\" data-id=\"" + id + "\" aria-label=\"分组操作\" aria-haspopup=\"menu\">" + GROUP_MENU_ICON + "</button>" +
-      "<span class=\"confirm-slot\" data-confirm-group=\"" + id + "\"></span>"
-    );
-  }
-
-  // 分组头只留一个三条线菜单按钮：改名/删除收进 C.openActionMenu；
-  // 删除沿用机器页 deleteGroupFlow 的 askConfirm 文案做二次确认。
-  var GROUP_MENU_ICON =
-    '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>';
-
-  function confirmDeleteGroup(group, btn, run) {
-    var section = btn ? btn.closest("section") : null;
-    var slot = section ? section.querySelector('[data-confirm-group="' + group.id + '"]') : null;
-    C.askConfirm({
-      anchor: slot || btn,
-      title: "删除分组",
-      text: "确认删除分组「" + group.name + "」吗？组内条目会回到未分组，不会被删除",
-      confirmLabel: "删除",
-      danger: true,
-    }).then(function (yes) {
-      if (yes) run();
+  // 分组头不再放按钮：分组的排序/改名/删除/新建统一走页头「分组管理」
+  // 按钮打开的 C.openGroupManager 面板，管保险库与模型网关共用的
+  // vault_groups 池；成员数按当前页签的条目计。
+  function vaultGroupCounts() {
+    var items = activeTab === "gateway" ? GATEWAYS || [] : ENTRIES || [];
+    var counts = {};
+    items.forEach(function (item) {
+      if (item.group_id) counts[item.group_id] = (counts[item.group_id] || 0) + 1;
     });
+    return counts;
   }
 
-  function openGroupMenu(group, btn) {
-    C.openActionMenu({
-      items: [
-        { label: "改名", onSelect: function () { openGroupDialog(group); } },
-        {
-          label: "删除",
+  function openVaultGroupManager(btn) {
+    C.openGroupManager({
+      anchor: btn,
+      groups: GROUPS || [],
+      counts: vaultGroupCounts(),
+      onCreate: function () { openGroupDialog(null); },
+      onRename: function (group) { openGroupDialog(group); },
+      onDelete: function (group, slot) {
+        C.askConfirm({
+          anchor: slot,
+          title: "删除分组",
+          text: "确认删除分组「" + group.name + "」吗？组内条目会回到未分组，不会被删除",
+          confirmLabel: "删除",
           danger: true,
-          onSelect: function () {
-            confirmDeleteGroup(group, btn, function () { deleteVaultGroup(group); });
-          },
-        },
-      ],
+        }).then(function (yes) {
+          if (yes) deleteVaultGroup(group);
+        });
+      },
+      onReorder: function (ids) {
+        api("POST", "/api/vault/groups/reorder", { ids: ids }).then(function (result) {
+          if (result.data && result.data.ok) loadGroups();
+        });
+      },
+      onSettled: function () {
+        return { groups: GROUPS || [], counts: vaultGroupCounts() };
+      },
     });
   }
 
@@ -481,7 +480,6 @@
       items: ENTRIES,
       groupOf: function (item) { return item.group_id || null; },
       renderItem: entryRow,
-      groupActions: groupActions,
       ungroupedTitle: "未分组",
       emptyGroupText: "添加条目时选择这个分组即可归入",
     });
@@ -512,7 +510,6 @@
       items: GATEWAYS,
       groupOf: function (item) { return item.group_id || null; },
       renderItem: gatewayCard,
-      groupActions: groupActions,
       cardGrid: true,
       ungroupedTitle: "未分组",
       emptyGroupText: "添加网关时选择这个分组即可归入",
@@ -974,8 +971,7 @@
       (GROUPS || []).forEach(function (g) { if (g.id === gid2) gfound = g; });
       if (a2 === "add-secret") { openSecretDialog(null); return; }
       if (a2 === "add-gateway") { openGatewayDialog(null); return; }
-      if (a2 === "add-vgroup") { openGroupDialog(null); return; }
-      if (a2 === "vgroup-menu" && gfound) { openGroupMenu(gfound, act2); return; }
+      if (a2 === "add-vgroup") { openVaultGroupManager(act2); return; }
     }
     var add = target.closest("[data-add]");
     if (add) {

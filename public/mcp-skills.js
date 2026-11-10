@@ -416,62 +416,53 @@
   // 分组 section 头操作在三个页签里是同一套渲染；差异只在 data-action 前缀
   // 与卡片内容。三个页签的分组都走后端 scope=mcp 分组池
 
-  function groupActionsFor(scope) {
-    return function (group) {
-      var prefix = scope === "mcp" || scope === "skills" || scope === "api" ? "" : "local-";
-      var scopeAttr = scope === "mcp" ? "" : ' data-scope="' + scope + '"';
-      var gid = C.escapeHtml(group.id);
-      return (
-        '<button type="button" class="icon-btn ghost group-menu-btn" data-action="' +
-        prefix +
-        'group-menu" data-id="' +
-        gid +
-        '"' +
-        scopeAttr +
-        ' aria-label="分组操作" aria-haspopup="menu">' +
-        GROUP_MENU_ICON +
-        "</button>" +
-        '<span class="confirm-slot" data-confirm-group="' +
-        gid +
-        '"></span>'
-      );
-    };
-  }
-
-  // 分组头只留一个三条线菜单按钮：改名/删除收进 C.openActionMenu；
-  // 删除沿用机器页 deleteGroupFlow 的 askConfirm 文案做二次确认。
-  var GROUP_MENU_ICON =
-    '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>';
-
-  function confirmDeleteGroup(group, btn, run) {
-    var section = btn ? btn.closest("section") : null;
-    var slot = section ? section.querySelector('[data-confirm-group="' + group.id + '"]') : null;
-    C.askConfirm({
-      anchor: slot || btn,
-      title: "删除分组",
-      text: "确认删除分组「" + group.name + "」吗？组内条目会回到未分组，不会被删除",
-      confirmLabel: "删除",
-      danger: true,
-    }).then(function (yes) {
-      if (yes) run();
+  // 分组头不再放按钮：三个页签共用后端 scope=mcp 分组池，分组的
+  // 排序/改名/删除/新建统一走页头「分组管理」按钮打开的
+  // C.openGroupManager 面板；成员数在 MCP 页签用服务端计数，
+  // Skills / API 页签按本页签条目计。
+  function tabGroupCounts() {
+    var counts = {};
+    if (activeTab === "skills" || activeTab === "api") {
+      state.local[activeTab].items.forEach(function (item) {
+        if (item.group_id) counts[item.group_id] = (counts[item.group_id] || 0) + 1;
+      });
+      return counts;
+    }
+    state.groups.forEach(function (g) {
+      counts[g.id] = g.member_count || 0;
     });
+    return counts;
   }
 
-  function openGroupMenu(group, btn, renameFn, deleteFn) {
-    C.openActionMenu({
-      items: [
-        { label: "改名", onSelect: renameFn },
-        {
-          label: "删除",
+  function openBackendGroupManager(btn) {
+    C.openGroupManager({
+      anchor: btn,
+      groups: state.groups,
+      counts: tabGroupCounts(),
+      onCreate: function () { openGroupDialog(); },
+      onRename: function (group) { openRenameGroupDialog(group); },
+      onDelete: function (group, slot) {
+        C.askConfirm({
+          anchor: slot,
+          title: "删除分组",
+          text: "确认删除分组「" + group.name + "」吗？组内条目会回到未分组，不会被删除",
+          confirmLabel: "删除",
           danger: true,
-          onSelect: function () {
-            confirmDeleteGroup(group, btn, deleteFn);
-          },
-        },
-      ],
+        }).then(function (yes) {
+          if (yes) deleteGroupFlow(group);
+        });
+      },
+      onReorder: function (ids) {
+        api("POST", "/api/groups/reorder", { scope: "mcp", ids: ids })
+          .then(function () { return refreshGroups(); })
+          .then(render)
+          .catch(function () { refreshGroups().then(render); });
+      },
+      onSettled: function () {
+        return { groups: state.groups, counts: tabGroupCounts() };
+      },
     });
   }
-
 
   function groupedHtml(scope, groups, items, renderItem, emptyText) {
     return C.groupedSections({
@@ -482,7 +473,6 @@
         return item.group_id || null;
       },
       renderItem: renderItem,
-      groupActions: groupActionsFor(scope),
       ungroupedTitle: "未分组",
       emptyGroupText: "添加时选择这个分组即可归入",
       emptyTitle: "暂无内容",
@@ -701,17 +691,8 @@
     else if (action === "snapshot") { openSnapshotDialog(id); C.closeCurrentOverlay(); }
     else if (action === "refresh") refresh(id);
     else if (action === "delete") removeServer(id, button);
-    else if (action === "add-group") openGroupDialog();
-    else if (action === "group-menu") {
-      var group = findGroup(id);
-      if (group)
-        openGroupMenu(
-          group,
-          button,
-          function () { openRenameGroupDialog(group); },
-          function () { deleteGroupFlow(group); }
-        );
-    } else if (action === "local-add") openLocalDialog(activeTab, null);
+    else if (action === "add-group") openBackendGroupManager(button);
+    else if (action === "local-add") openLocalDialog(activeTab, null);
     else if (action === "local-add-group") openLocalGroupDialog(activeTab, null);
     else if (action === "local-edit") {
       var editScope = button.getAttribute("data-scope") || "";
@@ -721,16 +702,6 @@
       var delScope2 = button.getAttribute("data-scope") || "";
       var delItem = findLocalItem(delScope2, id);
       if (delItem) deleteLocalItem(delScope2, delItem);
-    } else if (action === "local-group-menu") {
-      var menuScope = button.getAttribute("data-scope") || "";
-      var localGroup = findLocalGroup(menuScope, id);
-      if (localGroup)
-        openGroupMenu(
-          localGroup,
-          button,
-          function () { openLocalGroupDialog(menuScope, localGroup); },
-          function () { deleteLocalGroup(menuScope, localGroup); }
-        );
     }
   }
 
