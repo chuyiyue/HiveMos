@@ -686,15 +686,27 @@
         },
       },
     ];
+    var deleteItem = {
+      label: "删除",
+      danger: true,
+      onSelect: function () {
+        var anchor = button.closest("article") || button;
+        C.askConfirm({
+          anchor: anchor,
+          title: "删除 Agent",
+          text:
+            "确定要删除 Agent「" +
+            agent.name +
+            "」吗？删除后不可恢复，该 Agent 将无法再访问，它写下的 Soul、记忆等数据会保留",
+          confirmLabel: "删除",
+          danger: true,
+        }).then(function (yes) {
+          if (yes) deleteAgent(agent);
+        });
+      },
+    };
     if (agent.status === "active") {
-      items.push({
-        label: "删除",
-        danger: true,
-        armLabel: "确认删除",
-        onSelect: function () {
-          deleteAgent(agent);
-        },
-      });
+      items.push(deleteItem);
     } else {
       items.push({
         label: "启用",
@@ -702,6 +714,7 @@
           enableAgent(agent);
         },
       });
+      items.push(deleteItem);
     }
     C.openMenu(button, items);
   }

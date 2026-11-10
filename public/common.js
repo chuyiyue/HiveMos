@@ -674,14 +674,14 @@
     var endpoint = mcpEndpoint();
     var advanced =
       "<div class=\"manage-actions\">" +
+      (active
+        ? "<button type=\"button\" class=\"secondary\" data-agent-act=\"disable\">停用</button>"
+        : "<button type=\"button\" data-agent-act=\"enable\">启用</button>") +
       "<button type=\"button\" class=\"secondary\" data-agent-act=\"move\">设置分组</button>" +
       (active ? "<button type=\"button\" class=\"secondary\" data-agent-act=\"rotate\">轮换令牌</button>" : "") +
+      "<button type=\"button\" class=\"danger\" data-agent-act=\"delete\">删除 Agent</button>" +
       "</div>" +
-      (active
-        ? "<div class=\"manage-danger-zone\"><p class=\"subtle\">删除后该 Agent 会被停用，令牌立即失效</p>" +
-          "<button type=\"button\" class=\"danger\" data-confirm-delete data-agent-act=\"disable\">删除</button></div>"
-        : "<p class=\"subtle\">这个 Agent 已停用，启用后可继续调用</p>" +
-          "<div class=\"manage-actions\"><button type=\"button\" data-agent-act=\"enable\">启用</button></div>");
+      (active ? "" : "<p class=\"subtle\">这个 Agent 已停用，启用后可继续调用</p>");
     var permSection = partial
       ? '<p class="subtle" data-perm-pending>权限读取中</p>'
       : permPickerHtml(agent);
@@ -1878,7 +1878,32 @@
 
     function doDisable() {
       guardAction().then(function (ok) {
-        if (ok) openDisableConfirm();
+        if (!ok) return;
+        busy = true;
+        agentApi("PATCH", "/api/agents/" + encodeURIComponent(agent.id), { status: "disabled" })
+          .then(function (result) {
+            busy = false;
+            if (result.status === 401) {
+              location.assign("/login.html");
+              return;
+            }
+            if (!result.data || result.data.ok !== true) {
+              setStatus((result.data && result.data.error) || "没有停用成功，请重试", true);
+              return;
+            }
+            ctrl.forceClose();
+            changed("已停用");
+          })
+          .catch(function () {
+            busy = false;
+            setStatus("网络异常，请重试", true);
+          });
+      });
+    }
+
+    function doDelete() {
+      guardAction().then(function (ok) {
+        if (ok) openDeleteConfirm();
       });
     }
 
@@ -1907,8 +1932,18 @@
       });
     }
 
-    function openDisableConfirm() {
-      
+    function openDeleteConfirm() {
+      askConfirm({
+        anchor: ctrl.confirmSlot,
+        title: "删除 Agent",
+        text:
+          "确定要删除 Agent「" +
+          agent.name +
+          "」吗？删除后不可恢复，该 Agent 将无法再访问，它写下的 Soul、记忆等数据会保留",
+        confirmLabel: "删除",
+        danger: true,
+      }).then(function (yes) {
+        if (!yes || busy) return;
         busy = true;
         agentApi("DELETE", "/api/agents/" + encodeURIComponent(agent.id))
           .then(function (result) {
@@ -1928,7 +1963,7 @@
             busy = false;
             setStatus("网络异常，请重试", true);
           });
-      
+      });
     }
 
     ctrl.dialog.addEventListener("click", function (event) {
@@ -1959,6 +1994,7 @@
       else if (act === "move") doMove();
       else if (act === "rotate") doRotate();
       else if (act === "disable") doDisable();
+      else if (act === "delete") doDelete();
       else if (act === "enable") doEnable();
       else if (act === "avatar") doAvatar();
     });

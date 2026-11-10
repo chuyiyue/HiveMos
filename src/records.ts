@@ -144,7 +144,7 @@ const mcpRecords: Fetcher = async (db, _agentNames, agentId, need) => {
   }>(
     db,
     `SELECT f.id, f.created_at AS at, f.agent_id, f.server_id,
-            a.name AS agent_name, s.title AS server_title, s.name AS server_name, k.name AS skill_name
+            COALESCE(a.name, f.agent_name) AS agent_name, s.title AS server_title, s.name AS server_name, k.name AS skill_name
      FROM mcp_fetch_audit f
      LEFT JOIN agents a ON a.id = f.agent_id
      LEFT JOIN mcp_servers s ON s.id = f.server_id

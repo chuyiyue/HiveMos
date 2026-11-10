@@ -1564,6 +1564,47 @@ export async function disableAgent(db: D1Database, id: string): Promise<{ ok: tr
   return { ok: true };
 }
 
+// Hard delete removes the agent's ACCESS only: the agents row (token hash
+// and sealed copy, pin, group) plus its uploaded avatar. Content the agent
+// wrote is NOT touched — its Soul (souls are keyed by agent name) and the
+// version history stay behind as ownerless data, as do memories and task
+// history. Audit and call history are NOT touched either: agents_audit / calendar_audit / task_audit /
+// memory_audit / soul_audit / machines_audit keep their rows (their actor
+// is a bare agent id and the records feed already renders a missing agent
+// as 「已删除的 Agent」), and mcp_fetch_audit gets the agent's name
+// snapshotted into its agent_name column so the feed keeps showing who
+// made those calls. The caller (registry-http) writes the user_ops entry
+// before calling this, so the system log keeps the name as well.
+export async function deleteAgent(
+  db: D1Database,
+  id: string,
+): Promise<{ ok: true; name: string } | Failure> {
+  const row = await prepare(db, "SELECT id, name FROM agents WHERE id = ?", [id]).first<{
+    id: string;
+    name: string;
+  }>();
+  if (!row) return { ok: false, status: 404, error: "未找到" };
+  await auditAgentQuietly(db, id, "delete");
+  try {
+    await prepare(
+      db,
+      "UPDATE mcp_fetch_audit SET agent_name = ? WHERE agent_id = ? AND agent_name IS NULL",
+      [row.name, id],
+    ).run();
+  } catch {
+    // best-effort: the agent_name column arrives with migration 0035
+  }
+  try {
+    await db.batch([
+      prepare(db, "DELETE FROM agent_avatars WHERE agent_id = ?", [id]),
+      prepare(db, "DELETE FROM agents WHERE id = ?", [id]),
+    ]);
+  } catch {
+    return dbFailure();
+  }
+  return { ok: true, name: row.name };
+}
+
 export async function authenticateAgent(
   db: D1Database,
   token: string,
