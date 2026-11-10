@@ -1254,7 +1254,6 @@ async function callTool(request: Request, env: Env, ctx: WaitCtx, id: unknown, p
       throw error;
     }
   }
-  }
   if (name.startsWith("vault_2fa_")) {
     try {
       return await callVaultTotpTool(env, id, name, record as Record<string, unknown>, auth.agentName);
