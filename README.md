@@ -51,7 +51,7 @@ HiveMos 是为多个 AI Agent 准备的「中枢」：每个 Agent 的身份、�
 
 - 账号密码条目、模型网关（多协议密钥）、邮箱（含 SMTP 配置）
 - 验证码（TOTP）：扫码、手动或从 Aegis / 2FAS / Google Authenticator 迁移导入，当前码与下一个码同屏显示，支持加密导出
-- 所有明文查看都先写访问记录再放行，保险库数据不通过 MCP 开放（验证码取码接口在规划中）
+- 所有明文查看都先写访问记录再放行；保险库的密码与网关不通过 MCP 开放，验证码可经专用工具取码（需高级权限，且每条可单独开关是否允许 AI 读取）
 
 ### 总览、日志与备份
 
@@ -71,14 +71,15 @@ POST /mcp
 Authorization: Bearer <agent-token>
 ```
 
-也支持把令牌放在接入地址的 `?token=` 参数里（请求头优先）。`tools/list` 只返回该 Agent 权限覆盖的工具，`tools/call` 每次再按域与读写复查。共 31 个工具：
+也支持把令牌放在接入地址的 `?token=` 参数里（请求头优先）。`tools/list` 只返回该 Agent 权限覆盖的工具，`tools/call` 每次再按域与读写复查。共 35 个工具：
 
 | 域 | 工具 |
 | --- | --- |
 | MCP 注册表 | `mcp_search`、`mcp_list`、`mcp_get` |
 | Skills / API | `skills_list`、`skills_get`、`apis_list`、`apis_get` |
 | 记忆 | `memory_list`、`memory_search`、`memory_get`、`memory_remember`、`memory_upsert`、`memory_delete` |
-| Soul | `soul_list`、`soul_get`、`soul_update` |
+| Soul | `soul_list`、`soul_get`、`soul_update`、`soul_patch`、`soul_diff` |
+| 保险库 | `vault_2fa_list`、`vault_2fa_get_code` |
 | 任务 | `tasks_list`、`tasks_create`、`tasks_update`、`tasks_complete` |
 | 日历 | `calendar_list_calendars`、`calendar_list_events`、`calendar_get_event`、`calendar_search`、`calendar_create_event`、`calendar_update_event`、`calendar_delete_event` |
 | 云计算资源 | `machines_list`、`machines_get`、`machines_report`、`machines_get_access` |
@@ -92,6 +93,8 @@ Authorization: Bearer <agent-token>
 - 机密以 AES-GCM 密封存储（`VAULT_KEY`），列表与详情接口一律不带明文
 - 管理员只有一个：用户名与密码以部署机密为准，每次部署后由同步脚本对齐到管理员行（密码变更即清空全部会话）；系统内不提供改密码入口，改密码的唯一路径是改机密后重新部署
 - 登录带失败限流（用户名 + IP 组合键）；管理员登录支持 TOTP 两步验证
+- OAuth 授权：外部 AI 客户端经授权码 + PKCE 接入，可绑定已有 Agent 或在管理员登录下新建身份；连接权限与 Agent 基础权限取交集，令牌密封存储、面板可审计查看与撤销
+- GitHub 登录：绑定 GitHub 数字 ID 后可用 GitHub 登录（只认 ID、不认用户名，登录回调永不写绑定；未配置 GITHUB_CLIENT_ID / GITHUB_CLIENT_SECRET 时入口隐藏）
 
 ## 架构
 
@@ -139,12 +142,7 @@ npx wrangler dev
 | `VAULT_KEY` | 保险库与凭据的加密主密钥（必需） |
 | `ADMIN_USERNAME`、`ADMIN_PASSWORD` | 部署时同步管理员账号（改密码走这里） |
 | `AI_MODEL` | AI 辅助使用的模型，未配置时用默认值 |
-
-## 规划中
-
-- OAuth 授权服务器：外部 AI 客户端经授权码 + PKCE 接入，可选已有 Agent 或新建身份，连接权限与 Agent 基础权限取交集
-- GitHub 登录绑定：绑定 GitHub 数字 ID 后可免密登录（绑定只认 ID、不认用户名，登录回调永不写绑定）
-- 保险库验证码的 MCP 取码工具（每条可单独开关是否允许 AI 读取）
+| `GITHUB_CLIENT_ID`、`GITHUB_CLIENT_SECRET` | GitHub 登录绑定，未配置时相关入口隐藏 |
 
 ## 说明
 
