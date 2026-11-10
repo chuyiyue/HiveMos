@@ -768,11 +768,17 @@ export async function revealSecret(
   // actor stays NULL for panel reads; stage 6 (MCP) passes the agent name.
   // 空串/空白当作「没有 Agent」，与审计表「actor 非空才算 Agent」一致。
   const agentName = actor.agent?.trim() || null;
-  await prepare(
-    db,
-    "INSERT INTO vault_access_log (id, target_kind, target_id, action, actor, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-    [newId("va"), kind, id, "reveal", agentName, now],
-  ).run();
+  try {
+    await prepare(
+      db,
+      "INSERT INTO vault_access_log (id, target_kind, target_id, action, actor, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+      [newId("va"), kind, id, "reveal", agentName, now],
+    ).run();
+  } catch {
+    // 与 MCP 取码（getTotpCodeForAgent）同一口径：审计写不进就明确以
+    // VaultError 失败，绝不解密、绝不返回明文；不让底层存储错误裸奔。
+    throw new VaultError("访问记录写入失败，未返回明文", 500);
+  }
   // 顺序与失败语义：审计门在上，写不进就不返回明文；oplog 写在门之后，
   // 只是统一展示面（系统日志的「保险库」board），logOp 自己吞掉失败，
   // 写不进也不阻断本次 reveal。审计事实源始终是 vault_access_log。

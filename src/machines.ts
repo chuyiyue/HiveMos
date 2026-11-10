@@ -30,6 +30,10 @@ export class MachineError extends Error {
 
 export const MACHINE_KINDS = ["server", "cloud", "worker"];
 
+// 类型的人类可读名，与 machines-http 的面板 logOp 同一份值（server 服务器 /
+// cloud 云主机 / worker Worker），MCP 工具的 logOp 直接复用同一口径。
+export const MACHINE_KIND_LABELS: Record<string, string> = { server: "服务器", cloud: "云主机", worker: "Worker" };
+
 export interface MachineRow {
   id: string;
   kind: string;

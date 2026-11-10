@@ -51,7 +51,7 @@ HiveMos 是为多个 AI Agent 准备的「中枢」：每个 Agent 的身份、�
 
 - 账号密码条目、模型网关（多协议密钥）、邮箱（含 SMTP 配置）
 - 验证码（TOTP）：扫码、手动或从 Aegis / 2FAS / Google Authenticator 迁移导入，当前码与下一个码同屏显示，支持加密导出
-- 所有明文查看都先写访问记录再放行；保险库的密码与网关不通过 MCP 开放，验证码可经专用工具取码（需高级权限，且每条可单独开关是否允许 AI 读取）
+- 所有明文查看都先写访问记录再放行；保险库条目、邮箱与网关可经 MCP 读写（vault 域），明文同样先审计后放行；验证码走独立的高级域（操作2FA），与保险库域互不附带，且每条可单独开关是否允许 AI 读取
 
 ### 总览、日志与备份
 
@@ -71,18 +71,20 @@ POST /mcp
 Authorization: Bearer <agent-token>
 ```
 
-也支持把令牌放在接入地址的 `?token=` 参数里（请求头优先）。`tools/list` 只返回该 Agent 权限覆盖的工具，`tools/call` 每次再按域与读写复查。共 41 个工具：
+也支持把令牌放在接入地址的 `?token=` 参数里（请求头优先）。`tools/list` 只返回该 Agent 权限覆盖的工具，`tools/call` 每次再按域与读写复查。共 67 个工具：
 
 | 域 | 工具 |
 | --- | --- |
 | MCP 注册表 | `mcp_search`、`mcp_list`、`mcp_get`、`mcp_create`、`mcp_update`、`mcp_delete` |
-| Skills / API | `skills_list`、`skills_get`、`skills_create`、`skills_update`、`skills_delete`、`apis_list`、`apis_get` |
+| Skills / API | `skills_list`、`skills_get`、`skills_create`、`skills_update`、`skills_delete`、`apis_list`、`apis_get`、`apis_create`、`apis_update`、`apis_delete` |
 | 记忆 | `memory_list`、`memory_search`、`memory_get`、`memory_remember`、`memory_upsert`、`memory_delete` |
 | Soul | `soul_list`、`soul_get`、`soul_update`、`soul_patch`、`soul_diff` |
-| 保险库 | `vault_2fa_list`、`vault_2fa_get_code` |
-| 任务 | `tasks_list`、`tasks_create`、`tasks_update`、`tasks_complete` |
+| 保险库 | `vault_list_entries`、`vault_get_entry`、`vault_create_entry`、`vault_update_entry`、`vault_delete_entry`、`vault_list_emails`、`vault_get_email`、`vault_create_email`、`vault_update_email`、`vault_delete_email`、`vault_list_gateways`、`vault_get_gateway`、`vault_create_gateway`、`vault_update_gateway`、`vault_delete_gateway` |
+| 验证码（高级域 操作2FA） | `vault_2fa_list`、`vault_2fa_get_code` |
+| 其他 Agent（高级域 操作其他 Agent） | `agents_list`、`agents_get`、`agents_rotate_token`、`agents_set_enabled` |
+| 任务 | `tasks_list`、`tasks_get`、`tasks_create`、`tasks_update`、`tasks_complete` |
 | 日历 | `calendar_list_calendars`、`calendar_list_events`、`calendar_get_event`、`calendar_search`、`calendar_create_event`、`calendar_update_event`、`calendar_delete_event` |
-| 云计算资源 | `machines_list`、`machines_get`、`machines_report`、`machines_get_access` |
+| 云计算资源 | `machines_list`、`machines_get`、`machines_report`、`machines_get_access`、`machines_create`、`machines_update`、`machines_delete` |
 
 注册表的设计说明见 [docs/MCP_REGISTRY.md](docs/MCP_REGISTRY.md)，界面架构见 [docs/UI_ARCHITECTURE.md](docs/UI_ARCHITECTURE.md)。
 

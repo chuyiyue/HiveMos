@@ -9,7 +9,8 @@
 // totp.read、machines_secret 丢弃）、新高级形状（agents_other / soul_other /
 // totp 各 read/write）直通与严格布尔、parse/serialize 往返、
 // hasGrant/hasAdvanced，以及工具校验矩阵的关键格
-// （machines_get_access 无高级门、2FA 工具挂 totp.read、Soul 归属门：
+// （machines_get_access 无高级门、2FA 工具只认 totp.read 的纯高级域分类、
+// agents_* 工具只认 agents_other 的纯高级域分类（含自我门）、Soul 归属门：
 // soul 域只覆盖自己名下那一份、读/写他人分别要 soul_other 读/写）。
 //
 // 盒子上的源码用无扩展名的相对 import（`./permissions`），这是 Worker 打包器
@@ -209,15 +210,25 @@ expect("PATCH null 拒绝", permissionsFromInput(null), { ok: false, status: 400
 // ---- 工具分类表自检 ---------------------------------------------------------
 
 const TOOL_NAMES = Object.keys(TOOL_PERMISSIONS);
-expect("工具分类共 41 个", TOOL_NAMES.length, 41);
+expect("工具分类共 67 个", TOOL_NAMES.length, 67);
 expect(
-  "所有工具的域都在 PERMISSION_DOMAINS 内",
-  TOOL_NAMES.filter((name) => !PERMISSION_DOMAINS.includes(TOOL_PERMISSIONS[name].domain)),
+  "所有带普通域的工具，其域都在 PERMISSION_DOMAINS 内",
+  TOOL_NAMES.filter((name) => TOOL_PERMISSIONS[name].domain !== undefined && !PERMISSION_DOMAINS.includes(TOOL_PERMISSIONS[name].domain)),
   [],
 );
 expect(
-  "所有工具的操作只有 read/write",
-  TOOL_NAMES.filter((name) => TOOL_PERMISSIONS[name].op !== "read" && TOOL_PERMISSIONS[name].op !== "write"),
+  "纯高级域工具恰好是 agents_* 与 vault_2fa_* 六个",
+  TOOL_NAMES.filter((name) => TOOL_PERMISSIONS[name].domain === undefined).sort(),
+  ["agents_get", "agents_list", "agents_rotate_token", "agents_set_enabled", "vault_2fa_get_code", "vault_2fa_list"].sort(),
+);
+expect(
+  "op 只出现在带普通域的工具上（纯高级域工具的操作在 advanced 里）",
+  TOOL_NAMES.filter((name) => (TOOL_PERMISSIONS[name].domain === undefined) !== (TOOL_PERMISSIONS[name].op === undefined)),
+  [],
+);
+expect(
+  "带普通域的工具操作只有 read/write",
+  TOOL_NAMES.filter((name) => TOOL_PERMISSIONS[name].op !== undefined && TOOL_PERMISSIONS[name].op !== "read" && TOOL_PERMISSIONS[name].op !== "write"),
   [],
 );
 expect(
@@ -231,9 +242,9 @@ expect(
   [],
 );
 expect(
-  "带 advanced 的工具清单（只剩两个取码工具）",
+  "带 advanced 的工具清单（四个 agents 工具 + 两个取码工具，全是纯高级域）",
   TOOL_NAMES.filter((name) => TOOL_PERMISSIONS[name].advanced).sort(),
-  ["vault_2fa_get_code", "vault_2fa_list"].sort(),
+  ["agents_get", "agents_list", "agents_rotate_token", "agents_set_enabled", "vault_2fa_get_code", "vault_2fa_list"].sort(),
 );
 expect("machines_get_access 无 advanced（凭据并入 machines 域）", TOOL_PERMISSIONS.machines_get_access.advanced, undefined);
 expect(
@@ -242,9 +253,24 @@ expect(
   ["vault_2fa_get_code", "vault_2fa_list"],
 );
 expect(
-  "写工具清单与管理员裁定一致",
+  "agents_other 读挂 agents_list / agents_get",
+  TOOL_NAMES.filter((name) => TOOL_PERMISSIONS[name].advanced && TOOL_PERMISSIONS[name].advanced.key === "agents_other" && TOOL_PERMISSIONS[name].advanced.op === "read").sort(),
+  ["agents_get", "agents_list"],
+);
+expect(
+  "agents_other 写挂 agents_rotate_token / agents_set_enabled",
+  TOOL_NAMES.filter((name) => TOOL_PERMISSIONS[name].advanced && TOOL_PERMISSIONS[name].advanced.key === "agents_other" && TOOL_PERMISSIONS[name].advanced.op === "write").sort(),
+  ["agents_rotate_token", "agents_set_enabled"],
+);
+expect(
+  "写工具清单与管理员裁定一致（op=write 的普通域写工具；纯高级域写工具 op 缺席、看 advanced）",
   TOOL_NAMES.filter((name) => TOOL_PERMISSIONS[name].op === "write").sort(),
-  ["calendar_create_event", "calendar_delete_event", "calendar_update_event", "machines_report", "mcp_create", "mcp_delete", "mcp_update", "memory_delete", "memory_remember", "memory_upsert", "skills_create", "skills_delete", "skills_update", "soul_patch", "soul_update", "tasks_complete", "tasks_create", "tasks_update"].sort(),
+  ["apis_create", "apis_delete", "apis_update", "calendar_create_event", "calendar_delete_event", "calendar_update_event", "machines_create", "machines_delete", "machines_report", "machines_update", "mcp_create", "mcp_delete", "mcp_update", "memory_delete", "memory_remember", "memory_upsert", "skills_create", "skills_delete", "skills_update", "soul_patch", "soul_update", "tasks_complete", "tasks_create", "tasks_update", "vault_create_email", "vault_create_entry", "vault_create_gateway", "vault_delete_email", "vault_delete_entry", "vault_delete_gateway", "vault_update_email", "vault_update_entry", "vault_update_gateway"].sort(),
+);
+expect(
+  "纯高级域写工具清单（agents_other.write）",
+  TOOL_NAMES.filter((name) => TOOL_PERMISSIONS[name].advanced && TOOL_PERMISSIONS[name].advanced.op === "write").sort(),
+  ["agents_rotate_token", "agents_set_enabled"].sort(),
 );
 expect("未知工具没有分类", toolPermissionOf("no_such_tool"), null);
 
@@ -299,19 +325,90 @@ expect("无 machines read：machines_get_access 被拒", toolAccessError("machin
 expect("全关时 machines_get_access 也不出现", toolVisibleToAgent("machines_get_access", denied), false);
 expect("旧 machines_secret 迁移后不给 machines 域（丢弃）", toolAccessError("machines_get_access", parsePermissions('{"advanced":{"machines_secret":true}}'), "agent-a", {}), "该 Agent 没有 machines 的读取权限，无法调用这个工具");
 
-// vault_2fa_*：除 vault read 外还要高级域 totp.read（2FA 与保险库域分开、互不附带）
+// vault_2fa_*：纯高级域工具，只认 totp.read，不再叠 vault 域（2026-11-10
+// Roye 定：2FA 与保险库其余功能彻底分开、互不附带）。只有 vault 权限取
+// 不了码，只有 totp 也碰不了 vault 域的条目/邮箱/网关工具。
 const vaultRead = parsePermissions('{"vault":{"read":true,"write":false}}');
 expect("vault read 无 totp：vault_2fa_list 被拒", toolAccessError("vault_2fa_list", vaultRead, "agent-a", {}), "该 Agent 没有「操作2FA」的读取权限，无法调用这个工具");
 expect("vault read 无 totp：vault_2fa_get_code 被拒", toolAccessError("vault_2fa_get_code", vaultRead, "agent-a", {}), "该 Agent 没有「操作2FA」的读取权限，无法调用这个工具");
 expect("vault read 无 totp：tools/list 无两个验证码工具", ["vault_2fa_list", "vault_2fa_get_code"].filter((name) => toolVisibleToAgent(name, vaultRead)), []);
-expect("vault write 不附带 totp：vault_2fa_list 仍被拒", toolAccessError("vault_2fa_list", parsePermissions('{"vault":{"read":true,"write":true}}'), "agent-a", {}), "该 Agent 没有「操作2FA」的读取权限，无法调用这个工具");
+expect("vault 读写俱全无 totp：vault_2fa_list 仍被拒", toolAccessError("vault_2fa_list", parsePermissions('{"vault":{"read":true,"write":true}}'), "agent-a", {}), "该 Agent 没有「操作2FA」的读取权限，无法调用这个工具");
 const vaultCode = parsePermissions('{"vault":{"read":true,"write":false},"advanced":{"totp":{"read":true,"write":false}}}');
 expect("vault read + totp.read：vault_2fa_list 放行", toolAccessError("vault_2fa_list", vaultCode, "agent-a", {}), null);
 expect("vault read + totp.read：vault_2fa_get_code 放行", toolAccessError("vault_2fa_get_code", vaultCode, "agent-a", { id: "totp_x" }), null);
 expect("vault read + totp.read：tools/list 有两个验证码工具", ["vault_2fa_list", "vault_2fa_get_code"].filter((name) => toolVisibleToAgent(name, vaultCode)), ["vault_2fa_list", "vault_2fa_get_code"]);
-expect("旧 vault_totp_code 迁移后：vault_2fa_get_code 放行", toolAccessError("vault_2fa_get_code", parsePermissions('{"vault":{"read":true,"write":false},"advanced":{"vault_totp_code":true}}'), "agent-a", { id: "totp_x" }), null);
-expect("只有 totp.read 没有 vault.read：仍被拒", toolAccessError("vault_2fa_get_code", parsePermissions('{"advanced":{"totp":{"read":true,"write":false}}}'), "agent-a", {}), "该 Agent 没有 vault 的读取权限，无法调用这个工具");
-expect("只有 totp.write：取码仍被拒（要 read）", toolAccessError("vault_2fa_get_code", parsePermissions('{"vault":{"read":true,"write":false},"advanced":{"totp":{"read":false,"write":true}}}'), "agent-a", {}), "该 Agent 没有「操作2FA」的读取权限，无法调用这个工具");
+expect("旧 vault_totp_code 迁移后：vault_2fa_get_code 放行", toolAccessError("vault_2fa_get_code", parsePermissions('{"advanced":{"vault_totp_code":true}}'), "agent-a", { id: "totp_x" }), null);
+const totpOnly = parsePermissions('{"advanced":{"totp":{"read":true,"write":false}}}');
+expect("只有 totp.read（无 vault 域）：vault_2fa_list 放行", toolAccessError("vault_2fa_list", totpOnly, "agent-a", {}), null);
+expect("只有 totp.read（无 vault 域）：vault_2fa_get_code 放行", toolAccessError("vault_2fa_get_code", totpOnly, "agent-a", { id: "totp_x" }), null);
+expect("只有 totp.read：tools/list 有两个验证码工具", ["vault_2fa_list", "vault_2fa_get_code"].filter((name) => toolVisibleToAgent(name, totpOnly)), ["vault_2fa_list", "vault_2fa_get_code"]);
+expect("只有 totp.read：条目工具仍按 vault 域拒", toolAccessError("vault_get_entry", totpOnly, "agent-a", {}), "该 Agent 没有 vault 的读取权限，无法调用这个工具");
+expect("只有 totp.read：tools/list 无 vault 条目工具", toolVisibleToAgent("vault_list_entries", totpOnly), false);
+expect("只有 totp.write：取码仍被拒（要 read）", toolAccessError("vault_2fa_get_code", parsePermissions('{"advanced":{"totp":{"read":false,"write":true}}}'), "agent-a", {}), "该 Agent 没有「操作2FA」的读取权限，无法调用这个工具");
+
+// vault 域工具（条目 / 邮箱 / 网关）：list/get 要 vault read，
+// create/update/delete 要 vault write；与 totp 互不附带（见上）。
+expect("vault read：vault_list_entries 放行", toolAccessError("vault_list_entries", vaultRead, "agent-a", {}), null);
+expect("vault read：vault_get_gateway 放行", toolAccessError("vault_get_gateway", vaultRead, "agent-a", {}), null);
+expect("vault read：vault_create_entry 被拒", toolAccessError("vault_create_entry", vaultRead, "agent-a", {}), "该 Agent 没有 vault 的写入权限，无法调用这个工具");
+expect("vault read：tools/list 无 vault_create_email", toolVisibleToAgent("vault_create_email", vaultRead), false);
+const vaultWrite = parsePermissions('{"vault":{"read":false,"write":true}}');
+expect("vault 只写：vault_create_gateway 放行", toolAccessError("vault_create_gateway", vaultWrite, "agent-a", {}), null);
+expect("vault 只写：vault_update_email 放行", toolAccessError("vault_update_email", vaultWrite, "agent-a", {}), null);
+expect("vault 只写：vault_delete_entry 放行", toolAccessError("vault_delete_entry", vaultWrite, "agent-a", {}), null);
+expect("vault 只写：vault_list_gateways 仍需 read", toolAccessError("vault_list_gateways", vaultWrite, "agent-a", {}), "该 Agent 没有 vault 的读取权限，无法调用这个工具");
+expect("全关：vault_get_email 被拒", toolAccessError("vault_get_email", denied, "agent-a", {}), "该 Agent 没有 vault 的读取权限，无法调用这个工具");
+
+// api 写工具：与读工具同域，写要 api write
+const apiReadOnly = parsePermissions('{"api":{"read":true,"write":false}}');
+expect("api 只读：apis_get 放行", toolAccessError("apis_get", apiReadOnly, "agent-a", {}), null);
+expect("api 只读：apis_create 被拒", toolAccessError("apis_create", apiReadOnly, "agent-a", {}), "该 Agent 没有 api 的写入权限，无法调用这个工具");
+expect("api 只读：apis_update 被拒", toolAccessError("apis_update", apiReadOnly, "agent-a", {}), "该 Agent 没有 api 的写入权限，无法调用这个工具");
+expect("api 只读：apis_delete 被拒", toolAccessError("apis_delete", apiReadOnly, "agent-a", {}), "该 Agent 没有 api 的写入权限，无法调用这个工具");
+expect("api 只读：tools/list 无 apis_create", toolVisibleToAgent("apis_create", apiReadOnly), false);
+const apiWriteOnly = parsePermissions('{"api":{"read":false,"write":true}}');
+expect("api 只写：apis_create 放行", toolAccessError("apis_create", apiWriteOnly, "agent-a", {}), null);
+expect("api 只写：apis_list 仍需 read", toolAccessError("apis_list", apiWriteOnly, "agent-a", {}), "该 Agent 没有 api 的读取权限，无法调用这个工具");
+
+// tasks_get：tasks 域 read
+const tasksRead = parsePermissions('{"tasks":{"read":true,"write":false}}');
+expect("tasks read：tasks_get 放行", toolAccessError("tasks_get", tasksRead, "agent-a", {}), null);
+expect("全关：tasks_get 被拒", toolAccessError("tasks_get", denied, "agent-a", {}), "该 Agent 没有 tasks 的读取权限，无法调用这个工具");
+
+// machines 写工具：条目 CRUD 要 machines write
+expect("machines 只读：machines_create 被拒", toolAccessError("machines_create", machinesRead, "agent-a", {}), "该 Agent 没有 machines 的写入权限，无法调用这个工具");
+expect("machines 只读：machines_delete 被拒", toolAccessError("machines_delete", machinesRead, "agent-a", {}), "该 Agent 没有 machines 的写入权限，无法调用这个工具");
+expect("machines 只读：tools/list 无 machines_update", toolVisibleToAgent("machines_update", machinesRead), false);
+const machinesWrite = parsePermissions('{"machines":{"read":false,"write":true}}');
+expect("machines 只写：machines_create 放行", toolAccessError("machines_create", machinesWrite, "agent-a", {}), null);
+expect("machines 只写：machines_update 放行", toolAccessError("machines_update", machinesWrite, "agent-a", {}), null);
+expect("machines 只写：machines_delete 放行", toolAccessError("machines_delete", machinesWrite, "agent-a", {}), null);
+expect("machines 只写：machines_list 仍需 read", toolAccessError("machines_list", machinesWrite, "agent-a", {}), "该 Agent 没有 machines 的读取权限，无法调用这个工具");
+
+// agents_* 工具：纯高级域 agents_other；读要其 read、写要其 write，普通
+// 域全开也替代不了。自我门按 agent_id / name 判（写侧的 name 定位在
+// handler 里按同一文案复判，纯函数这里只覆盖 id 预判与 agents_get）。
+const agentsOtherRead = parsePermissions('{"advanced":{"agents_other":{"read":true,"write":false}}}');
+expect("agents_other 只读：agents_list 放行", toolAccessError("agents_list", agentsOtherRead, "agent-a", {}, "agt_a"), null);
+expect("agents_other 只读：agents_get 查别人放行", toolAccessError("agents_get", agentsOtherRead, "agent-a", { agent_id: "agt_b" }, "agt_a"), null);
+expect("agents_other 只读：agents_rotate_token 被拒", toolAccessError("agents_rotate_token", agentsOtherRead, "agent-a", { agent_id: "agt_b" }, "agt_a"), "该 Agent 没有「操作其他 Agent」的写入权限，无法调用这个工具");
+expect("agents_other 只读：agents_set_enabled 被拒", toolAccessError("agents_set_enabled", agentsOtherRead, "agent-a", { agent_id: "agt_b", enabled: false }, "agt_a"), "该 Agent 没有「操作其他 Agent」的写入权限，无法调用这个工具");
+expect("agents_other 只读：tools/list 无 agents_rotate_token", toolVisibleToAgent("agents_rotate_token", agentsOtherRead), false);
+const agentsOtherWrite = parsePermissions('{"advanced":{"agents_other":{"read":false,"write":true}}}');
+expect("agents_other 只写：agents_rotate_token 放行", toolAccessError("agents_rotate_token", agentsOtherWrite, "agent-a", { agent_id: "agt_b" }, "agt_a"), null);
+expect("agents_other 只写：agents_set_enabled 放行", toolAccessError("agents_set_enabled", agentsOtherWrite, "agent-a", { agent_id: "agt_b", enabled: true }, "agt_a"), null);
+expect("agents_other 只写：agents_list 仍需 read", toolAccessError("agents_list", agentsOtherWrite, "agent-a", {}, "agt_a"), "该 Agent 没有「操作其他 Agent」的读取权限，无法调用这个工具");
+expect("全关：agents_list 被拒", toolAccessError("agents_list", denied, "agent-a", {}, "agt_a"), "该 Agent 没有「操作其他 Agent」的读取权限，无法调用这个工具");
+expect("全关：tools/list 无 agents_get", toolVisibleToAgent("agents_get", denied), false);
+const allDomainsNoAdvanced = parsePermissions(JSON.stringify(Object.fromEntries(PERMISSION_DOMAINS.map((domain) => [domain, { read: true, write: true }]))));
+expect("普通域全开无 agents_other：agents_get 仍被拒", toolAccessError("agents_get", allDomainsNoAdvanced, "agent-a", { agent_id: "agt_b" }, "agt_a"), "该 Agent 没有「操作其他 Agent」的读取权限，无法调用这个工具");
+expect("普通域全开无 agents_other：tools/list 无 agents_list", toolVisibleToAgent("agents_list", allDomainsNoAdvanced), false);
+const SELF_ERR = "只能操作其他 Agent，不能用这个工具操作自己";
+expect("agents_get 按 id 查自己：自我门拒", toolAccessError("agents_get", agentsOtherRead, "agent-a", { agent_id: "agt_a" }, "agt_a"), SELF_ERR);
+expect("agents_get 按 name 查自己：自我门拒", toolAccessError("agents_get", agentsOtherRead, "agent-a", { name: "agent-a" }, "agt_a"), SELF_ERR);
+expect("agents_get 按 name 查别人：放行", toolAccessError("agents_get", agentsOtherRead, "agent-a", { name: "agent-b" }, "agt_a"), null);
+expect("agents_rotate_token 按 id 轮换自己：自我门拒", toolAccessError("agents_rotate_token", agentsOtherWrite, "agent-a", { agent_id: "agt_a" }, "agt_a"), SELF_ERR);
+expect("agents_set_enabled 按 id 停用自己：自我门拒", toolAccessError("agents_set_enabled", agentsOtherWrite, "agent-a", { agent_id: "agt_a", enabled: false }, "agt_a"), SELF_ERR);
 
 // Soul 归属门：soul 域严格只覆盖自己名下（agent_name === 调用者名）的那一份。
 // 读他人要 soul_other.read，写他人（含以他人名义新建）要 soul_other.write。
@@ -388,7 +485,7 @@ expect(
 );
 expect("全域授予：soul_update 写他人也放行", toolAccessError("soul_update", full, "agent-a", { agent_name: "agent-b" }), null);
 expect("全域授予：soul_get 读他人也放行", toolAccessError("soul_get", full, "agent-a", { agent_name: "agent-b" }), null);
-expect("全域授予：tools/list 覆盖全部 41 个工具", TOOL_NAMES.filter((name) => toolVisibleToAgent(name, full)).length, 41);
+expect("全域授予：tools/list 覆盖全部 67 个工具", TOOL_NAMES.filter((name) => toolVisibleToAgent(name, full)).length, 67);
 
 // 分类表与裁定一致：mcp_get 无高级门；soul 归属门不在分类表、在 toolAccessError
 expect("mcp_get 无 advanced", TOOL_PERMISSIONS.mcp_get.advanced, undefined);
@@ -398,4 +495,4 @@ if (failures > 0) {
   console.error(`\n${failures}/${checks} 条不符`);
   process.exit(1);
 }
-console.log(`\n全部通过：${checks} 条检查（旧数组映射 / 旧布尔高级迁移 / 垃圾输入全关 / 新对象直通 / parse-serialize 往返 / hasGrant-hasAdvanced / PATCH 过渡兼容 / 41 个工具的分类与校验矩阵）`);
+console.log(`\n全部通过：${checks} 条检查（旧数组映射 / 旧布尔高级迁移 / 垃圾输入全关 / 新对象直通 / parse-serialize 往返 / hasGrant-hasAdvanced / PATCH 过渡兼容 / 67 个工具的分类与校验矩阵）`);

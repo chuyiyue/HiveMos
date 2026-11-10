@@ -6,10 +6,11 @@
 //    "advanced":{"agents_other":{"read":false,"write":false},
 //                "soul_other":{…}, "totp":{…}}}
 //
-// 高级域与普通域彼此独立、互不附带：agents_other = 操作其他 Agent，
-// soul_other = 操作其他 Soul（自己名下的 Soul 归 soul 域），totp = 保险库
-// 验证码（与 vault 域分开）。机器明文凭据（machines_get_access）不再有高级
-// 门，只归 machines 域读 + 审计。
+// 高级域与普通域彼此独立、互不附带：agents_other = 操作其他 Agent
+// （agents_* 工具只认它、没有对应普通域），soul_other = 操作其他 Soul
+// （自己名下的 Soul 归 soul 域），totp = 保险库验证码（vault_2fa_* 工具
+// 只认 totp.read，与管条目/邮箱/网关的 vault 域彻底分开）。机器明文凭据
+// （machines_get_access）不再有高级门，只归 machines 域读 + 审计。
 //
 // 旧格式是一个 JSON 数组（["mcp","memory",…]），只表达「这个域开着」。
 // 解析旧数组时从严、只读：每个列出的域映射为 {read:true, write:false}，
@@ -38,8 +39,9 @@ export type PermissionDomain = (typeof PERMISSION_DOMAINS)[number];
 export type PermissionOp = "read" | "write";
 
 // 高级域：与普通域同构的 (read | write) 对，语义是「操作其他 Agent 的资源」。
-// agents_other 目前没有对应 MCP 工具，只建权限位；soul_other 管他人 Soul 的
-// 读/写（写仍走待审草稿）；totp.read 是保险库取码工具的高级门，totp.write 预留。
+// agents_other 是 agents_* 四个工具的唯一门（读 = 列表与取令牌，写 = 轮换
+// 与启停）；soul_other 管他人 Soul 的读/写（写仍走待审草稿）；totp.read 是
+// 保险库取码工具的唯一门（不再叠 vault 域读），totp.write 预留。
 export const ADVANCED_PERMISSIONS = ["agents_other", "soul_other", "totp"] as const;
 
 export type AdvancedPermission = (typeof ADVANCED_PERMISSIONS)[number];

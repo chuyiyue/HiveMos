@@ -8,12 +8,18 @@ import {
   createServer,
   deleteServer,
   fetchConfigForAgent,
+  listAgents,
   readPublicServer,
   recordToolDenied,
+  resolveAgent,
   resolveServer,
+  revealAgentToken,
+  rotateAgentToken,
   searchServers,
+  updateAgent,
   updateServerPartial,
 } from "./registry";
+import type { PublicAgent } from "./registry";
 import { authenticateMcp } from "./oauth";
 import { toolPermissionOf, toolAccessError, toolVisibleToAgent } from "./tool-permissions";
 import { hasAdvanced } from "./permissions";
@@ -66,26 +72,38 @@ import {
   completeTask,
   createTask,
   deleteTask,
+  getTask,
   listTasksForAgent,
   taskPublic,
   updateTask,
 } from "./tasks";
 
 import {
+  createMachine,
+  deleteMachine,
+  getMachine,
   getMachineAccessForAgent,
+  getMachineByName,
   getMachineForAgent,
   listMachines,
   MachineError,
+  MACHINE_KIND_LABELS,
   machinePublic,
+  probeMachineById,
   reportMachine,
+  updateMachine,
   vaultKeyOf,
 } from "./machines";
 
 import {
   apiSummary,
+  createApi,
   createSkill,
+  deleteApi,
   deleteSkill,
   ExtraError,
+  getApi,
+  getApiByName,
   getApiForAgent,
   getSkill,
   getSkillByName,
@@ -93,9 +111,29 @@ import {
   listApis,
   listSkills,
   skillSummary,
+  updateApi,
   updateSkill,
 } from "./extras";
-import { VaultError } from "./vault";
+import {
+  VaultError,
+  createEmail,
+  createEntry,
+  createGateway,
+  deleteEmail,
+  deleteEntry,
+  deleteGateway,
+  emailPublic,
+  entryPublic,
+  gatewayPublic,
+  listEmails,
+  listEntries,
+  listGateways,
+  revealSecret,
+  updateEmail,
+  updateEntry,
+  updateGateway,
+} from "./vault";
+import type { EmailRow, GatewayRow, VaultEntryRow } from "./vault";
 import { getTotpCodeForAgent, listTotpForAgent } from "./vault-totp";
 
 const MAX_BODY_BYTES = 64 * 1024;
@@ -450,6 +488,16 @@ const TOOLS = [
     },
   },
   {
+    name: "tasks_get",
+    description: "按 task_id 取一条任务的完整信息：公共字段外还带 AI 状态（ai_status）与 AI 摘要（ai_summary），tasks_list 不回这两个字段",
+    inputSchema: {
+      type: "object",
+      properties: { task_id: { type: "string", description: "任务 id" } },
+      required: ["task_id"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "tasks_list",
     description: "列出任务（面板与 Agent 之间传递的工作项），可按状态或分配对象过滤。状态为 queued（排队）、active（进行中）、done（已完成）",
     inputSchema: {
@@ -553,6 +601,82 @@ const TOOLS = [
     },
   },
   {
+    name: "machines_create",
+    description: "新建一条云计算资源条目（服务器 server、云主机 cloud 或边缘计算 worker），字段与校验与面板新建完全一致。服务器建成后会同步探活一次（与面板一致），探活失败不影响建成；服务器不传 name 时按备注、IP、SSH 地址依次兜底生成。凭据（ssh_secret / api_token）只密封保存，返回永不带明文",
+    inputSchema: {
+      type: "object",
+      properties: {
+        kind: { type: "string", description: "类型：server、cloud 或 worker" },
+        name: { type: "string", description: "名称；云主机与边缘计算必填，服务器可省略（按备注/IP 兜底）" },
+        region: { type: "string", description: "地域" },
+        spec: { type: "string", description: "配置" },
+        description: { type: "string", description: "说明" },
+        binding: { type: "string", description: "绑定" },
+        note: { type: "string", description: "备注（服务器 / 云主机）" },
+        group_id: { type: "string", description: "分组 id（scope=machines 的分组）；null 或空表示未分组" },
+        hostname: { type: "string", description: "主机名（服务器）" },
+        os: { type: "string", description: "系统（服务器）" },
+        ip: { type: "string", description: "主机 IP（服务器；IP 与 SSH 地址至少填一个）" },
+        ssh_host: { type: "string", description: "SSH 地址（服务器）" },
+        ssh_port: { type: "integer", description: "SSH 端口，缺省 22（服务器）" },
+        ssh_user: { type: "string", description: "SSH 用户名（服务器）" },
+        auth_type: { type: "string", description: "SSH 鉴权方式：password 或 key（服务器）" },
+        ssh_secret: { type: "string", description: "SSH 密码或私钥（服务器，密封保存，不回显）" },
+        vendor: { type: "string", description: "厂商（云主机）" },
+        access_note: { type: "string", description: "接入方式备注（云主机）" },
+        platform: { type: "string", description: "平台：cloudflare 或 vercel（边缘计算，缺省 cloudflare）" },
+        cf_account_id: { type: "string", description: "Cloudflare 账号 ID（边缘计算，cloudflare 平台）" },
+        team_id: { type: "string", description: "Team ID（边缘计算，vercel 平台）" },
+        api_token: { type: "string", description: "API 令牌（边缘计算，密封保存，不回显）" },
+      },
+      required: ["kind"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "machines_update",
+    description: "局部更新一条云计算资源条目：用 machine_id 或 name 定位，只改给出的字段，校验与面板一致，凭据不回显。只给 name 时它仅作定位、不能改名；改名要带 machine_id 再给新 name",
+    inputSchema: {
+      type: "object",
+      properties: {
+        machine_id: { type: "string", description: "机器 id" },
+        name: { type: "string", description: "名称；仅定位时是定位键，带 machine_id 时可作为新名" },
+        region: { type: "string", description: "地域" },
+        spec: { type: "string", description: "配置" },
+        description: { type: "string", description: "说明" },
+        binding: { type: "string", description: "绑定" },
+        note: { type: "string", description: "备注（服务器 / 云主机）" },
+        group_id: { type: "string", description: "分组 id（scope=machines 的分组）；null 或空表示未分组" },
+        hostname: { type: "string", description: "主机名（服务器）" },
+        os: { type: "string", description: "系统（服务器）" },
+        ip: { type: "string", description: "主机 IP（服务器）" },
+        ssh_host: { type: "string", description: "SSH 地址（服务器）" },
+        ssh_port: { type: "integer", description: "SSH 端口（服务器）" },
+        ssh_user: { type: "string", description: "SSH 用户名（服务器）；空值表示保留原值" },
+        auth_type: { type: "string", description: "SSH 鉴权方式：password 或 key（服务器）" },
+        ssh_secret: { type: "string", description: "SSH 密码或私钥（服务器）；空值表示保留原值" },
+        vendor: { type: "string", description: "厂商（云主机）" },
+        access_note: { type: "string", description: "接入方式备注（云主机）" },
+        cf_account_id: { type: "string", description: "Cloudflare 账号 ID（边缘计算）" },
+        team_id: { type: "string", description: "Team ID（边缘计算）" },
+        api_token: { type: "string", description: "API 令牌（边缘计算）；空值表示保留原值" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "machines_delete",
+    description: "按 machine_id 或 name 删除一条云计算资源条目（真删行）。这是条目删除，不是关机或停用",
+    inputSchema: {
+      type: "object",
+      properties: {
+        machine_id: { type: "string", description: "机器 id" },
+        name: { type: "string", description: "机器名称" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
     name: "skills_list",
     description: "列出 Skills 页签登记的技能摘要（名称、说明、来源、版本），不含正文",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
@@ -637,6 +761,292 @@ const TOOLS = [
     },
   },
   {
+    name: "apis_create",
+    description: "登记一个新的 API 条目，字段与校验与面板新建一致",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "条目名称，最长 64 字" },
+        base_url: { type: "string", description: "端点，最长 300 字" },
+        auth_note: { type: "string", description: "鉴权说明，最长 64 字" },
+        note: { type: "string", description: "说明，最长 300 字" },
+        status: { type: "string", description: "状态：active 或 disabled，缺省 active" },
+        group_id: { type: "string", description: "分组 id（与 MCP 页签共用 scope=mcp 分组池）；null 或空表示未分组" },
+      },
+      required: ["name", "base_url"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "apis_update",
+    description: "局部更新一个 API 条目：用 api_id 或 name 定位，只改给出的字段，校验与面板一致。只给 name 时它仅作定位、不能改名；改名要带 api_id 再给新 name",
+    inputSchema: {
+      type: "object",
+      properties: {
+        api_id: { type: "string", description: "API 条目 id" },
+        name: { type: "string", description: "条目名称，最长 64 字" },
+        base_url: { type: "string", description: "端点，最长 300 字" },
+        auth_note: { type: "string", description: "鉴权说明，最长 64 字" },
+        note: { type: "string", description: "说明，最长 300 字" },
+        status: { type: "string", description: "状态：active 或 disabled" },
+        group_id: { type: "string", description: "分组 id（与 MCP 页签共用 scope=mcp 分组池）；null 或空表示未分组" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "apis_delete",
+    description: "按 api_id 或 name 删除一个 API 条目（真删行）",
+    inputSchema: {
+      type: "object",
+      properties: {
+        api_id: { type: "string", description: "API 条目 id" },
+        name: { type: "string", description: "API 条目名称" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "vault_list_entries",
+    description: "列出保险库的账号密码条目（名称、网址、账号、密码末四位、备注、分组），不含密码明文",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "vault_get_entry",
+    description: "按 entry_id 或 name 取一条保险库条目并回明文密码。放行前先写一条访问记录（审计失败就不返回明文），与面板「查看」同一条路径。只在当前任务确实需要登录时调用，不要把密码写入记忆、日志或文件",
+    inputSchema: {
+      type: "object",
+      properties: {
+        entry_id: { type: "string", description: "条目 id" },
+        name: { type: "string", description: "条目名称" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "vault_create_entry",
+    description: "新建一条保险库账号密码条目，字段与校验与面板新建一致（密码密封保存，只回末四位）",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "名称，最长 60 字" },
+        url: { type: "string", description: "网址" },
+        username: { type: "string", description: "账号" },
+        password: { type: "string", description: "密码（密封保存）" },
+        note: { type: "string", description: "备注" },
+        group_id: { type: "string", description: "分组 id（保险库分组池 vault_groups，与验证码共用）；null 或空表示未分组" },
+      },
+      required: ["name", "password"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "vault_update_entry",
+    description: "局部更新一条保险库条目：用 entry_id 或 name 定位，只改给出的字段；密码只在给出非空 password 时更换。只给 name 时它仅作定位、不能改名；改名要带 entry_id 再给新 name",
+    inputSchema: {
+      type: "object",
+      properties: {
+        entry_id: { type: "string", description: "条目 id" },
+        name: { type: "string", description: "名称，最长 60 字" },
+        url: { type: "string", description: "网址" },
+        username: { type: "string", description: "账号" },
+        password: { type: "string", description: "新密码（密封保存）；不给或空表示保留原密码" },
+        note: { type: "string", description: "备注" },
+        group_id: { type: "string", description: "分组 id（保险库分组池 vault_groups）；null 或空表示未分组" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "vault_delete_entry",
+    description: "按 entry_id 或 name 删除一条保险库条目（真删行）",
+    inputSchema: {
+      type: "object",
+      properties: {
+        entry_id: { type: "string", description: "条目 id" },
+        name: { type: "string", description: "条目名称" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "vault_list_emails",
+    description: "列出保险库的发信邮箱（地址、用途、入口、备注与 SMTP 配置概况），不含 SMTP 密码明文",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "vault_get_email",
+    description: "按 email_id 或 address 取一个发信邮箱并回 SMTP 密码明文。放行前先写一条访问记录（审计失败就不返回明文），与面板「查看」同一条路径。只在当前任务确实需要发信时调用，不要把密码写入记忆、日志或文件",
+    inputSchema: {
+      type: "object",
+      properties: {
+        email_id: { type: "string", description: "邮箱 id" },
+        address: { type: "string", description: "邮箱地址" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "vault_create_email",
+    description: "新建一个发信邮箱，字段与校验与面板新建一致。SMTP 是一组可选配置：给了任一 smtp_* 字段就要把服务器与加密方式填全，密码密封保存",
+    inputSchema: {
+      type: "object",
+      properties: {
+        address: { type: "string", description: "邮箱地址" },
+        purpose: { type: "string", description: "用途" },
+        portal: { type: "string", description: "入口" },
+        note: { type: "string", description: "备注" },
+        smtp_host: { type: "string", description: "SMTP 服务器" },
+        smtp_port: { type: "integer", description: "SMTP 端口；缺省按加密方式取 465 / 587 / 25" },
+        smtp_security: { type: "string", description: "加密方式：ssl、starttls 或 none" },
+        smtp_user: { type: "string", description: "SMTP 用户名，缺省用邮箱地址" },
+        smtp_secret: { type: "string", description: "SMTP 密码（密封保存）" },
+      },
+      required: ["address"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "vault_update_email",
+    description: "局部更新一个发信邮箱：用 email_id 或 address 定位，只改给出的字段；SMTP 组只在给出任一 smtp_* 字段时整体处理（空密码保留原密码），完全不给则不动已存的 SMTP 配置。只给 address 时它仅作定位、不能改地址；改地址要带 email_id 再给新 address",
+    inputSchema: {
+      type: "object",
+      properties: {
+        email_id: { type: "string", description: "邮箱 id" },
+        address: { type: "string", description: "邮箱地址" },
+        purpose: { type: "string", description: "用途" },
+        portal: { type: "string", description: "入口" },
+        note: { type: "string", description: "备注" },
+        smtp_host: { type: "string", description: "SMTP 服务器" },
+        smtp_port: { type: "integer", description: "SMTP 端口；缺省按加密方式取 465 / 587 / 25" },
+        smtp_security: { type: "string", description: "加密方式：ssl、starttls 或 none" },
+        smtp_user: { type: "string", description: "SMTP 用户名" },
+        smtp_secret: { type: "string", description: "SMTP 密码（密封保存）；空表示保留原密码" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "vault_delete_email",
+    description: "按 email_id 或 address 删除一个发信邮箱（真删行）",
+    inputSchema: {
+      type: "object",
+      properties: {
+        email_id: { type: "string", description: "邮箱 id" },
+        address: { type: "string", description: "邮箱地址" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "vault_list_gateways",
+    description: "列出保险库的模型网关（名称、协议、地址、模型、密钥末四位、状态、分组），不含密钥明文",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "vault_get_gateway",
+    description: "按 gateway_id 或 name 取一个模型网关并回密钥明文。放行前先写一条访问记录（审计失败就不返回明文），与面板「查看」同一条路径。只在当前任务确实需要调用该网关时调用，不要把密钥写入记忆、日志或文件",
+    inputSchema: {
+      type: "object",
+      properties: {
+        gateway_id: { type: "string", description: "网关 id" },
+        name: { type: "string", description: "网关名称" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "vault_create_gateway",
+    description: "新建一个模型网关，字段与校验与面板新建一致（密钥密封保存，只回末四位）",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "名称，最长 60 字" },
+        proto: { type: "string", description: "协议" },
+        base_url: { type: "string", description: "地址" },
+        models: { type: "string", description: "模型" },
+        key: { type: "string", description: "密钥（密封保存）" },
+        status: { type: "string", description: "状态：active 或 paused，缺省 paused" },
+        group_id: { type: "string", description: "分组 id（保险库分组池 vault_groups）；null 或空表示未分组" },
+      },
+      required: ["name", "key"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "vault_update_gateway",
+    description: "局部更新一个模型网关：用 gateway_id 或 name 定位，只改给出的字段；密钥只在给出非空 key 时更换。只给 name 时它仅作定位、不能改名；改名要带 gateway_id 再给新 name",
+    inputSchema: {
+      type: "object",
+      properties: {
+        gateway_id: { type: "string", description: "网关 id" },
+        name: { type: "string", description: "名称，最长 60 字" },
+        proto: { type: "string", description: "协议" },
+        base_url: { type: "string", description: "地址" },
+        models: { type: "string", description: "模型" },
+        key: { type: "string", description: "新密钥（密封保存）；不给或空表示保留原密钥" },
+        status: { type: "string", description: "状态：active 或 paused" },
+        group_id: { type: "string", description: "分组 id（保险库分组池 vault_groups）；null 或空表示未分组" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "vault_delete_gateway",
+    description: "按 gateway_id 或 name 删除一个模型网关（真删行）",
+    inputSchema: {
+      type: "object",
+      properties: {
+        gateway_id: { type: "string", description: "网关 id" },
+        name: { type: "string", description: "网关名称" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "agents_list",
+    description: "列出全部 Agent 的公开信息（名字、状态、权限、调用次数、最近活跃），不含任何令牌。只能操作其他 Agent 的工具组：列的是别人，自己不在结果里",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "agents_get",
+    description: "按 agent_id 或 name 取另一个 Agent 的公开信息、令牌明文与接入地址。令牌放行前先写一条访问审计（审计失败就不返回令牌），与面板「复制密钥」同一条路径。只能查其他 Agent，不能查自己；旧令牌只存了摘要时取不出，需先轮换",
+    inputSchema: {
+      type: "object",
+      properties: {
+        agent_id: { type: "string", description: "Agent id" },
+        name: { type: "string", description: "Agent 名字" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "agents_rotate_token",
+    description: "轮换另一个 Agent 的令牌：旧令牌立即失效，新令牌明文在本响应里返回（同时密封保存，之后可经 agents_get 再取）。只能轮换其他 Agent，不能轮换自己",
+    inputSchema: {
+      type: "object",
+      properties: {
+        agent_id: { type: "string", description: "Agent id" },
+        name: { type: "string", description: "Agent 名字" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "agents_set_enabled",
+    description: "启用或停用另一个 Agent。停用后它的令牌立即不能再调用。只能操作其他 Agent，不能启停自己",
+    inputSchema: {
+      type: "object",
+      properties: {
+        agent_id: { type: "string", description: "Agent id" },
+        name: { type: "string", description: "Agent 名字" },
+        enabled: { type: "boolean", description: "true 启用，false 停用" },
+      },
+      required: ["enabled"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "vault_2fa_list",
     description: "列出保险库中允许 AI 读取的验证码条目（id、服务名、账号、位数、周期、分组），不含密钥与验证码",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
@@ -703,7 +1113,8 @@ function initialize(id: unknown, params: unknown): Response {
 }
 
 // tools/list 只返回当前身份有效权限覆盖的工具：域的开关键或 advanced
-// 开关没给，工具直接不出现（machines_get_access 就是一个例子）。鉴权走
+// 开关没给，工具直接不出现（纯高级域工具如 agents_list、vault_2fa_list
+// 只看 advanced）。鉴权走
 // authenticateMcp：Agent 令牌用基础权限，OAuth 令牌用基础 ∩ 连接权限。
 // 无 Bearer 的请求保持历史行为（返回全部工具）；Bearer 认证失败与
 // tools/call 一样报错。
@@ -730,7 +1141,7 @@ async function callTool(request: Request, env: Env, ctx: WaitCtx, id: unknown, p
   const fields = record as { query?: unknown; tag?: unknown; server_id?: unknown; name?: unknown };
   // 每次调用都按 (域, 操作, advanced) 复查，不靠 tools/list 的过滤结果。
   // 被拒也要在调用记录里留痕（沿用 mcp_fetch_audit，不新建表）。
-  const denial = toolAccessError(name, auth.permissions, auth.agentName, record as Record<string, unknown>);
+  const denial = toolAccessError(name, auth.permissions, auth.agentName, record as Record<string, unknown>, auth.agentId);
   if (denial !== null) {
     if (toolPermissionOf(name)) await recordToolDenied(env.DB, auth.agentId, name, Date.now());
     return rpcError(id, -32003, denial, 403);
@@ -837,7 +1248,7 @@ async function callTool(request: Request, env: Env, ctx: WaitCtx, id: unknown, p
   }
   if (name.startsWith("machines_")) {
     try {
-      return await callMachinesTool(env, id, name, record as Record<string, unknown>, auth.agentId);
+      return await callMachinesTool(env, id, name, record as Record<string, unknown>, auth);
     } catch (error) {
       if (error instanceof MachineError) return toolResult(id, error.message, true);
       throw error;
@@ -853,9 +1264,20 @@ async function callTool(request: Request, env: Env, ctx: WaitCtx, id: unknown, p
   }
   if (name.startsWith("apis_")) {
     try {
-      return await callApisTool(env, id, name, record as Record<string, unknown>, auth.agentId);
+      return await callApisTool(env, id, name, record as Record<string, unknown>, auth);
     } catch (error) {
       if (error instanceof ExtraError) return toolResult(id, error.message, true);
+      throw error;
+    }
+  }
+  if (name.startsWith("agents_")) {
+    return await callAgentsTool(env, request, id, name, record as Record<string, unknown>, auth);
+  }
+  if (name.startsWith("vault_")) {
+    try {
+      return await callVaultTool(env, id, name, record as Record<string, unknown>, auth.agentName);
+    } catch (error) {
+      if (error instanceof VaultError) return toolResult(id, error.message, true);
       throw error;
     }
   }
@@ -1194,6 +1616,15 @@ async function callMemoryTool(env: Env, ctx: WaitCtx, id: unknown, name: string,
 }
 async function callTasksTool(env: Env, id: unknown, name: string, args: Record<string, unknown>, agentId: string): Promise<Response> {
   const now = Date.now();
+  if (name === "tasks_get") {
+    const taskId = argString(args, "task_id");
+    if (!taskId) return toolResult(id, "请提供 task_id", true);
+    const row = await getTask(env.DB, taskId);
+    if (!row) return toolResult(id, "任务不存在", true);
+    // tasks_get 是 tasks_list 之外的完整读：taskPublic 之外多带 AI 状态与
+    // AI 摘要（任务被 AI 处理过才有值），其余字段同 taskPublic。
+    return toolResult(id, { task: { ...taskPublic(row), ai_status: row.ai_status, ai_summary: row.ai_summary } });
+  }
   if (name === "tasks_list") {
     const status = argString(args, "status");
     const assignee = argString(args, "assignee");
@@ -1244,7 +1675,14 @@ async function callVaultTotpTool(
   return toolResult(id, "未知工具", true);
 }
 
-async function callMachinesTool(env: Env, id: unknown, name: string, args: Record<string, unknown>, agentId: string): Promise<Response> {
+async function callMachinesTool(
+  env: Env,
+  id: unknown,
+  name: string,
+  args: Record<string, unknown>,
+  auth: { agentId: string; agentName: string },
+): Promise<Response> {
+  const agentId = auth.agentId;
   const now = Date.now();
   if (name === "machines_list") {
     const kind = argString(args, "kind");
@@ -1275,6 +1713,64 @@ async function callMachinesTool(env: Env, id: unknown, name: string, args: Recor
     const access = await getMachineAccessForAgent(env.DB, machineId.trim(), machineName.trim(), agentId, vaultKeyOf(env), now);
     if (!access) return toolResult(id, "机器不存在", true);
     return toolResult(id, access);
+  }
+  if (name === "machines_create") {
+    // 与面板同一条创建路径：createMachine 自带 machines_audit 的 create
+    // 行（actor 记调用 Agent 名、source "mcp"，与 machines_report 的审计
+    // 归属口径一致）；服务器建成后同步探活一次，也与面板一致（面板的
+    // test-before-save 实际就是这条「建成即探活」——createMachine 本身
+    // 不预检，探活失败不回滚）。代理订阅/节点不在 machines 表里，属另一
+    // 个模块，本工具组只管 server / cloud / worker 三类条目。
+    const created = await createMachine(env.DB, args, auth.agentName, "mcp", now, vaultKeyOf(env));
+    let fresh = created;
+    if (created.kind === "server") {
+      await probeMachineById(env.DB, created.id, vaultKeyOf(env), auth.agentName, now).catch(() => undefined);
+      fresh = (await getMachine(env.DB, created.id)) ?? created;
+    }
+    const kindLabel = MACHINE_KIND_LABELS[created.kind] ?? created.kind;
+    await logOp(env.DB, {
+      actor: auth.agentName,
+      module: "云主机",
+      action: "添加",
+      targetId: created.id,
+      targetName: created.name,
+      text: `添加了${kindLabel}「${created.name}」`,
+    });
+    return toolResult(id, { machine: machinePublic(fresh) });
+  }
+  if (name === "machines_update" || name === "machines_delete") {
+    const machineId = argString(args, "machine_id") ?? "";
+    const machineName = argString(args, "name") ?? "";
+    if (!machineId.trim() && !machineName.trim()) return toolResult(id, "请提供 machine_id 或 name", true);
+    let row = machineId.trim() ? await getMachine(env.DB, machineId.trim()) : null;
+    if (!row && machineName.trim()) row = await getMachineByName(env.DB, machineName.trim());
+    if (!row) return toolResult(id, "机器不存在", true);
+    if (name === "machines_delete") {
+      await deleteMachine(env.DB, row.id, auth.agentName, "mcp", now);
+      await logOp(env.DB, {
+        actor: auth.agentName,
+        module: "云主机",
+        action: "删除",
+        targetId: row.id,
+        targetName: row.name,
+        text: `删除了「${row.name}」`,
+      });
+      return toolResult(id, { machine: machinePublic(row), deleted: true });
+    }
+    const { machine_id: _omit, ...patch } = args;
+    const patchBody: Record<string, unknown> = { ...patch };
+    // 只用 name 定位时 name 是定位键而非新名（改名走 machine_id + 新 name）。
+    if (!machineId.trim()) delete patchBody.name;
+    const updated = await updateMachine(env.DB, row.id, patchBody, auth.agentName, "mcp", now, vaultKeyOf(env));
+    await logOp(env.DB, {
+      actor: auth.agentName,
+      module: "云主机",
+      action: "修改",
+      targetId: row.id,
+      targetName: updated.name,
+      text: `修改了「${updated.name}」`,
+    });
+    return toolResult(id, { machine: machinePublic(updated) });
   }
   return toolResult(id, "未知工具", true);
 }
@@ -1349,7 +1845,13 @@ async function callSkillsTool(
   return toolResult(id, "未知工具", true);
 }
 
-async function callApisTool(env: Env, id: unknown, name: string, args: Record<string, unknown>, agentId: string): Promise<Response> {
+async function callApisTool(
+  env: Env,
+  id: unknown,
+  name: string,
+  args: Record<string, unknown>,
+  auth: { agentId: string; agentName: string },
+): Promise<Response> {
   const now = Date.now();
   if (name === "apis_list") {
     const rows = await listApis(env.DB, null);
@@ -1359,9 +1861,364 @@ async function callApisTool(env: Env, id: unknown, name: string, args: Record<st
     const apiId = argString(args, "api_id") ?? "";
     const apiName = argString(args, "name") ?? "";
     if (!apiId.trim() && !apiName.trim()) return toolResult(id, "请提供 api_id 或 name", true);
-    const row = await getApiForAgent(env.DB, apiId.trim(), apiName.trim(), agentId, now);
+    const row = await getApiForAgent(env.DB, apiId.trim(), apiName.trim(), auth.agentId, now);
     if (!row) return toolResult(id, "API 条目不存在", true);
     return toolResult(id, { api: apiSummary(row) });
+  }
+  if (name === "apis_create") {
+    const created = await createApi(env.DB, args, now);
+    await logOp(env.DB, {
+      actor: auth.agentName,
+      module: "API",
+      action: "添加",
+      targetId: created.id,
+      targetName: created.name,
+      text: `添加了API「${created.name}」`,
+    });
+    return toolResult(id, { api: apiSummary(created) });
+  }
+  if (name === "apis_update" || name === "apis_delete") {
+    const apiId = argString(args, "api_id") ?? "";
+    const apiName = argString(args, "name") ?? "";
+    if (!apiId.trim() && !apiName.trim()) return toolResult(id, "请提供 api_id 或 name", true);
+    // 定位口径与 apis_get 一致（先 id 后 name），但写路径不记获取审计。
+    let row = apiId.trim() ? await getApi(env.DB, apiId.trim()) : null;
+    if (!row && apiName.trim()) row = await getApiByName(env.DB, apiName.trim());
+    if (!row) return toolResult(id, "API 条目不存在", true);
+    if (name === "apis_delete") {
+      await deleteApi(env.DB, row.id);
+      await logOp(env.DB, {
+        actor: auth.agentName,
+        module: "API",
+        action: "删除",
+        targetId: row.id,
+        targetName: row.name,
+        text: `删除了API「${row.name}」`,
+      });
+      return toolResult(id, { api: apiSummary(row), deleted: true });
+    }
+    const { api_id: _omit, ...patch } = args;
+    const patchBody: Record<string, unknown> = { ...patch };
+    // 只用 name 定位时 name 是定位键而非新名（改名走 api_id + 新 name）。
+    if (!apiId.trim()) delete patchBody.name;
+    const updated = await updateApi(env.DB, row.id, patchBody, now);
+    await logOp(env.DB, {
+      actor: auth.agentName,
+      module: "API",
+      action: "修改",
+      targetId: row.id,
+      targetName: updated.name,
+      text: `修改了API「${updated.name}」`,
+    });
+    return toolResult(id, { api: apiSummary(updated) });
+  }
+  return toolResult(id, "未知工具", true);
+}
+
+// agents_* 工具组（高级域 agents_other）：只能操作「其他」Agent。自我门
+// 分两层：toolAccessError 先按 agent_id / name 参数预判（403 口径），这里
+// 解析出目标后再按 id 复判一次——name 定位命中自己、或 id 与 name 指向
+// 不同人时以解析结果为准。OAuth 应用身份没有「自己」这个 Agent 行：
+// 按 id / name 定位不到自己，直接走目标逻辑（列表为空过滤无效果）。
+const AGENTS_SELF_ERROR = "只能操作其他 Agent，不能用这个工具操作自己";
+
+async function callAgentsTool(
+  env: Env,
+  request: Request,
+  id: unknown,
+  name: string,
+  args: Record<string, unknown>,
+  auth: { agentId: string; agentName: string },
+): Promise<Response> {
+  if (name === "agents_list") {
+    const agents = await listAgents(env.DB);
+    return toolResult(id, { agents: agents.filter((agent) => agent.id !== auth.agentId) });
+  }
+  const agentId = argString(args, "agent_id") ?? "";
+  const targetName = argString(args, "name") ?? "";
+  if (!agentId.trim() && !targetName.trim()) return toolResult(id, "请提供 agent_id 或 name", true);
+  const target = await resolveAgent(env.DB, agentId.trim(), targetName.trim());
+  if (!target) return toolResult(id, "未找到 Agent", true);
+  if (target.id === auth.agentId) return toolResult(id, AGENTS_SELF_ERROR, true);
+  if (name === "agents_get") {
+    // 令牌与接入地址：revealAgentToken 先写 agents_audit（actor = 调用
+    // Agent 名）再解密，审计写不进就 503、不返回令牌（fail-closed）。
+    const revealed = await revealAgentToken(env, target.id, auth.agentName);
+    if (!revealed.ok) return toolResult(id, revealed.error, true);
+    await logOp(env.DB, {
+      actor: auth.agentName,
+      module: "Agent",
+      action: "查看",
+      targetId: target.id,
+      targetName: target.name,
+      text: `复制了 Agent「${target.name}」的密钥`,
+    });
+    const endpoint = new URL(request.url).origin + "/mcp?token=" + encodeURIComponent(revealed.token);
+    return toolResult(id, { agent: target, token: revealed.token, endpoint });
+  }
+  if (name === "agents_rotate_token") {
+    const rotated = await rotateAgentToken(env, target.id, auth.agentName);
+    if (!rotated.ok) return toolResult(id, rotated.error, true);
+    await logOp(env.DB, {
+      actor: auth.agentName,
+      module: "Agent",
+      action: "轮换密钥",
+      targetId: target.id,
+      targetName: target.name,
+      text: `轮换了 Agent「${target.name}」的密钥`,
+    });
+    return toolResult(id, { agent: rotated.agent, token: rotated.token });
+  }
+  if (name === "agents_set_enabled") {
+    if (typeof args.enabled !== "boolean") return toolResult(id, "请提供 enabled（true 或 false）", true);
+    const status = args.enabled ? "active" : "disabled";
+    // 启停走面板同款 updateAgent({status})，不用 disableAgent（它记的是
+    // delete 审计、语义是删除相邻路径）；updateAgent 自己写 update 审计。
+    const updated = await updateAgent(env.DB, target.id, { status });
+    if (!updated.ok) return toolResult(id, updated.error, true);
+    const action = args.enabled ? "启用" : "停用";
+    await logOp(env.DB, {
+      actor: auth.agentName,
+      module: "Agent",
+      action,
+      targetId: target.id,
+      targetName: target.name,
+      text: `${action}了 Agent「${target.name}」`,
+    });
+    return toolResult(id, { agent: updated.agent });
+  }
+  return toolResult(id, "未知工具", true);
+}
+
+// vault_* 工具组（vault_2fa_* 除外，那组只认 totp.read、走
+// callVaultTotpTool）：保险库条目 / 邮箱 / 模型网关的读写，全部复用
+// vault.ts 的面板同款函数（createEntry / updateEntry / …自带校验与密封）。
+// 明文只从 vault_get_* 出：revealSecret 先写 vault_access_log（actor =
+// 调用 Agent 名）与 oplog 再解密，审计写不进就不返回明文（fail-closed）。
+// 定位口径与同类工具一致：先 id 后 name（邮箱按 address 定位），name 只
+// 作定位时不能改名。
+async function callVaultTool(
+  env: Env,
+  id: unknown,
+  name: string,
+  args: Record<string, unknown>,
+  agentName: string,
+): Promise<Response> {
+  const now = Date.now();
+  if (name === "vault_list_entries") {
+    const rows = await listEntries(env.DB);
+    return toolResult(id, { entries: rows.map(entryPublic) });
+  }
+  if (name === "vault_list_emails") {
+    const rows = await listEmails(env.DB);
+    return toolResult(id, { emails: rows.map(emailPublic) });
+  }
+  if (name === "vault_list_gateways") {
+    const rows = await listGateways(env.DB);
+    return toolResult(id, { gateways: rows.map(gatewayPublic) });
+  }
+
+  const resolveEntry = async (): Promise<VaultEntryRow | null> => {
+    const entryId = argString(args, "entry_id") ?? "";
+    const entryName = argString(args, "name") ?? "";
+    if (!entryId.trim() && !entryName.trim()) return null;
+    const rows = await listEntries(env.DB);
+    return (
+      (entryId.trim() ? rows.find((row) => row.id === entryId.trim()) : undefined) ??
+      (entryName.trim() ? rows.find((row) => row.name === entryName.trim()) : undefined) ??
+      null
+    );
+  };
+  const resolveEmail = async (): Promise<EmailRow | null> => {
+    const emailId = argString(args, "email_id") ?? "";
+    const address = argString(args, "address") ?? "";
+    if (!emailId.trim() && !address.trim()) return null;
+    const rows = await listEmails(env.DB);
+    return (
+      (emailId.trim() ? rows.find((row) => row.id === emailId.trim()) : undefined) ??
+      (address.trim() ? rows.find((row) => row.address === address.trim()) : undefined) ??
+      null
+    );
+  };
+  const resolveGateway = async (): Promise<GatewayRow | null> => {
+    const gatewayId = argString(args, "gateway_id") ?? "";
+    const gatewayName = argString(args, "name") ?? "";
+    if (!gatewayId.trim() && !gatewayName.trim()) return null;
+    const rows = await listGateways(env.DB);
+    return (
+      (gatewayId.trim() ? rows.find((row) => row.id === gatewayId.trim()) : undefined) ??
+      (gatewayName.trim() ? rows.find((row) => row.name === gatewayName.trim()) : undefined) ??
+      null
+    );
+  };
+
+  if (name === "vault_get_entry" || name === "vault_get_email" || name === "vault_get_gateway") {
+    const kind = name === "vault_get_entry" ? "entry" : name === "vault_get_email" ? "email" : "gateway";
+    const row = kind === "entry" ? await resolveEntry() : kind === "email" ? await resolveEmail() : await resolveGateway();
+    if (!row) {
+      const hint =
+        kind === "entry"
+          ? "请提供 entry_id 或 name"
+          : kind === "email"
+            ? "请提供 email_id 或 address"
+            : "请提供 gateway_id 或 name";
+      const given =
+        kind === "entry"
+          ? (argString(args, "entry_id") ?? "") || (argString(args, "name") ?? "")
+          : kind === "email"
+            ? (argString(args, "email_id") ?? "") || (argString(args, "address") ?? "")
+            : (argString(args, "gateway_id") ?? "") || (argString(args, "name") ?? "");
+      if (!given.trim()) return toolResult(id, hint, true);
+      return toolResult(id, kind === "entry" ? "条目不存在" : kind === "email" ? "邮箱不存在" : "网关不存在", true);
+    }
+    const revealed = await revealSecret(env.DB, env, { kind, id: row.id }, now, { panel: agentName, agent: agentName });
+    if (kind === "entry") {
+      const entry = row as VaultEntryRow;
+      return toolResult(id, { entry: { ...entryPublic(entry), password: revealed.value } });
+    }
+    if (kind === "email") {
+      const email = row as EmailRow;
+      return toolResult(id, { email: { ...emailPublic(email), smtp_secret: email.smtp_secret ? revealed.value : "" } });
+    }
+    const gateway = row as GatewayRow;
+    return toolResult(id, { gateway: { ...gatewayPublic(gateway), key: revealed.value } });
+  }
+
+  if (name === "vault_create_entry") {
+    const created = await createEntry(env.DB, env, args, now);
+    await logOp(env.DB, {
+      actor: agentName,
+      module: "保险库",
+      action: "添加",
+      targetId: created.id,
+      targetName: created.name,
+      text: `添加了保险库条目「${created.name}」`,
+    });
+    return toolResult(id, { entry: entryPublic(created) });
+  }
+  if (name === "vault_create_email") {
+    const created = await createEmail(env.DB, env, args, now);
+    await logOp(env.DB, {
+      actor: agentName,
+      module: "保险库",
+      action: "添加",
+      targetId: created.id,
+      targetName: created.address,
+      text: `添加了发信邮箱「${created.address}」`,
+    });
+    return toolResult(id, { email: emailPublic(created) });
+  }
+  if (name === "vault_create_gateway") {
+    const created = await createGateway(env.DB, env, args, now);
+    await logOp(env.DB, {
+      actor: agentName,
+      module: "保险库",
+      action: "添加",
+      targetId: created.id,
+      targetName: created.name,
+      text: `添加了模型网关「${created.name}」`,
+    });
+    return toolResult(id, { gateway: gatewayPublic(created) });
+  }
+
+  if (name === "vault_update_entry" || name === "vault_delete_entry") {
+    const entryId = argString(args, "entry_id") ?? "";
+    const row = await resolveEntry();
+    if (!row) {
+      if (!entryId.trim() && !(argString(args, "name") ?? "").trim()) return toolResult(id, "请提供 entry_id 或 name", true);
+      return toolResult(id, "条目不存在", true);
+    }
+    if (name === "vault_delete_entry") {
+      const deleted = await deleteEntry(env.DB, row.id);
+      await logOp(env.DB, {
+        actor: agentName,
+        module: "保险库",
+        action: "删除",
+        targetId: row.id,
+        targetName: deleted.name,
+        text: `删除了保险库条目「${deleted.name}」`,
+      });
+      return toolResult(id, { entry: entryPublic(deleted), deleted: true });
+    }
+    const { entry_id: _omit, ...patch } = args;
+    const patchBody: Record<string, unknown> = { ...patch };
+    if (!entryId.trim()) delete patchBody.name;
+    const updated = await updateEntry(env.DB, env, row.id, patchBody, now);
+    await logOp(env.DB, {
+      actor: agentName,
+      module: "保险库",
+      action: "修改",
+      targetId: row.id,
+      targetName: updated.name,
+      text: `修改了保险库条目「${updated.name}」`,
+    });
+    return toolResult(id, { entry: entryPublic(updated) });
+  }
+  if (name === "vault_update_email" || name === "vault_delete_email") {
+    const emailId = argString(args, "email_id") ?? "";
+    const row = await resolveEmail();
+    if (!row) {
+      if (!emailId.trim() && !(argString(args, "address") ?? "").trim()) return toolResult(id, "请提供 email_id 或 address", true);
+      return toolResult(id, "邮箱不存在", true);
+    }
+    if (name === "vault_delete_email") {
+      const deleted = await deleteEmail(env.DB, row.id);
+      await logOp(env.DB, {
+        actor: agentName,
+        module: "保险库",
+        action: "删除",
+        targetId: row.id,
+        targetName: deleted.address,
+        text: `删除了发信邮箱「${deleted.address}」`,
+      });
+      return toolResult(id, { email: emailPublic(deleted), deleted: true });
+    }
+    const { email_id: _omit, ...patch } = args;
+    const patchBody: Record<string, unknown> = { ...patch };
+    if (!emailId.trim()) delete patchBody.address;
+    const updated = await updateEmail(env.DB, env, row.id, patchBody, now);
+    await logOp(env.DB, {
+      actor: agentName,
+      module: "保险库",
+      action: "修改",
+      targetId: row.id,
+      targetName: updated.address,
+      text: `修改了发信邮箱「${updated.address}」`,
+    });
+    return toolResult(id, { email: emailPublic(updated) });
+  }
+  if (name === "vault_update_gateway" || name === "vault_delete_gateway") {
+    const gatewayId = argString(args, "gateway_id") ?? "";
+    const row = await resolveGateway();
+    if (!row) {
+      if (!gatewayId.trim() && !(argString(args, "name") ?? "").trim()) return toolResult(id, "请提供 gateway_id 或 name", true);
+      return toolResult(id, "网关不存在", true);
+    }
+    if (name === "vault_delete_gateway") {
+      const deleted = await deleteGateway(env.DB, row.id);
+      await logOp(env.DB, {
+        actor: agentName,
+        module: "保险库",
+        action: "删除",
+        targetId: row.id,
+        targetName: deleted.name,
+        text: `删除了模型网关「${deleted.name}」`,
+      });
+      return toolResult(id, { gateway: gatewayPublic(deleted), deleted: true });
+    }
+    const { gateway_id: _omit, ...patch } = args;
+    const patchBody: Record<string, unknown> = { ...patch };
+    if (!gatewayId.trim()) delete patchBody.name;
+    const updated = await updateGateway(env.DB, env, row.id, patchBody, now);
+    await logOp(env.DB, {
+      actor: agentName,
+      module: "保险库",
+      action: "修改",
+      targetId: row.id,
+      targetName: updated.name,
+      text: `修改了模型网关「${updated.name}」`,
+    });
+    return toolResult(id, { gateway: gatewayPublic(updated) });
   }
   return toolResult(id, "未知工具", true);
 }

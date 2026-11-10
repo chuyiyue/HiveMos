@@ -234,18 +234,19 @@ function newAgentId(): string {
 // operation itself. The reveal path is the exception — it writes its row
 // strictly BEFORE decrypting, so a failed audit write fails the reveal.
 
-async function writeAgentAudit(db: D1Database, agentId: string, action: string): Promise<void> {
-  await prepare(db, "INSERT INTO agents_audit (id, agent_id, actor, action, created_at) VALUES (?, ?, 'user', ?, ?)", [
+async function writeAgentAudit(db: D1Database, agentId: string, action: string, actor = "user"): Promise<void> {
+  await prepare(db, "INSERT INTO agents_audit (id, agent_id, actor, action, created_at) VALUES (?, ?, ?, ?, ?)", [
     newId("aud_"),
     agentId,
+    actor,
     action,
     Date.now(),
   ]).run();
 }
 
-async function auditAgentQuietly(db: D1Database, agentId: string, action: string): Promise<void> {
+async function auditAgentQuietly(db: D1Database, agentId: string, action: string, actor = "user"): Promise<void> {
   try {
-    await writeAgentAudit(db, agentId, action);
+    await writeAgentAudit(db, agentId, action, actor);
   } catch {
     // best-effort: management operations never fail over their audit row
   }
@@ -262,7 +263,10 @@ async function sealAgentToken(env: Env, token: string): Promise<string | null> {
   return sealString(key, token);
 }
 
-export async function revealAgentToken(env: Env, id: string): Promise<{ ok: true; token: string } | Failure> {
+// actor 记进 agents_audit：面板路径缺省 'user'；MCP 的 agents_get 传调用
+// Agent 的名字，让「谁取了谁的令牌」在审计里可查。审计仍是严格前置：
+// 写不进就 503、绝不解密。
+export async function revealAgentToken(env: Env, id: string, actor = "user"): Promise<{ ok: true; token: string } | Failure> {
   const row = await prepare(env.DB, "SELECT id, token_enc FROM agents WHERE id = ?", [id]).first<{
     id: string;
     token_enc: string | null;
@@ -275,7 +279,7 @@ export async function revealAgentToken(env: Env, id: string): Promise<{ ok: true
   const key = resolveContentKey(typeof raw === "string" ? raw : undefined);
   if (key.state !== "on") return { ok: false, status: 503, error: "保险库密钥未配置，暂时不能复制密钥" };
   try {
-    await writeAgentAudit(env.DB, id, "token_reveal");
+    await writeAgentAudit(env.DB, id, "token_reveal", actor);
   } catch {
     return { ok: false, status: 503, error: "审计写入失败，暂时不能复制密钥" };
   }
@@ -1125,6 +1129,25 @@ export async function deleteServer(db: D1Database, id: string): Promise<{ ok: tr
 
 // MCP 工具的定位口径与 mcp_get 一致：先 server_id 后 name。写路径不像
 // fetchConfigForAgent 那样要求 active——停用的条目同样要能改、能删（与面板一致）。
+// Agent 版的 resolveServer（同口径：先 id 后 name），供 MCP agents_* 工具
+// 定位目标。返回公开形状；调用方（handler）负责「只能操作其他 Agent」的
+// 自我门与令牌揭示的审计。
+export async function resolveAgent(db: D1Database, agentId: string, name: string): Promise<PublicAgent | null> {
+  if (agentId) {
+    const byId = await getAgentRow(db, agentId);
+    if (byId) return toPublicAgent(byId);
+  }
+  if (name) {
+    const byName = await prepare(
+      db,
+      "SELECT id, name, status, group_id, permissions, last_seen_at, pinned_at, created_at, call_count, avatar_icon, avatar_url, EXISTS(SELECT 1 FROM agent_avatars WHERE agent_id = agents.id) AS has_custom_avatar FROM agents WHERE name = ?",
+      [name],
+    ).first<AgentRow>();
+    if (byName) return toPublicAgent(byName);
+  }
+  return null;
+}
+
 export async function resolveServer(db: D1Database, serverId: string, name: string): Promise<ServerRow | null> {
   if (serverId) {
     const byId = await getServer(db, serverId);
@@ -1620,7 +1643,7 @@ export async function clearAgentAvatar(db: D1Database, id: string): Promise<{ ok
 // Rotation swaps the stored hash, so the old token stops working the moment
 // this returns. The new token is also sealed into token_enc, so the panel
 // can copy it again later via revealAgentToken.
-export async function rotateAgentToken(env: Env, id: string): Promise<{ ok: true; agent: PublicAgent; token: string } | Failure> {
+export async function rotateAgentToken(env: Env, id: string, actor = "user"): Promise<{ ok: true; agent: PublicAgent; token: string } | Failure> {
   const db = env.DB;
   const existing = await getAgentRow(db, id);
   if (!existing) return { ok: false, status: 404, error: "未找到" };
@@ -1631,7 +1654,7 @@ export async function rotateAgentToken(env: Env, id: string): Promise<{ ok: true
   } catch {
     return dbFailure();
   }
-  await auditAgentQuietly(db, id, "rotate");
+  await auditAgentQuietly(db, id, "rotate", actor);
   return { ok: true, agent: toPublicAgent(existing), token };
 }
 

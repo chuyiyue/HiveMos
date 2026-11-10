@@ -107,9 +107,11 @@ expect("应用权限: memory_upsert 调用放行", toolAccessError("memory_upser
 expectTrue("应用权限: memory_search 可见", toolVisibleToAgent("memory_search", appGrants));
 expect("应用权限: 未授权域工具不可见", toolVisibleToAgent("tasks_list", appGrants), false);
 expectTrue("应用权限: 未授权域调用被拒", toolAccessError("tasks_list", appGrants, "E2E App", {}) !== null);
-// 高级权限门：vault_2fa_list 需要 vault 读 + 操作2FA 读，缺一不可。
+// 高级权限门：vault_2fa_list 只认 操作2FA 读（纯高级域），vault 域不附带。
 const vaultOnly = parsePermissions({ vault: { read: true, write: false } });
 expectTrue("应用权限: 只有 vault 读时取码工具被拒", toolAccessError("vault_2fa_list", vaultOnly, "E2E App", {}) !== null);
+const totpOnlyApp = parsePermissions({ advanced: { totp: { read: true, write: false } } });
+expect("应用权限: 只有 2FA 读（无 vault 域）时取码放行", toolAccessError("vault_2fa_list", totpOnlyApp, "E2E App", {}), null);
 const vaultAndTotp = parsePermissions({ vault: { read: true, write: false }, advanced: { totp: { read: true, write: false } } });
 expect("应用权限: vault 读 + 2FA 读时取码放行", toolAccessError("vault_2fa_list", vaultAndTotp, "E2E App", {}), null);
 // 垃圾权限 = 全关。
