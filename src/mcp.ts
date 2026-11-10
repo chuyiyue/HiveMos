@@ -4,7 +4,16 @@
 
 import { json } from "./http";
 import type { Env, WaitCtx } from "./env";
-import { fetchConfigForAgent, recordToolDenied, searchServers } from "./registry";
+import {
+  createServer,
+  deleteServer,
+  fetchConfigForAgent,
+  readPublicServer,
+  recordToolDenied,
+  resolveServer,
+  searchServers,
+  updateServerPartial,
+} from "./registry";
 import { authenticateMcp } from "./oauth";
 import { toolPermissionOf, toolAccessError, toolVisibleToAgent } from "./tool-permissions";
 import { hasAdvanced } from "./permissions";
@@ -72,7 +81,20 @@ import {
   vaultKeyOf,
 } from "./machines";
 
-import { apiSummary, ExtraError, getApiForAgent, getSkillForAgent, listApis, listSkills, skillSummary } from "./extras";
+import {
+  apiSummary,
+  createSkill,
+  deleteSkill,
+  ExtraError,
+  getApiForAgent,
+  getSkill,
+  getSkillByName,
+  getSkillForAgent,
+  listApis,
+  listSkills,
+  skillSummary,
+  updateSkill,
+} from "./extras";
 import { VaultError } from "./vault";
 import { getTotpCodeForAgent, listTotpForAgent } from "./vault-totp";
 
@@ -105,6 +127,68 @@ const TOOLS = [
   {
     name: "mcp_get",
     description: "按 server_id 或 name 取回端点、传输和配置模板。成功时记一条获取审计。密钥是 {{vault://…}} 占位，请直连下游，不要把流量送回本服务",
+    inputSchema: {
+      type: "object",
+      properties: {
+        server_id: { type: "string", description: "条目 id" },
+        name: { type: "string", description: "条目 name" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "mcp_create",
+    description: "登记一个新的 MCP 条目，字段与校验与面板新建一致。保存后会尝试探活工具快照，探活失败时条目照样建成、原因放在 probe_error 里",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "条目 name（小写字母、数字、下划线、连字符，全局唯一）" },
+        title: { type: "string", description: "标题" },
+        description: { type: "string", description: "说明" },
+        endpoint_url: { type: "string", description: "端点地址（http / sse 需要 http:// 或 https:// 开头）" },
+        transport: { type: "string", description: "传输方式：http、sse 或 stdio" },
+        launch_config_json: { type: "string", description: "启动配置（JSON 字符串，stdio 用）" },
+        auth_type: { type: "string", description: "鉴权方式：none、bearer 或 oauth" },
+        config_json: { type: "string", description: "配置模板（JSON 字符串，密钥用 {{vault://…}} 占位）" },
+        tags: { type: "array", items: { type: "string" }, description: "人工标签，最多 20 个" },
+        category: { type: "string", description: "分类" },
+        group_id: { type: "string", description: "分组 id（scope=mcp 的分组）；null 或空表示未分组" },
+        summary: { type: "string", description: "简介，最长 200 字" },
+        status: { type: "string", description: "状态：active 或 disabled" },
+        ttl_seconds: { type: "integer", description: "快照存活秒数，60 到 2592000，缺省 86400" },
+      },
+      required: ["name", "title", "endpoint_url", "transport", "auth_type"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "mcp_update",
+    description: "局部更新一个 MCP 条目：用 server_id 或 name 定位，只改给出的字段，校验与面板一致。只给 name 时它仅作定位、不能改名；改名要带 server_id 再给新 name",
+    inputSchema: {
+      type: "object",
+      properties: {
+        server_id: { type: "string", description: "条目 id" },
+        name: { type: "string", description: "条目 name（小写字母、数字、下划线、连字符，全局唯一）" },
+        title: { type: "string", description: "标题" },
+        description: { type: "string", description: "说明" },
+        endpoint_url: { type: "string", description: "端点地址（http / sse 需要 http:// 或 https:// 开头）" },
+        transport: { type: "string", description: "传输方式：http、sse 或 stdio" },
+        launch_config_json: { type: "string", description: "启动配置（JSON 字符串，stdio 用）" },
+        auth_type: { type: "string", description: "鉴权方式：none、bearer 或 oauth" },
+        config_json: { type: "string", description: "配置模板（JSON 字符串，密钥用 {{vault://…}} 占位）" },
+        tags: { type: "array", items: { type: "string" }, description: "人工标签，最多 20 个" },
+        category: { type: "string", description: "分类" },
+        group_id: { type: "string", description: "分组 id（scope=mcp 的分组）；null 或空表示未分组" },
+        summary: { type: "string", description: "简介，最长 200 字" },
+        status: { type: "string", description: "状态：active 或 disabled" },
+        ttl_seconds: { type: "integer", description: "快照存活秒数，60 到 2592000，缺省 86400" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "mcp_delete",
+    description: "按 server_id 或 name 删除一个 MCP 条目（真删行）",
     inputSchema: {
       type: "object",
       properties: {
@@ -486,6 +570,56 @@ const TOOLS = [
     },
   },
   {
+    name: "skills_create",
+    description: "登记一个新的 Skill 条目，字段与校验与面板新建一致。正文是单篇全文",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "技能名称，最长 64 字" },
+        description: { type: "string", description: "说明，最长 300 字" },
+        source: { type: "string", description: "来源，最长 64 字" },
+        content: { type: "string", description: "正文（单篇全文），最长 20000 字" },
+        version: { type: "string", description: "版本，最长 32 字" },
+        used_by: { type: "string", description: "引用方，最长 120 字" },
+        status: { type: "string", description: "状态：enabled 或 disabled" },
+        group_id: { type: "string", description: "分组 id（与 MCP 页签共用 scope=mcp 分组池）；null 或空表示未分组" },
+      },
+      required: ["name"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "skills_update",
+    description: "局部更新一个 Skill：用 skill_id 或 name 定位，只改给出的字段；正文只在给出 content 时整体替换，未给出的字段不动。只给 name 时它仅作定位、不能改名；改名要带 skill_id 再给新 name",
+    inputSchema: {
+      type: "object",
+      properties: {
+        skill_id: { type: "string", description: "技能 id" },
+        name: { type: "string", description: "技能名称，最长 64 字" },
+        description: { type: "string", description: "说明，最长 300 字" },
+        source: { type: "string", description: "来源，最长 64 字" },
+        content: { type: "string", description: "正文（单篇全文），最长 20000 字" },
+        version: { type: "string", description: "版本，最长 32 字" },
+        used_by: { type: "string", description: "引用方，最长 120 字" },
+        status: { type: "string", description: "状态：enabled 或 disabled" },
+        group_id: { type: "string", description: "分组 id（与 MCP 页签共用 scope=mcp 分组池）；null 或空表示未分组" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "skills_delete",
+    description: "按 skill_id 或 name 删除一个 Skill 条目（真删行）",
+    inputSchema: {
+      type: "object",
+      properties: {
+        skill_id: { type: "string", description: "技能 id" },
+        name: { type: "string", description: "技能名称" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
     name: "apis_list",
     description: "列出 API 页签登记的接口摘要（名称、端点、鉴权说明、备注），不含任何凭据",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
@@ -623,6 +757,63 @@ async function callTool(request: Request, env: Env, ctx: WaitCtx, id: unknown, p
     if (!fetched.ok) return toolResult(id, fetched.error, true);
     return toolResult(id, fetched.config);
   }
+  if (name === "mcp_create") {
+    const created = await createServer(env, ctx, record);
+    if (!created.ok) return toolResult(id, created.error, true);
+    const label = created.server.title || created.server.name;
+    await logOp(env.DB, {
+      actor: auth.agentName,
+      module: "MCP",
+      action: "添加",
+      targetId: created.server.id,
+      targetName: label,
+      text: `添加了 MCP「${label}」`,
+    });
+    const payload: Record<string, unknown> = { server: created.server };
+    if (created.probe_error) payload.probe_error = created.probe_error;
+    return toolResult(id, payload);
+  }
+  if (name === "mcp_update" || name === "mcp_delete") {
+    const serverId = readString(fields.server_id);
+    const serverName = readString(fields.name);
+    if (serverId == null || serverName == null) return rpcError(id, -32602, "参数不正确");
+    if (!serverId.trim() && !serverName.trim()) return toolResult(id, "请提供 server_id 或 name", true);
+    const row = await resolveServer(env.DB, serverId.trim(), serverName.trim());
+    if (!row) return toolResult(id, "未找到条目", true);
+    if (name === "mcp_delete") {
+      const before = await readPublicServer(env.DB, row.id);
+      const removed = await deleteServer(env.DB, row.id);
+      if (!removed.ok) return toolResult(id, removed.error, true);
+      const label = before ? before.title || before.name : row.name;
+      await logOp(env.DB, {
+        actor: auth.agentName,
+        module: "MCP",
+        action: "删除",
+        targetId: row.id,
+        targetName: label,
+        text: `删除了 MCP「${label}」`,
+      });
+      return toolResult(id, { server: before, deleted: true });
+    }
+    const { server_id: _omit, ...fieldsToPatch } = record as Record<string, unknown>;
+    const patchBody: Record<string, unknown> = { ...fieldsToPatch };
+    // 只用 name 定位时 name 是定位键而非新名（改名走 server_id + 新 name）。
+    if (!serverId.trim()) delete patchBody.name;
+    const updated = await updateServerPartial(env, ctx, row.id, patchBody);
+    if (!updated.ok) return toolResult(id, updated.error, true);
+    const label = updated.server.title || updated.server.name;
+    await logOp(env.DB, {
+      actor: auth.agentName,
+      module: "MCP",
+      action: "修改",
+      targetId: row.id,
+      targetName: label,
+      text: `修改了 MCP「${label}」`,
+    });
+    const payload: Record<string, unknown> = { server: updated.server };
+    if (updated.probe_error) payload.probe_error = updated.probe_error;
+    return toolResult(id, payload);
+  }
   if (name.startsWith("memory_")) {
     try {
       return await callMemoryTool(env, ctx, id, name, record as Record<string, unknown>, auth.agentId);
@@ -670,7 +861,7 @@ async function callTool(request: Request, env: Env, ctx: WaitCtx, id: unknown, p
   }
   if (name.startsWith("skills_")) {
     try {
-      return await callSkillsTool(env, id, name, record as Record<string, unknown>, auth.agentId);
+      return await callSkillsTool(env, id, name, record as Record<string, unknown>, auth);
     } catch (error) {
       if (error instanceof ExtraError) return toolResult(id, error.message, true);
       throw error;
@@ -1088,7 +1279,13 @@ async function callMachinesTool(env: Env, id: unknown, name: string, args: Recor
   return toolResult(id, "未知工具", true);
 }
 
-async function callSkillsTool(env: Env, id: unknown, name: string, args: Record<string, unknown>, agentId: string): Promise<Response> {
+async function callSkillsTool(
+  env: Env,
+  id: unknown,
+  name: string,
+  args: Record<string, unknown>,
+  auth: { agentId: string; agentName: string },
+): Promise<Response> {
   const now = Date.now();
   if (name === "skills_list") {
     const rows = await listSkills(env.DB, null);
@@ -1098,9 +1295,56 @@ async function callSkillsTool(env: Env, id: unknown, name: string, args: Record<
     const skillId = argString(args, "skill_id") ?? "";
     const skillName = argString(args, "name") ?? "";
     if (!skillId.trim() && !skillName.trim()) return toolResult(id, "请提供 skill_id 或 name", true);
-    const row = await getSkillForAgent(env.DB, skillId.trim(), skillName.trim(), agentId, now);
+    const row = await getSkillForAgent(env.DB, skillId.trim(), skillName.trim(), auth.agentId, now);
     if (!row) return toolResult(id, "技能不存在", true);
     return toolResult(id, { skill: row });
+  }
+  if (name === "skills_create") {
+    const created = await createSkill(env.DB, args, now);
+    await logOp(env.DB, {
+      actor: auth.agentName,
+      module: "Skills",
+      action: "添加",
+      targetId: created.id,
+      targetName: created.name,
+      text: `添加了Skills「${created.name}」`,
+    });
+    return toolResult(id, { skill: created });
+  }
+  if (name === "skills_update" || name === "skills_delete") {
+    const skillId = argString(args, "skill_id") ?? "";
+    const skillName = argString(args, "name") ?? "";
+    if (!skillId.trim() && !skillName.trim()) return toolResult(id, "请提供 skill_id 或 name", true);
+    // 定位口径与 skills_get 一致（先 id 后 name），但写路径不记获取审计。
+    let row = skillId.trim() ? await getSkill(env.DB, skillId.trim()) : null;
+    if (!row && skillName.trim()) row = await getSkillByName(env.DB, skillName.trim());
+    if (!row) return toolResult(id, "技能不存在", true);
+    if (name === "skills_delete") {
+      await deleteSkill(env.DB, row.id);
+      await logOp(env.DB, {
+        actor: auth.agentName,
+        module: "Skills",
+        action: "删除",
+        targetId: row.id,
+        targetName: row.name,
+        text: `删除了Skills「${row.name}」`,
+      });
+      return toolResult(id, { skill: row, deleted: true });
+    }
+    const { skill_id: _omit, ...patch } = args;
+    const patchBody: Record<string, unknown> = { ...patch };
+    // 只用 name 定位时 name 是定位键而非新名（改名走 skill_id + 新 name）。
+    if (!skillId.trim()) delete patchBody.name;
+    const updated = await updateSkill(env.DB, row.id, patchBody, now);
+    await logOp(env.DB, {
+      actor: auth.agentName,
+      module: "Skills",
+      action: "修改",
+      targetId: row.id,
+      targetName: updated.name,
+      text: `修改了Skills「${updated.name}」`,
+    });
+    return toolResult(id, { skill: updated });
   }
   return toolResult(id, "未知工具", true);
 }

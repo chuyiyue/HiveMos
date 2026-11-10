@@ -209,7 +209,7 @@ expect("PATCH null 拒绝", permissionsFromInput(null), { ok: false, status: 400
 // ---- 工具分类表自检 ---------------------------------------------------------
 
 const TOOL_NAMES = Object.keys(TOOL_PERMISSIONS);
-expect("工具分类共 35 个", TOOL_NAMES.length, 35);
+expect("工具分类共 41 个", TOOL_NAMES.length, 41);
 expect(
   "所有工具的域都在 PERMISSION_DOMAINS 内",
   TOOL_NAMES.filter((name) => !PERMISSION_DOMAINS.includes(TOOL_PERMISSIONS[name].domain)),
@@ -244,7 +244,7 @@ expect(
 expect(
   "写工具清单与管理员裁定一致",
   TOOL_NAMES.filter((name) => TOOL_PERMISSIONS[name].op === "write").sort(),
-  ["calendar_create_event", "calendar_delete_event", "calendar_update_event", "machines_report", "memory_delete", "memory_remember", "memory_upsert", "soul_patch", "soul_update", "tasks_complete", "tasks_create", "tasks_update"].sort(),
+  ["calendar_create_event", "calendar_delete_event", "calendar_update_event", "machines_report", "mcp_create", "mcp_delete", "mcp_update", "memory_delete", "memory_remember", "memory_upsert", "skills_create", "skills_delete", "skills_update", "soul_patch", "soul_update", "tasks_complete", "tasks_create", "tasks_update"].sort(),
 );
 expect("未知工具没有分类", toolPermissionOf("no_such_tool"), null);
 
@@ -270,6 +270,25 @@ expect("读写俱全：memory_get 放行", toolAccessError("memory_get", readWri
 const writeOnly = parsePermissions('{"memory":{"read":false,"write":true}}');
 expect("只给 write：memory_upsert 放行", toolAccessError("memory_upsert", writeOnly, "agent-a", {}), null);
 expect("只给 write：memory_list 仍需 read", toolAccessError("memory_list", writeOnly, "agent-a", {}), "该 Agent 没有 memory 的读取权限，无法调用这个工具");
+
+// mcp / skills 写工具：与读工具同域，写要本域 write（2026-11-10 新增六个写工具）
+const mcpReadOnly = parsePermissions('{"mcp":{"read":true,"write":false}}');
+expect("mcp 只读：mcp_get 放行", toolAccessError("mcp_get", mcpReadOnly, "agent-a", {}), null);
+expect("mcp 只读：mcp_create 被拒", toolAccessError("mcp_create", mcpReadOnly, "agent-a", {}), "该 Agent 没有 mcp 的写入权限，无法调用这个工具");
+expect("mcp 只读：mcp_update 被拒", toolAccessError("mcp_update", mcpReadOnly, "agent-a", {}), "该 Agent 没有 mcp 的写入权限，无法调用这个工具");
+expect("mcp 只读：mcp_delete 被拒", toolAccessError("mcp_delete", mcpReadOnly, "agent-a", {}), "该 Agent 没有 mcp 的写入权限，无法调用这个工具");
+expect("mcp 只读：tools/list 无 mcp_create", toolVisibleToAgent("mcp_create", mcpReadOnly), false);
+const mcpWriteOnly = parsePermissions('{"mcp":{"read":false,"write":true}}');
+expect("mcp 只写：mcp_create 放行", toolAccessError("mcp_create", mcpWriteOnly, "agent-a", {}), null);
+expect("mcp 只写：mcp_list 仍需 read", toolAccessError("mcp_list", mcpWriteOnly, "agent-a", {}), "该 Agent 没有 mcp 的读取权限，无法调用这个工具");
+const skillsWriteOnly = parsePermissions('{"skills":{"read":false,"write":true}}');
+expect("skills 只写：skills_create 放行", toolAccessError("skills_create", skillsWriteOnly, "agent-a", {}), null);
+expect("skills 只写：skills_update 放行", toolAccessError("skills_update", skillsWriteOnly, "agent-a", {}), null);
+expect("skills 只写：skills_delete 放行", toolAccessError("skills_delete", skillsWriteOnly, "agent-a", {}), null);
+expect("skills 只写：skills_get 仍需 read", toolAccessError("skills_get", skillsWriteOnly, "agent-a", {}), "该 Agent 没有 skills 的读取权限，无法调用这个工具");
+expect("全关：skills_delete 被拒", toolAccessError("skills_delete", denied, "agent-a", {}), "该 Agent 没有 skills 的写入权限，无法调用这个工具");
+expect("mcp_create 无 advanced", TOOL_PERMISSIONS.mcp_create.advanced, undefined);
+expect("skills_create 无 advanced", TOOL_PERMISSIONS.skills_create.advanced, undefined);
 
 // machines_get_access：凭据并入 machines 域，只需 machines read（审计在 handler 内）
 const machinesRead = parsePermissions('{"machines":{"read":true,"write":false}}');
@@ -369,7 +388,7 @@ expect(
 );
 expect("全域授予：soul_update 写他人也放行", toolAccessError("soul_update", full, "agent-a", { agent_name: "agent-b" }), null);
 expect("全域授予：soul_get 读他人也放行", toolAccessError("soul_get", full, "agent-a", { agent_name: "agent-b" }), null);
-expect("全域授予：tools/list 覆盖全部 35 个工具", TOOL_NAMES.filter((name) => toolVisibleToAgent(name, full)).length, 35);
+expect("全域授予：tools/list 覆盖全部 41 个工具", TOOL_NAMES.filter((name) => toolVisibleToAgent(name, full)).length, 41);
 
 // 分类表与裁定一致：mcp_get 无高级门；soul 归属门不在分类表、在 toolAccessError
 expect("mcp_get 无 advanced", TOOL_PERMISSIONS.mcp_get.advanced, undefined);
@@ -379,4 +398,4 @@ if (failures > 0) {
   console.error(`\n${failures}/${checks} 条不符`);
   process.exit(1);
 }
-console.log(`\n全部通过：${checks} 条检查（旧数组映射 / 旧布尔高级迁移 / 垃圾输入全关 / 新对象直通 / parse-serialize 往返 / hasGrant-hasAdvanced / PATCH 过渡兼容 / 35 个工具的分类与校验矩阵）`);
+console.log(`\n全部通过：${checks} 条检查（旧数组映射 / 旧布尔高级迁移 / 垃圾输入全关 / 新对象直通 / parse-serialize 往返 / hasGrant-hasAdvanced / PATCH 过渡兼容 / 41 个工具的分类与校验矩阵）`);

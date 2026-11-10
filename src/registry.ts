@@ -1121,6 +1121,54 @@ export async function deleteServer(db: D1Database, id: string): Promise<{ ok: tr
   return { ok: true };
 }
 
+// MCP 工具的定位口径与 mcp_get 一致：先 server_id 后 name。写路径不像
+// fetchConfigForAgent 那样要求 active——停用的条目同样要能改、能删（与面板一致）。
+export async function resolveServer(db: D1Database, serverId: string, name: string): Promise<ServerRow | null> {
+  if (serverId) {
+    const byId = await getServer(db, serverId);
+    if (byId) return byId;
+  }
+  if (name) return getServerByName(db, name);
+  return null;
+}
+
+// 局部更新：把 patch 里给出的字段合并到现有行上，再走 updateServer 的
+// 全量校验/版本/探活逻辑，保证与面板 PUT 同校验同语义，未给出的字段不动。
+// 注意两处合并细节：tags 未给时回填现有人工标签（AI 标签由 updateServer
+// 自己保留）；summary 未给时，人工简介回填原文、AI 简介留空让
+// readServerInput 的保留逻辑接管。
+export async function updateServerPartial(
+  env: Env,
+  ctx: WaitCtx,
+  id: string,
+  patch: Record<string, unknown>,
+): Promise<ServerResult> {
+  const existing = await getServer(env.DB, id);
+  if (!existing) return { ok: false, status: 404, error: "未找到" };
+  const has = (key: string) => Object.prototype.hasOwnProperty.call(patch, key);
+  const merged: Record<string, unknown> = {
+    name: has("name") ? patch.name : existing.name,
+    title: has("title") ? patch.title : existing.title,
+    description: has("description") ? patch.description : existing.description,
+    endpoint_url: has("endpoint_url") ? patch.endpoint_url : existing.endpoint_url,
+    transport: has("transport") ? patch.transport : existing.transport,
+    launch_config_json: has("launch_config_json") ? patch.launch_config_json : existing.launch_config_json,
+    auth_type: has("auth_type") ? patch.auth_type : existing.auth_type,
+    config_json: has("config_json") ? patch.config_json : existing.config_json,
+    tags: has("tags")
+      ? patch.tags
+      : parseStoredTags(existing.tags_json)
+          .filter((tag) => tag.source === "human")
+          .map((tag) => tag.text),
+    category: has("category") ? patch.category : existing.category,
+    group_id: has("group_id") ? patch.group_id : existing.group_id,
+    summary: has("summary") ? patch.summary : existing.summary_source === "human" ? (existing.summary ?? "") : "",
+    status: has("status") ? patch.status : existing.status,
+    ttl_seconds: has("ttl_seconds") ? patch.ttl_seconds : (asNumber(existing.ttl_seconds) ?? 86400),
+  };
+  return updateServer(env, ctx, id, merged);
+}
+
 export async function saveManualSnapshot(env: Env, ctx: WaitCtx, id: string, raw: unknown): Promise<ServerResult> {
   const row = await getServer(env.DB, id);
   if (!row) return { ok: false, status: 404, error: "未找到" };

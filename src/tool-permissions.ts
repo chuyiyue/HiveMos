@@ -44,6 +44,12 @@ export const TOOL_PERMISSIONS: Record<string, ToolPermission> = {
   vault_2fa_get_code: { domain: "vault", op: "read", advanced: { key: "totp", op: "read" } },
 
   // ---- write ----
+  mcp_create: { domain: "mcp", op: "write" },
+  mcp_update: { domain: "mcp", op: "write" },
+  mcp_delete: { domain: "mcp", op: "write" },
+  skills_create: { domain: "skills", op: "write" },
+  skills_update: { domain: "skills", op: "write" },
+  skills_delete: { domain: "skills", op: "write" },
   memory_upsert: { domain: "memory", op: "write" },
   memory_remember: { domain: "memory", op: "write" },
   memory_delete: { domain: "memory", op: "write" },
