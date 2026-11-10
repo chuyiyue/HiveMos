@@ -15,6 +15,7 @@ import {
   memoryGroupPublic,
   memoryPublic,
   renameMemoryGroup,
+  searchMemories,
   updateMemory,
 } from "./memory";
 import { ingestMemories, mergeSimilarTags, tagOneMemory, tagUntaggedMemories } from "./memory-ai";
@@ -24,15 +25,14 @@ const MAX_BODY_BYTES = 256 * 1024;
 const CHANNEL = { actor: "user", source: "panel", auditReads: false };
 
 export async function handleMemoryRequest(request: Request, env: Env, ctx: WaitCtx, path: string): Promise<Response | null> {
-  void ctx;
   if (request.method.toUpperCase() !== "GET" && isCrossSite(request)) {
     return json({ ok: false, error: "跨站请求被拒绝" }, 403);
   }
   try {
-    if (path === "/api/memory") return await memories(request, env);
+    if (path === "/api/memory") return await memories(request, env, ctx);
     // 具体路径必须排在 /api/memory/:id 通配之前，否则 ingest、groups、
     // tag-untagged 会被当成记忆 id 吃掉。
-    if (path === "/api/memory/ingest") return await ingest(request, env);
+    if (path === "/api/memory/ingest") return await ingest(request, env, ctx);
     if (path === "/api/memory/tag-untagged") return await tagUntagged(request, env);
     // 存量近义合并。单数写法是本模块的路由约定，双数别名对角兼容旧写法。
     if (path === "/api/memory/tags/merge" || path === "/api/memories/tags/merge") return await mergeTags(request, env);
@@ -42,7 +42,7 @@ export async function handleMemoryRequest(request: Request, env: Env, ctx: WaitC
     const tag = /^\/api\/memory\/([A-Za-z0-9_-]+)\/tag$/.exec(path);
     if (tag && tag[1]) return await tagOne(request, env, tag[1]);
     const one = /^\/api\/memory\/([A-Za-z0-9_-]+)$/.exec(path);
-    if (one && one[1]) return await memoryOne(request, env, one[1]);
+    if (one && one[1]) return await memoryOne(request, env, ctx, one[1]);
     return null;
   } catch (error) {
     if (error instanceof MemError) return json({ ok: false, error: error.message }, error.status);
@@ -50,22 +50,23 @@ export async function handleMemoryRequest(request: Request, env: Env, ctx: WaitC
   }
 }
 
-async function memories(request: Request, env: Env): Promise<Response> {
+async function memories(request: Request, env: Env, ctx: WaitCtx): Promise<Response> {
   const method = request.method.toUpperCase();
   if (method === "GET") {
     const url = new URL(request.url);
     const scope = url.searchParams.get("scope");
     const query = (url.searchParams.get("q") || "").trim();
-    const rows = await listMemories(env.DB, { scope: scope || null });
-    const filtered = query
-      ? rows.filter((row) => (row.title + "\n" + row.content + "\n" + (row.tags_json || "")).toLowerCase().includes(query.toLowerCase()))
-      : rows;
-    return json({ ok: true, memories: filtered.map(memoryPublic) });
+    // 面板搜索与 MCP memory_search 共用 searchMemories（FTS 相关度排序，
+    // 不可用或零命中时自动回退 LIKE）；无关键词时仍走全量列表读序。
+    const rows = query
+      ? await searchMemories(env.DB, query, scope || null, { limit: 500 })
+      : await listMemories(env.DB, { scope: scope || null });
+    return json({ ok: true, memories: rows.map(memoryPublic) });
   }
   if (method === "POST") {
     const body = await readBody(request);
     if (body instanceof Response) return body;
-    const created = await createMemory(env.DB, body, CHANNEL, Date.now());
+    const created = await createMemory(env.DB, body, CHANNEL, Date.now(), { ai: { env, ctx } });
     await logOp(env.DB, {
       actor: await panelActor(request, env),
       module: "记忆",
@@ -79,13 +80,13 @@ async function memories(request: Request, env: Env): Promise<Response> {
   return json({ ok: false, error: "方法不允许" }, 405, { allow: "GET, POST" });
 }
 
-async function ingest(request: Request, env: Env): Promise<Response> {
+async function ingest(request: Request, env: Env, ctx: WaitCtx): Promise<Response> {
   if (request.method.toUpperCase() !== "POST") {
     return json({ ok: false, error: "方法不允许" }, 405, { allow: "POST" });
   }
   const body = await readBody(request);
   if (body instanceof Response) return body;
-  const result = await ingestMemories(env, body, CHANNEL, Date.now());
+  const result = await ingestMemories(env, body, CHANNEL, Date.now(), ctx);
   await logOp(env.DB, {
     actor: await panelActor(request, env),
     module: "记忆",
@@ -216,12 +217,12 @@ async function groupOneHandler(request: Request, env: Env, id: string): Promise<
   return json({ ok: false, error: "方法不允许" }, 405, { allow: "PATCH, DELETE" });
 }
 
-async function memoryOne(request: Request, env: Env, id: string): Promise<Response> {
+async function memoryOne(request: Request, env: Env, ctx: WaitCtx, id: string): Promise<Response> {
   const method = request.method.toUpperCase();
   if (method === "PATCH" || method === "PUT") {
     const body = await readBody(request);
     if (body instanceof Response) return body;
-    const updated = await updateMemory(env.DB, id, body, CHANNEL, Date.now());
+    const updated = await updateMemory(env.DB, id, body, CHANNEL, Date.now(), { ai: { env, ctx } });
     await logOp(env.DB, {
       actor: await panelActor(request, env),
       module: "记忆",

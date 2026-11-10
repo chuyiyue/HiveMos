@@ -5,7 +5,8 @@
 // the same split as mcp_get fetch audit vs panel browsing).
 
 import { prepare } from "./registry";
-import type { D1Database } from "./env";
+import type { D1Database, Env, WaitCtx } from "./env";
+import { readChatResponse, resolveAiModel } from "./ai-model";
 
 function rowsOf<T>(value: { results?: T[] } | T[] | null | undefined): T[] {
   if (Array.isArray(value)) return value;
@@ -189,6 +190,7 @@ export function memoryPublic(row: MemoryRow): Record<string, unknown> {
     pinned_at: row.pinned_at ?? null,
     weight: typeof row.weight === "number" ? row.weight : 0,
     ai_state: row.ai_state || "none",
+    ai_summary: row.ai_summary ?? null,
     version: row.version,
     created_at: row.created_at,
     updated_at: row.updated_at,
@@ -418,7 +420,67 @@ export async function listMemories(db: D1Database, options: ListOptions = {}): P
   return rowsOf(result);
 }
 
-export async function searchMemories(
+// 搜索排序公式（P1）：
+//   score = 相关度 x (1 + weight/100) x 时间衰减
+//   相关度 rel = 1 / (1 + e^bm25)：FTS5 的 bm25 越负越相关，sigmoid 把它
+//     压进 (0, 1)——bm25 = 0 时 rel = 0.5，强命中时 rel 趋近 1。
+//     bm25 按列加权：标题 10、正文 1、标签 5（列序同 memories_fts 定义）。
+//   时间衰减 = 2^(-(now - updated_at) / 30 天)：每过 30 天减半。
+// 置顶恒在最前（与列表读序一致的人工控制）；同分时权重降序、更新时间降序。
+const SEARCH_DECAY_HALF_LIFE_MS = 30 * 24 * 60 * 60 * 1000;
+
+interface FtsHit extends MemoryRow {
+  fts_rank: number;
+}
+
+function searchScore(hit: FtsHit, now: number): number {
+  const rel = 1 / (1 + Math.exp(hit.fts_rank));
+  const age = Math.max(0, now - hit.updated_at);
+  const decay = Math.pow(2, -age / SEARCH_DECAY_HALF_LIFE_MS);
+  const weight = typeof hit.weight === "number" ? hit.weight : 0;
+  return rel * (1 + weight / 100) * decay;
+}
+
+async function searchMemoriesFts(
+  db: D1Database,
+  query: string,
+  scope: string | null | undefined,
+  options: PageOptions,
+): Promise<MemoryRow[] | null> {
+  // 整串引号短语：trigram 下即子串匹配（如「验证码」命中「输入验证码后」）。
+  const phrase = '"' + query.replace(/"/g, '""') + '"';
+  const limit = pageLimit(options.limit, 200, 501);
+  const offset = pageOffset(options.offset);
+  const values: Array<string | number> = [phrase];
+  let sql =
+    "SELECT m.*, bm25(memories_fts, 10.0, 1.0, 5.0) AS fts_rank FROM memories_fts " +
+    "JOIN memories m ON m.rowid = memories_fts.rowid " +
+    "WHERE memories_fts MATCH ? AND m.deleted_at IS NULL ";
+  if (scope) {
+    sql += "AND m.scope = ? ";
+    values.push(scope);
+  }
+  // 候选窗口先按 bm25 取前 offset+limit 条，再按完整公式重排切页：
+  // 公式里的衰减与权重不在 SQL 里算，窗口外的极弱命中本就进不了前列。
+  sql += "ORDER BY fts_rank ASC LIMIT ?";
+  values.push(offset + limit);
+  const result = await prepare(db, sql, values).all<FtsHit>();
+  const hits = rowsOf(result);
+  if (hits.length === 0) return null;
+  const now = Date.now();
+  hits.sort((a, b) => {
+    const pinnedA = a.pinned_at != null ? 0 : 1;
+    const pinnedB = b.pinned_at != null ? 0 : 1;
+    if (pinnedA !== pinnedB) return pinnedA - pinnedB;
+    const byScore = searchScore(b, now) - searchScore(a, now);
+    if (byScore !== 0) return byScore;
+    if (b.weight !== a.weight) return b.weight - a.weight;
+    return b.updated_at - a.updated_at;
+  });
+  return hits.slice(offset, offset + limit);
+}
+
+async function searchMemoriesLike(
   db: D1Database,
   query: string,
   scope?: string | null,
@@ -436,6 +498,26 @@ export async function searchMemories(
   values.push(pageLimit(options.limit, 200, 201), pageOffset(options.offset));
   const result = await prepare(db, sql, values).all<MemoryRow>();
   return rowsOf(result);
+}
+
+export async function searchMemories(
+  db: D1Database,
+  query: string,
+  scope?: string | null,
+  options: PageOptions = {},
+): Promise<MemoryRow[]> {
+  const trimmed = query.trim();
+  // trigram 至少需要 3 个字符才有完整的三元组可匹配；更短的查询、
+  // FTS 表未建（迁移未跑）或 FTS 零命中时一律回退 LIKE，行为不差于旧版。
+  if (trimmed.length >= 3) {
+    try {
+      const hits = await searchMemoriesFts(db, trimmed, scope, options);
+      if (hits) return hits;
+    } catch {
+      // 回退 LIKE，不让搜索因索引问题整体失败。
+    }
+  }
+  return searchMemoriesLike(db, query, scope, options);
 }
 
 interface Channel {
@@ -487,6 +569,7 @@ async function insertMemory(
   fields: { title: string; scope: string; content: string; tags: string[] } & TierFields,
   channel: Channel,
   now: number,
+  ai?: MemoryWriteOptions["ai"],
 ): Promise<MemoryRow> {
   const id = newId("mem");
   await prepare(
@@ -510,12 +593,16 @@ async function insertMemory(
   const row = await getMemoryRow(db, id);
   if (!row) throw new MemError("写入后读取失败", 500);
   await audit(db, { memoryId: id, actor: channel.actor, action: "create", diff: { title: row.title, scope: row.scope } }, now);
+  scheduleMemorySummary(ai, db, row);
   return row;
 }
 
 export interface MemoryWriteOptions {
   // ingest 的 AI 拆分走旁路：标签问题绝不阻断保存，由调用方显式关闭校验。
   enforceTagCap?: boolean;
+  // 摘要旁路：调用方（面板 / MCP）把 env 与 waitUntil 传进来，正文新建或
+  // 变化后 best-effort 生成 ai_summary。缺省不生成；AI 失败绝不影响写入。
+  ai?: { env: Env; ctx?: WaitCtx } | null;
 }
 
 export async function createMemory(
@@ -543,6 +630,7 @@ export async function createMemory(
     { title, scope, content, tags, groupId, weight, pinnedAt: pinned === true ? now : null, aiState },
     channel,
     now,
+    options.ai,
   );
 }
 
@@ -553,6 +641,7 @@ async function applyUpdate(
   channel: Channel,
   action: string,
   now: number,
+  ai?: MemoryWriteOptions["ai"],
 ): Promise<MemoryRow> {
   // 置顶与权重分列写入：请求没带的那个字段不出现在 SET 里，改一个不会连带改另一个。
   const assignments = ["title = ?", "scope = ?", "content = ?", "tags_json = ?", "group_id = ?"];
@@ -571,18 +660,21 @@ async function applyUpdate(
     assignments.push("weight = ?");
     params.push(fields.weight);
   }
+  // 正文变了，旧摘要立即作废（snippet 先退回正文截断），新摘要由旁路补。
+  if (fields.content !== row.content) assignments.push("ai_summary = NULL");
   assignments.push("version = version + 1", "updated_at = ?", "deleted_at = NULL");
   params.push(now, row.id);
   await prepare(db, "UPDATE memories SET " + assignments.join(", ") + " WHERE id = ?", params).run();
   const updated = await getMemoryRow(db, row.id);
   if (!updated) throw new MemError("写入后读取失败", 500);
   await audit(db, { memoryId: row.id, actor: channel.actor, action, diff: { title: updated.title, scope: updated.scope, version: updated.version } }, now);
+  if (fields.content !== row.content) scheduleMemorySummary(ai, db, updated);
   return updated;
 }
 
 // Idempotent write: by id when one is given (a soft-deleted row is revived),
 // otherwise by (title, scope). Creates when nothing matches.
-export async function upsertMemory(db: D1Database, input: Record<string, unknown>, channel: Channel, now: number): Promise<MemoryRow> {
+export async function upsertMemory(db: D1Database, input: Record<string, unknown>, channel: Channel, now: number, options: MemoryWriteOptions = {}): Promise<MemoryRow> {
   const title = cleanTitle(input.title);
   const scope = cleanScope(input.scope);
   const content = cleanContent(input.content);
@@ -610,6 +702,7 @@ export async function upsertMemory(db: D1Database, input: Record<string, unknown
       },
       channel,
       now,
+      options.ai,
     );
   }
   // Changing title/scope onto another active row's key would break the
@@ -635,10 +728,11 @@ export async function upsertMemory(db: D1Database, input: Record<string, unknown
     channel,
     target.deleted_at != null ? "upsert_revive" : "upsert",
     now,
+    options.ai,
   );
 }
 
-export async function updateMemory(db: D1Database, id: string, input: Record<string, unknown>, channel: Channel, now: number): Promise<MemoryRow> {
+export async function updateMemory(db: D1Database, id: string, input: Record<string, unknown>, channel: Channel, now: number, options: MemoryWriteOptions = {}): Promise<MemoryRow> {
   const row = await getMemoryRow(db, id);
   if (!row) throw new MemError("记忆不存在或已删除", 404);
   const title = input.title === undefined ? row.title : cleanTitle(input.title);
@@ -670,6 +764,7 @@ export async function updateMemory(db: D1Database, id: string, input: Record<str
     channel,
     "update",
     now,
+    options.ai,
   );
 }
 
@@ -683,6 +778,54 @@ export async function deleteMemory(db: D1Database, id: string, channel: Channel,
   return deleted;
 }
 
+
+// ---- ai_summary 旁路（P1）----
+// 正文新建或变化后异步生成一句话摘要，供列表与搜索的 snippet 优先展示。
+// 与打标同一口径：AI 是地基不是门槛——未配 AI、调用失败、返回不可用都
+// 静默放弃，写入本身早已成功。落库只改 ai_summary 一列，不 bump
+// version/updated_at（不扰动读序与增量同步游标），并以生成时的 version
+// 做乐观 guard：期间正文又被改过就丢弃这次结果，等下一次变化再生成。
+const SUMMARY_MAX_CHARS = 200;
+const SUMMARY_INPUT_MAX = 4000;
+
+async function generateMemorySummary(env: Env, db: D1Database, row: MemoryRow): Promise<void> {
+  try {
+    if (!env.AI || typeof env.AI.run !== "function") return;
+    const content = row.content.trim();
+    if (!content) return;
+    const input = ("标题：" + row.title + "\n正文：" + content).slice(0, SUMMARY_INPUT_MAX);
+    const output = await env.AI.run(resolveAiModel(env), {
+      messages: [
+        { role: "system", content: "你负责给记忆条目写一句话摘要。只输出摘要本身，不要引号、不要前缀、不要解释。" },
+        { role: "user", content: "用一句不超过 60 个汉字的中文概括下面这条记忆的核心内容：\n" + input },
+      ],
+      temperature: 0,
+      max_tokens: 200,
+    });
+    const text = readChatResponse(output);
+    if (!text) return;
+    const summary = text.replace(/\s+/g, " ").trim().slice(0, SUMMARY_MAX_CHARS);
+    if (!summary) return;
+    await prepare(db, "UPDATE memories SET ai_summary = ? WHERE id = ? AND version = ?", [summary, row.id, row.version]).run();
+  } catch {
+    // best-effort：摘要失败保持 ai_summary 为空，snippet 退回正文截断。
+  }
+}
+
+function scheduleMemorySummary(ai: MemoryWriteOptions["ai"], db: D1Database, row: MemoryRow): void {
+  if (!ai || !ai.env) return;
+  if (!row.content.trim()) return;
+  const task = generateMemorySummary(ai.env, db, row);
+  if (ai.ctx && typeof ai.ctx.waitUntil === "function") {
+    try {
+      ai.ctx.waitUntil(task);
+      return;
+    } catch {
+      // ctx 不完整（本地 dev）时退回裸 promise，一样是旁路。
+    }
+  }
+  void task.catch(() => undefined);
+}
 
 // AI 补打标的落库点：只改 tags 与 ai_state，内容不动。拆分来的记忆保持
 // split 状态，其余成功后记 tagged；失败不调用本函数，状态原样保留。

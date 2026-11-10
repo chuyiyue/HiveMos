@@ -197,7 +197,7 @@
   }
 
   function memoryCard(item) {
-    var sentence = sentenceOf(item.content) || item.title || "";
+    var sentence = sentenceOf(item.ai_summary || item.content) || item.title || "";
     return (
       '<article class="record mem-card">' +
       '<div class="record-info" data-manage="memory:' +

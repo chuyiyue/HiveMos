@@ -6,7 +6,7 @@
 // AI_MODEL 变量可配，缺省 gemma-4-26b-a4b-it，只输出 JSON、解析容错。
 
 import { readChatResponse, resolveAiModel } from "./ai-model";
-import type { Env } from "./env";
+import type { Env, WaitCtx } from "./env";
 import { prepare } from "./registry";
 import {
   MAX_MEMORY_TAGS,
@@ -235,13 +235,15 @@ async function insertPoint(
   base: Record<string, unknown>,
   channel: Channel,
   now: number,
+  env: Env,
+  ctx?: WaitCtx,
 ): Promise<MemoryRow> {
   const original = typeof base.title === "string" ? base.title : "未命名记忆";
   let title = original;
   for (let attempt = 0; attempt < 20; attempt++) {
     try {
       // AI 打标是旁路：ingest 不因标签总量校验失败而丢内容。
-      return await createMemory(db, { ...base, title }, channel, now, { enforceTagCap: false });
+      return await createMemory(db, { ...base, title }, channel, now, { enforceTagCap: false, ai: { env, ctx } });
     } catch (error) {
       if (error instanceof MemError && error.status === 409) {
         title = original.slice(0, TITLE_MAX_CHARS - 4) + "（" + (attempt + 2) + "）";
@@ -279,6 +281,7 @@ export async function ingestMemories(
   input: Record<string, unknown>,
   channel: Channel,
   now: number,
+  ctx?: WaitCtx,
 ): Promise<IngestResult> {
   if (typeof input.text !== "string" || !input.text.trim()) throw new MemError("请填写要保存的内容");
   const text = input.text.trim();
@@ -300,6 +303,8 @@ export async function ingestMemories(
           { ...base, title: deriveTitle(point.content), content: point.content, tags: mergeWithUserTags(point.tags, userTags), ai_state: "split" },
           channel,
           now,
+          env,
+          ctx,
         ),
       );
     }
@@ -310,6 +315,8 @@ export async function ingestMemories(
     { ...base, title: deriveTitle(text), content: text, tags: userTags, ai_state: "failed" },
     channel,
     now,
+    env,
+    ctx,
   );
   return { split: false, memories: [row] };
 }

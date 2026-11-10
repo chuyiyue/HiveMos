@@ -457,7 +457,7 @@ const TOOLS = [
 // size of the public tool surface without duplicating the list.
 export const MCP_TOOL_COUNT = TOOLS.length;
 
-export async function handleMcp(request: Request, env: Env, _ctx: WaitCtx): Promise<Response> {
+export async function handleMcp(request: Request, env: Env, ctx: WaitCtx): Promise<Response> {
   if (request.method.toUpperCase() !== "POST") {
     return json({ jsonrpc: "2.0", id: null, error: { code: -32600, message: "只接受 POST" } }, 405, { allow: "POST" });
   }
@@ -479,7 +479,7 @@ export async function handleMcp(request: Request, env: Env, _ctx: WaitCtx): Prom
     if (record.method === "initialize") return initialize(id, record.params);
     if (record.method === "notifications/initialized") return rpcResult(id, {});
     if (record.method === "tools/list") return listTools(request, env, id);
-    if (record.method === "tools/call") return callTool(request, env, id, record.params);
+    if (record.method === "tools/call") return callTool(request, env, ctx, id, record.params);
     return rpcError(id, -32601, "方法不存在");
   } catch {
     return rpcError(id, -32603, "服务器错误", 500);
@@ -512,7 +512,7 @@ async function listTools(request: Request, env: Env, id: unknown): Promise<Respo
   return rpcResult(id, { tools });
 }
 
-async function callTool(request: Request, env: Env, id: unknown, params: unknown): Promise<Response> {
+async function callTool(request: Request, env: Env, ctx: WaitCtx, id: unknown, params: unknown): Promise<Response> {
   const token = bearerToken(request);
   if (!token) return rpcError(id, -32001, "缺少 Bearer 令牌", 401);
   const auth = await authenticateAgent(env.DB, token, Date.now());
@@ -555,7 +555,7 @@ async function callTool(request: Request, env: Env, id: unknown, params: unknown
   }
   if (name.startsWith("memory_")) {
     try {
-      return await callMemoryTool(env, id, name, record as Record<string, unknown>, auth.agentId);
+      return await callMemoryTool(env, ctx, id, name, record as Record<string, unknown>, auth.agentId);
     } catch (error) {
       if (error instanceof MemError) return toolResult(id, error.message, true);
       throw error;
@@ -816,7 +816,7 @@ function memoryPageResult(id: unknown, rows: MemoryRow[], page: MemoryPage): Res
   });
 }
 
-async function callMemoryTool(env: Env, id: unknown, name: string, args: Record<string, unknown>, agentId: string): Promise<Response> {
+async function callMemoryTool(env: Env, ctx: WaitCtx, id: unknown, name: string, args: Record<string, unknown>, agentId: string): Promise<Response> {
   const now = Date.now();
   const channel = { actor: agentId, source: "mcp", auditReads: true };
   if (name === "memory_list") {
@@ -856,7 +856,7 @@ async function callMemoryTool(env: Env, id: unknown, name: string, args: Record<
     return toolResult(id, { memory: memoryPublic(row) });
   }
   if (name === "memory_upsert") {
-    const row = await upsertMemory(env.DB, args, channel, now);
+    const row = await upsertMemory(env.DB, args, channel, now, { ai: { env, ctx } });
     return toolResult(id, { memory: memoryPublic(row) });
   }
   if (name === "memory_delete") {
