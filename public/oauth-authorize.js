@@ -8,9 +8,9 @@
     tasks: "任务", calendar: "日历", vault: "保险库", machines: "云计算资源",
   };
   var ADV_LABELS = {
-    machines_secret: "查看凭据",
-    soul_write_any: "代写他人 Soul",
-    vault_totp_code: "读取保险库验证码",
+    agents_other: "操作其他 Agent",
+    soul_other: "操作其他 Soul",
+    totp: "2FA",
   };
   var domains = (P.domains || []).map(function (d) { return d.key; });
   var advancedKeys = (P.advanced || []).map(function (a) { return a.key; });
@@ -19,7 +19,7 @@
     var out = {};
     domains.forEach(function (d) { out[d] = { read: false, write: false }; });
     out.advanced = {};
-    advancedKeys.forEach(function (k) { out.advanced[k] = false; });
+    advancedKeys.forEach(function (k) { out.advanced[k] = { read: false, write: false }; });
     return out;
   }
   function norm(input) {
@@ -34,7 +34,17 @@
     });
     var adv = input.advanced;
     if (adv && typeof adv === "object") {
-      advancedKeys.forEach(function (k) { out.advanced[k] = !!adv[k]; });
+      advancedKeys.forEach(function (k) {
+        var cell = adv[k];
+        if (cell && typeof cell === "object") {
+          out.advanced[k].read = !!cell.read;
+          out.advanced[k].write = !!cell.write;
+        }
+      });
+      // Old boolean switches migrate (same mapping as the server parser);
+      // machines_secret is dropped.
+      if (adv.soul_write_any === true && out.advanced.soul_other) out.advanced.soul_other.write = true;
+      if (adv.vault_totp_code === true && out.advanced.totp) out.advanced.totp.read = true;
     }
     return out;
   }
@@ -44,7 +54,8 @@
       if (!base[d].write) state[d].write = false;
     });
     advancedKeys.forEach(function (k) {
-      if (!base.advanced[k]) state.advanced[k] = false;
+      if (!base.advanced[k].read) state.advanced[k].read = false;
+      if (!base.advanced[k].write) state.advanced[k].write = false;
     });
   }
 
@@ -68,12 +79,16 @@
           (state[d][op] ? " checked" : "") + (capped ? " disabled" : "") + "></label>";
       });
     });
-    html += "</div><div class=\"oauth-adv\">";
+    html += '</div><div class="oauth-sec-title">高级权限</div><div class="oauth-matrix">';
+    html += '<span class="mhead mname">功能</span><span class="mhead">读取</span><span class="mhead">写入</span>';
     advancedKeys.forEach(function (k) {
-      var capped = baseCap && !baseCap.advanced[k];
-      html +=
-        '<label><input type="checkbox" data-' + prefix + '-adv="' + k + '"' +
-        (state.advanced[k] ? " checked" : "") + (capped ? " disabled" : "") + "> " + ADV_LABELS[k] + "（高级）</label>";
+      html += "<span>" + ADV_LABELS[k] + "</span>";
+      ["read", "write"].forEach(function (op) {
+        var capped = baseCap && !baseCap.advanced[k][op];
+        html +=
+          '<label><input type="checkbox" data-' + prefix + '-adv="' + k + '" data-' + prefix + '-advop="' + op + '"' +
+          (state.advanced[k][op] ? " checked" : "") + (capped ? " disabled" : "") + "></label>";
+      });
     });
     html += "</div>";
     return html;
@@ -86,7 +101,7 @@
       var cell = t.getAttribute("data-" + prefix + "-cell");
       var adv = t.getAttribute("data-" + prefix + "-adv");
       if (cell) state[cell][t.getAttribute("data-" + prefix + "-op")] = t.checked;
-      else if (adv) state.advanced[adv] = t.checked;
+      else if (adv) state.advanced[adv][t.getAttribute("data-" + prefix + "-advop")] = t.checked;
       else return;
       if (onChange) onChange();
     });

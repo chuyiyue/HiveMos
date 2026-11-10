@@ -7,9 +7,9 @@
 //
 // 覆盖四组验收口径：
 //   1. 无 vault read：两工具在 tools/list 不可见，直接调用被拒。
-//   2. 有 vault read、无 advanced.vault_totp_code：取码被拒（列表也一并被拒，
-//      与 machines_get_access 对 machines_secret 的口径一致）。
-//   3. 有 vault_totp_code 但条目 ai_read=0：取不到码，且不写访问记录。
+//   2. 有 vault read、无高级域 totp.read（2FA 与保险库域分开）：取码被拒
+//      （列表也一并被拒）。旧布尔 vault_totp_code 经解析迁移为 totp.read。
+//   3. 有 totp.read 但条目 ai_read=0：取不到码，且不写访问记录。
 //   4. 正常路径：取到与 src/totp.ts 一致的当前码，返回剩余秒数，
 //      vault_access_log 恰好多一行且 actor 是调用 Agent 的名字。
 //
@@ -131,16 +131,17 @@ class FakeDb {
 
 const denied = denyAllPermissions();
 const vaultRead = parsePermissions('{"vault":{"read":true,"write":false}}');
-const vaultCode = parsePermissions('{"vault":{"read":true,"write":false},"advanced":{"vault_totp_code":true}}');
-const codeOnly = parsePermissions('{"advanced":{"vault_totp_code":true}}');
+const vaultCode = parsePermissions('{"vault":{"read":true,"write":false},"advanced":{"totp":{"read":true,"write":false}}}');
+const vaultCodeLegacy = parsePermissions('{"vault":{"read":true,"write":false},"advanced":{"vault_totp_code":true}}');
+const codeOnly = parsePermissions('{"advanced":{"totp":{"read":true,"write":false}}}');
 const PAIR = ["vault_2fa_list", "vault_2fa_get_code"];
 
 expect(
-  "两个工具都登记为 vault read + advanced.vault_totp_code",
+  "两个工具都登记为 vault read + advanced totp.read",
   PAIR.map((name) => TOOL_PERMISSIONS[name]),
   [
-    { domain: "vault", op: "read", advanced: "vault_totp_code" },
-    { domain: "vault", op: "read", advanced: "vault_totp_code" },
+    { domain: "vault", op: "read", advanced: { key: "totp", op: "read" } },
+    { domain: "vault", op: "read", advanced: { key: "totp", op: "read" } },
   ],
 );
 
@@ -157,22 +158,23 @@ expect(
   "该 Agent 没有 vault 的读取权限，无法调用这个工具",
 );
 
-// 2) 有 vault read、无 totp_code：两个工具都不可见、都拒（照 machines_get_access）。
-expect("vault read 无 totp_code：tools/list 无两工具", PAIR.filter((name) => toolVisibleToAgent(name, vaultRead)), []);
+// 2) 有 vault read、无 totp.read：两个工具都不可见、都拒。
+expect("vault read 无 totp：tools/list 无两工具", PAIR.filter((name) => toolVisibleToAgent(name, vaultRead)), []);
 expect(
-  "vault read 无 totp_code：vault_2fa_list 被拒",
+  "vault read 无 totp：vault_2fa_list 被拒",
   toolAccessError("vault_2fa_list", vaultRead, "agent-a", {}),
-  "该 Agent 没有读取保险库验证码的高级权限，无法调用这个工具",
+  "该 Agent 没有 2FA 的读取权限，无法调用这个工具",
 );
 expect(
-  "vault read 无 totp_code：vault_2fa_get_code 被拒",
+  "vault read 无 totp：vault_2fa_get_code 被拒",
   toolAccessError("vault_2fa_get_code", vaultRead, "agent-a", { id: "totp_x" }),
-  "该 Agent 没有读取保险库验证码的高级权限，无法调用这个工具",
+  "该 Agent 没有 2FA 的读取权限，无法调用这个工具",
 );
-expect("只有 totp_code 没有 vault read：仍按域拒", toolAccessError("vault_2fa_get_code", codeOnly, "agent-a", {}), "该 Agent 没有 vault 的读取权限，无法调用这个工具");
+expect("只有 totp.read 没有 vault read：仍按域拒", toolAccessError("vault_2fa_get_code", codeOnly, "agent-a", {}), "该 Agent 没有 vault 的读取权限，无法调用这个工具");
 
 // 3) 两项都授予：可见、放行（真正的取值在下半段验）。
-expect("vault read + totp_code：tools/list 有两工具", PAIR.filter((name) => toolVisibleToAgent(name, vaultCode)), ["vault_2fa_list", "vault_2fa_get_code"]);
+expect("vault read + totp.read：tools/list 有两工具", PAIR.filter((name) => toolVisibleToAgent(name, vaultCode)), ["vault_2fa_list", "vault_2fa_get_code"]);
+expect("旧 vault_totp_code 迁移后：tools/list 有两工具", PAIR.filter((name) => toolVisibleToAgent(name, vaultCodeLegacy)), ["vault_2fa_list", "vault_2fa_get_code"]);
 expect("vault read + totp_code：vault_2fa_list 放行", toolAccessError("vault_2fa_list", vaultCode, "agent-a", {}), null);
 expect("vault read + totp_code：vault_2fa_get_code 放行", toolAccessError("vault_2fa_get_code", vaultCode, "agent-a", { id: "totp_x" }), null);
 

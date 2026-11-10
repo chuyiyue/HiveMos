@@ -501,13 +501,16 @@
   // moment they are flipped, PATCH with the complete set). The host only
   // picks where it opens (centered dialog vs side panel) and passes an
   // onChanged(message) callback so its own list can refresh.
-  // Permission model: a read/write matrix over nine domains plus an
-  // advanced set. The server stores permissions as an object
-  // ({domain: {read, write}, ..., advanced: {...}}); rows that have not
-  // been re-saved yet may still carry the legacy array form, which
-  // normalizePerms folds in (each listed domain = read-only; "registry"
-  // expands to mcp/skills/api; "soul_write_any" maps to the advanced
-  // flag of the same name).
+  // Permission model: a read/write matrix over nine domains plus three
+  // advanced domains (agents_other / soul_other / totp), each also a
+  // read/write pair in its own separate menu. The server stores
+  // permissions as an object ({domain: {read, write}, ..., advanced:
+  // {key: {read, write}}}); rows that have not been re-saved yet may still
+  // carry the legacy array form or the old boolean advanced switches,
+  // which normalizePerms folds in (each listed domain = read-only;
+  // "registry" expands to mcp/skills/api; old soul_write_any migrates to
+  // soul_other.write, old vault_totp_code to totp.read, old
+  // machines_secret is dropped).
   var PERM_MATRIX = [
     ["mcp", "MCP"],
     ["skills", "Skills"],
@@ -520,9 +523,9 @@
     ["machines", "云计算资源"],
   ];
   var PERM_ADVANCED = [
-    ["machines_secret", "查看凭据", "查看服务器、云主机与 Workers 的明文凭据", "read"],
-    ["soul_write_any", "代写他人 Soul", "写入其他 Agent 的 Soul，默认不给任何 Agent", "write"],
-    ["vault_totp_code", "读取保险库验证码", "读取保险库中保存的两步验证码", "read"],
+    ["agents_other", "操作其他 Agent"],
+    ["soul_other", "操作其他 Soul"],
+    ["totp", "2FA"],
   ];
   // Legacy triple list ([key, label, hint]) kept for the permDomains export.
   var PERM_DOMAINS = [
@@ -545,7 +548,7 @@
     });
     out.advanced = {};
     PERM_ADVANCED.forEach(function (entry) {
-      out.advanced[entry[0]] = false;
+      out.advanced[entry[0]] = { read: false, write: false };
     });
     return out;
   }
@@ -559,7 +562,7 @@
             out[key].read = true;
           });
         } else if (domain === "soul_write_any") {
-          out.advanced.soul_write_any = true;
+          out.advanced.soul_other.write = true;
         } else if (domain !== "advanced" && out[domain]) {
           out[domain].read = true;
         }
@@ -577,8 +580,15 @@
       var adv = input.advanced;
       if (adv && typeof adv === "object") {
         PERM_ADVANCED.forEach(function (entry) {
-          out.advanced[entry[0]] = !!adv[entry[0]];
+          var cell = adv[entry[0]];
+          if (cell && typeof cell === "object") {
+            out.advanced[entry[0]].read = !!cell.read;
+            out.advanced[entry[0]].write = !!cell.write;
+          }
         });
+        // Old boolean switches migrate; machines_secret is dropped.
+        if (adv.soul_write_any === true) out.advanced.soul_other.write = true;
+        if (adv.vault_totp_code === true) out.advanced.totp.read = true;
       }
     }
     return out;
@@ -653,23 +663,27 @@
     }).join("");
     var advanced = PERM_ADVANCED.map(function (entry) {
       var key = entry[0];
-      var col = entry[3];
-      var live =
-        '<label class="perm-check"><input type="checkbox" data-perm-adv="' +
-        key +
-        '"' +
-        (perms.advanced[key] ? " checked" : "") +
-        ' aria-label="' +
-        escapeHtml(entry[1] + (col === "read" ? " 读取" : " 写入")) +
-        '" /></label>';
-      var dead = '<label class="perm-check"><input type="checkbox" disabled /></label>';
+      var cell = perms.advanced[key];
+      function advCell(op) {
+        return (
+          '<label class="perm-check"><input type="checkbox" data-perm-adv="' +
+          key +
+          '" data-perm-op="' +
+          op +
+          '"' +
+          (cell[op] ? " checked" : "") +
+          ' aria-label="' +
+          escapeHtml(entry[1] + (op === "read" ? " 读取" : " 写入")) +
+          '" /></label>'
+        );
+      }
       return (
         '<div class="perm-mrow">' +
         '<span class="perm-mname">' +
         escapeHtml(entry[1]) +
         "</span>" +
-        (col === "read" ? live : dead) +
-        (col === "write" ? live : dead) +
+        advCell("read") +
+        advCell("write") +
         "</div>"
       );
     }).join("");
@@ -1042,7 +1056,8 @@
           input.checked = !!(cell && cell[input.getAttribute("data-perm-op")]);
         });
         Array.prototype.forEach.call(els.matrix.querySelectorAll("[data-perm-adv]"), function (input) {
-          input.checked = !!permDesired.advanced[input.getAttribute("data-perm-adv")];
+          var cell = permDesired.advanced[input.getAttribute("data-perm-adv")];
+          input.checked = !!(cell && cell[input.getAttribute("data-perm-op")]);
         });
       }
       var dirty = isPermDirty();
@@ -1064,10 +1079,10 @@
       syncPermUI();
     }
 
-    function setPermAdvanced(key, on) {
+    function setPermAdvanced(key, op, on) {
       if (partial || !key || !(key in permDesired.advanced)) return;
       interacted = true;
-      permDesired.advanced[key] = !!on;
+      permDesired.advanced[key][op] = !!on;
       syncPermUI();
     }
 
@@ -2009,7 +2024,7 @@
         return;
       }
       var adv = target.closest("[data-perm-adv]");
-      if (adv) setPermAdvanced(adv.getAttribute("data-perm-adv"), adv.checked);
+      if (adv) setPermAdvanced(adv.getAttribute("data-perm-adv"), adv.getAttribute("data-perm-op"), adv.checked);
     });
 
     wireManageTabs(ctrl);

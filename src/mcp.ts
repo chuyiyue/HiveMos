@@ -7,6 +7,7 @@ import type { Env, WaitCtx } from "./env";
 import { fetchConfigForAgent, recordToolDenied, searchServers } from "./registry";
 import { authenticateMcp } from "./oauth";
 import { toolPermissionOf, toolAccessError, toolVisibleToAgent } from "./tool-permissions";
+import { hasAdvanced } from "./permissions";
 import type { AgentPermissions } from "./permissions";
 import {
   SoulError,
@@ -317,7 +318,7 @@ const TOOLS = [
   },
   {
     name: "soul_update",
-    description: "写入自己的 Soul 新版全文。新版本先进待批准草稿，管理员在面板批准后才生效。该 Agent 还没有 Soul 时自动新建。默认只能写自己的 Soul，代写他人需要 soul_write_any 权限",
+    description: "写入自己的 Soul 新版全文。新版本先进待批准草稿，管理员在面板批准后才生效。该 Agent 还没有 Soul 时自动新建。默认只能写自己的 Soul，写其他 Agent 的 Soul 需要「操作其他 Soul」的写入权限",
     inputSchema: {
       type: "object",
       properties: {
@@ -334,7 +335,7 @@ const TOOLS = [
   },
   {
     name: "soul_patch",
-    description: "按段落增量修改 Soul：只改 persona、rules、tools、learned_context 四段中的一段（字符上限依次 2000、2000、2000、6000），不必提交整份全文。改动合成新全文先进待批准草稿，管理员批准后才生效，分段也随批准才同步。默认写自己的 Soul，代写他人需要 soul_write_any 权限",
+    description: "按段落增量修改 Soul：只改 persona、rules、tools、learned_context 四段中的一段（字符上限依次 2000、2000、2000、6000），不必提交整份全文。改动合成新全文先进待批准草稿，管理员批准后才生效，分段也随批准才同步。默认写自己的 Soul，写其他 Agent 的 Soul 需要「操作其他 Soul」的写入权限",
     inputSchema: {
       type: "object",
       properties: {
@@ -709,7 +710,11 @@ async function callSoulTool(
   const now = Date.now();
   if (name === "soul_list") {
     const souls = await listSouls(env.DB);
-    return toolResult(id, { souls: souls.map(soulSummary) });
+    // 无 soul_other 读时别人的 Soul 等于不存在：只返回自己名下那一份。
+    const visible = hasAdvanced(auth.permissions, "soul_other", "read")
+      ? souls
+      : souls.filter((soul) => soul.agent_name === auth.agentName);
+    return toolResult(id, { souls: visible.map(soulSummary) });
   }
   if (name === "soul_get") {
     const agentName = argString(args, "agent_name");
@@ -739,9 +744,9 @@ async function callSoulTool(
   if (name === "soul_update") {
     const requested = argString(args, "agent_name");
     if (!requested || !requested.trim()) return toolResult(id, "请提供 agent_name", true);
-    // 归属与 advanced.soul_write_any 的校验在 toolAccessError
+    // 归属与 soul_other 写的校验在 toolAccessError
     // （src/tool-permissions.ts）统一做，身份仍取自 Bearer，写别人的 Soul
-    // 需要 soul_write_any。这里只管草稿与版本流程，逻辑不变。
+    // （含以他人名义新建）需要 soul_other 写。这里只管草稿与版本流程，逻辑不变。
     const expectedVersion = args.expected_version == null ? null : args.expected_version;
     const updated = await upsertSoulByName(
       env.DB,
@@ -772,7 +777,7 @@ async function callSoulTool(
   }
   if (name === "soul_patch") {
     // agent_name 缺省写自己；写他人的归属校验在 toolAccessError
-    // （src/tool-permissions.ts）统一做，与 soul_update 同一条口径。
+    // （src/tool-permissions.ts）统一做（soul_other 写），与 soul_update 同一条口径。
     const requested = argString(args, "agent_name");
     const targetName = requested && requested.trim() ? requested.trim() : auth.agentName;
     const patched = await patchSoulByName(

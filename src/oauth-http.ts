@@ -413,7 +413,10 @@ function grantsSummaryKeys(grants: AgentPermissions): string[] {
     if (grants[domain].read) keys.push(domain + ":r");
     if (grants[domain].write) keys.push(domain + ":w");
   }
-  for (const key of ADVANCED_PERMISSIONS) if (grants.advanced[key]) keys.push("adv:" + key);
+  for (const key of ADVANCED_PERMISSIONS) {
+    if (grants.advanced[key].read) keys.push("adv:" + key + ":r");
+    if (grants.advanced[key].write) keys.push("adv:" + key + ":w");
+  }
   return keys;
 }
 

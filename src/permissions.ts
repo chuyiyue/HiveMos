@@ -1,14 +1,23 @@
-// Agent 权限模型的单一事实来源：域 × (read | write) 加一组 advanced 开关。
+// Agent 权限模型的单一事实来源：普通域 × (read | write) 加高级域 × (read | write)。
 //
 // 存储格式（agents.permissions）是一个 JSON 对象：
 //
-//   {"mcp":{"read":true,"write":false}, …, "advanced":{"machines_secret":false,…}}
+//   {"mcp":{"read":true,"write":false}, …,
+//    "advanced":{"agents_other":{"read":false,"write":false},
+//                "soul_other":{…}, "totp":{…}}}
+//
+// 高级域与普通域彼此独立、互不附带：agents_other = 操作其他 Agent，
+// soul_other = 操作其他 Soul（自己名下的 Soul 归 soul 域），totp = 保险库
+// 验证码（与 vault 域分开）。机器明文凭据（machines_get_access）不再有高级
+// 门，只归 machines 域读 + 审计。
 //
 // 旧格式是一个 JSON 数组（["mcp","memory",…]），只表达「这个域开着」。
 // 解析旧数组时从严、只读：每个列出的域映射为 {read:true, write:false}，
-// 旧 registry 按现行展开规则拆成 mcp/skills/api，旧 soul_write_any 落到
-// advanced.soul_write_any。未知域忽略；解析失败 / 缺失 / 类型不对一律全关
-// （默认拒绝）。新格式里 soul_write_any 不再是独立「域」。
+// 旧 registry 按现行展开规则拆成 mcp/skills/api。旧布尔高级开关在解析时
+// 迁移：soul_write_any → advanced.soul_other.write，vault_totp_code →
+// advanced.totp.read，machines_secret 直接丢弃（不授予任何新权限）。
+// 未知域忽略；解析失败 / 缺失 / 类型不对一律全关（默认拒绝）。序列化只写
+// 新形状。
 //
 // PATCH 输入的过渡兼容见 permissionsFromInput：对象按布尔严格收，旧数组
 // 按「列出的域 = read+write 全开」映射，保证新旧面板同批部署不互相打死。
@@ -28,8 +37,10 @@ export const PERMISSION_DOMAINS = [
 export type PermissionDomain = (typeof PERMISSION_DOMAINS)[number];
 export type PermissionOp = "read" | "write";
 
-// vault_totp_code 是保险库取码工具（vault_2fa_list / vault_2fa_get_code）的高级开关。
-export const ADVANCED_PERMISSIONS = ["machines_secret", "soul_write_any", "vault_totp_code"] as const;
+// 高级域：与普通域同构的 (read | write) 对，语义是「操作其他 Agent 的资源」。
+// agents_other 目前没有对应 MCP 工具，只建权限位；soul_other 管他人 Soul 的
+// 读/写（写仍走待审草稿）；totp.read 是保险库取码工具的高级门，totp.write 预留。
+export const ADVANCED_PERMISSIONS = ["agents_other", "soul_other", "totp"] as const;
 
 export type AdvancedPermission = (typeof ADVANCED_PERMISSIONS)[number];
 
@@ -39,14 +50,23 @@ export interface DomainGrant {
 }
 
 export type PermissionGrants = { [D in PermissionDomain]: DomainGrant };
-export type AdvancedGrants = { [K in AdvancedPermission]: boolean };
+export type AdvancedGrants = { [K in AdvancedPermission]: DomainGrant };
 export type AgentPermissions = PermissionGrants & { advanced: AdvancedGrants };
 
 // 旧单域 registry 覆盖整个「MCP 与 Skills」板块，现在按页签拆开。
 const LEGACY_REGISTRY_EXPANSION: PermissionDomain[] = ["mcp", "skills", "api"];
 
 function emptyAdvanced(): AdvancedGrants {
-  return { machines_secret: false, soul_write_any: false, vault_totp_code: false };
+  return {
+    agents_other: { read: false, write: false },
+    soul_other: { read: false, write: false },
+    totp: { read: false, write: false },
+  };
+}
+
+function grantFrom(value: unknown): DomainGrant {
+  if (!isRecord(value)) return { read: false, write: false };
+  return { read: value.read === true, write: value.write === true };
 }
 
 // 全部关闭：新建 Agent 的默认，也是任何无法识别输入的唯一出口。
@@ -68,7 +88,7 @@ function applyLegacyArray(items: unknown[], grants: AgentPermissions): void {
       continue;
     }
     if (item === "soul_write_any") {
-      grants.advanced.soul_write_any = true;
+      grants.advanced.soul_other.write = true;
       continue;
     }
     if ((PERMISSION_DOMAINS as readonly string[]).includes(item)) {
@@ -85,7 +105,10 @@ function applyObject(value: Record<string, unknown>, grants: AgentPermissions): 
   }
   const advanced = value.advanced;
   if (isRecord(advanced)) {
-    for (const key of ADVANCED_PERMISSIONS) grants.advanced[key] = advanced[key] === true;
+    for (const key of ADVANCED_PERMISSIONS) grants.advanced[key] = grantFrom(advanced[key]);
+    // 旧布尔高级开关的迁移（见文件头）：machines_secret 不迁移、直接丢弃。
+    if (advanced.soul_write_any === true) grants.advanced.soul_other.write = true;
+    if (advanced.vault_totp_code === true) grants.advanced.totp.read = true;
   }
 }
 
@@ -119,8 +142,10 @@ export function serializePermissions(value: unknown): string {
   for (const domain of PERMISSION_DOMAINS) {
     out[domain] = { read: perms[domain].read, write: perms[domain].write };
   }
-  const advanced: Record<string, boolean> = {};
-  for (const key of ADVANCED_PERMISSIONS) advanced[key] = perms.advanced[key];
+  const advanced: Record<string, DomainGrant> = {};
+  for (const key of ADVANCED_PERMISSIONS) {
+    advanced[key] = { read: perms.advanced[key].read, write: perms.advanced[key].write };
+  }
   out.advanced = advanced;
   return JSON.stringify(out);
 }
@@ -130,25 +155,35 @@ export function hasGrant(perms: AgentPermissions | null | undefined, domain: Per
   return !!grant && grant[op] === true;
 }
 
-export function hasAdvanced(perms: AgentPermissions | null | undefined, key: AdvancedPermission): boolean {
-  return perms?.advanced?.[key] === true;
+export function hasAdvanced(
+  perms: AgentPermissions | null | undefined,
+  key: AdvancedPermission,
+  op: PermissionOp,
+): boolean {
+  const grant = perms?.advanced?.[key];
+  return !!grant && grant[op] === true;
 }
 
-// 两层授权的交集（Agent 基础 ∩ OAuth 连接）：每个域的 read/write 与每个
-// advanced 开关分别取与。连接里存的 grants 先经 parsePermissions 规范化，
-// 解析失败天然全关，交集只会更小，不会放大。
+// 两层授权的交集（Agent 基础 ∩ OAuth 连接）：每个普通域与每个高级域的
+// read/write 分别取与。连接里存的 grants 先经 parsePermissions 规范化
+// （旧形状快照在那里统一迁移），解析失败天然全关，交集只会更小，不会放大。
 export function intersectPermissions(a: AgentPermissions, b: AgentPermissions): AgentPermissions {
   const out = denyAllPermissions();
   for (const domain of PERMISSION_DOMAINS) {
     out[domain] = { read: a[domain].read && b[domain].read, write: a[domain].write && b[domain].write };
   }
-  for (const key of ADVANCED_PERMISSIONS) out.advanced[key] = a.advanced[key] && b.advanced[key];
+  for (const key of ADVANCED_PERMISSIONS) {
+    out.advanced[key] = {
+      read: a.advanced[key].read && b.advanced[key].read,
+      write: a.advanced[key].write && b.advanced[key].write,
+    };
+  }
   return out;
 }
 
 // 旧面板仍会把旧数组发回来（列出的域原本就是「这个域全开」的意思）。
 // 过渡期沿用这个原意：列出的域 read+write 全开，registry 按三域展开，
-// soul_write_any 落到 advanced。未知项忽略。
+// soul_write_any 按迁移口径落到 advanced.soul_other.write。未知项忽略。
 // 新对象则严格按布尔收、未知键忽略。
 // transitional: 面板权限矩阵上线后，数组分支可以删除。
 function legacyArrayToFullGrants(items: unknown[]): AgentPermissions {
@@ -160,7 +195,7 @@ function legacyArrayToFullGrants(items: unknown[]): AgentPermissions {
       continue;
     }
     if (item === "soul_write_any") {
-      grants.advanced.soul_write_any = true;
+      grants.advanced.soul_other.write = true;
       continue;
     }
     if ((PERMISSION_DOMAINS as readonly string[]).includes(item)) {

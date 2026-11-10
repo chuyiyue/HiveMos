@@ -12,7 +12,7 @@
 //
 // The only MCP surface is the TOTP code pair in vault-totp.ts
 // (vault_2fa_list / vault_2fa_get_code), gated by vault read plus the
-// advanced vault_totp_code switch. Entries, gateways and emails stay
+// advanced totp.read grant (the 2FA domain, independent of vault). Entries, gateways and emails stay
 // panel-only: agent access waits for the key-lease and vault-permission
 // work. vault_access_log.actor is filled with the calling agent's name on
 // the MCP code path; panel paths leave it NULL.

@@ -1,8 +1,10 @@
 // MCP 工具的权限分类：单一事实来源。
 //
 // 口径：改变系统内容 = write，读取 = read；审计写入不算 write。
-// 每个工具恰好一个 (域, 操作)，个别工具另需一个 advanced 开关。
+// 每个工具恰好一个 (域, 操作)，个别工具另需一个高级域的 (key, 操作)。
 // tools/list 与 tools/call 都只读这一份表，别再在别处重复分类。
+// Soul 的归属门（读/写他人 Soul 要 soul_other 对应操作）依赖调用参数，
+// 不在表里，统一在 toolAccessError 里按 agent_name 判断。
 
 import { hasAdvanced, hasGrant } from "./permissions";
 import type { AdvancedPermission, AgentPermissions, PermissionDomain, PermissionOp } from "./permissions";
@@ -10,8 +12,8 @@ import type { AdvancedPermission, AgentPermissions, PermissionDomain, Permission
 export interface ToolPermission {
   domain: PermissionDomain;
   op: PermissionOp;
-  // advanced 开关（machines_secret / soul_write_any / vault_totp_code），个别工具另需一个。
-  advanced?: AdvancedPermission;
+  // 高级域要求（key + 操作），个别工具另需一个，如取码工具要 totp.read。
+  advanced?: { key: AdvancedPermission; op: PermissionOp };
 }
 
 export const TOOL_PERMISSIONS: Record<string, ToolPermission> = {
@@ -36,9 +38,10 @@ export const TOOL_PERMISSIONS: Record<string, ToolPermission> = {
   calendar_search: { domain: "calendar", op: "read" },
   machines_list: { domain: "machines", op: "read" },
   machines_get: { domain: "machines", op: "read" },
-  machines_get_access: { domain: "machines", op: "read", advanced: "machines_secret" },
-  vault_2fa_list: { domain: "vault", op: "read", advanced: "vault_totp_code" },
-  vault_2fa_get_code: { domain: "vault", op: "read", advanced: "vault_totp_code" },
+  // 机器明文凭据并入 machines 域：只需读权限 + handler 内的审计，无高级门。
+  machines_get_access: { domain: "machines", op: "read" },
+  vault_2fa_list: { domain: "vault", op: "read", advanced: { key: "totp", op: "read" } },
+  vault_2fa_get_code: { domain: "vault", op: "read", advanced: { key: "totp", op: "read" } },
 
   // ---- write ----
   memory_upsert: { domain: "memory", op: "write" },
@@ -61,12 +64,13 @@ export function toolPermissionOf(name: string): ToolPermission | null {
 
 const OP_LABEL: Record<PermissionOp, string> = { read: "读取", write: "写入" };
 
-// tools/list 的可见性：域的开关键与 advanced 开关都要过。
+// tools/list 的可见性：域权限与高级域要求都要过。Soul 归属门依赖参数，
+// 不影响可见性（soul_get 等对所有持 soul 读的 Agent 可见，调用时再按目标判断）。
 export function toolVisibleToAgent(name: string, perms: AgentPermissions): boolean {
   const permission = toolPermissionOf(name);
   if (!permission) return false;
   if (!hasGrant(perms, permission.domain, permission.op)) return false;
-  if (permission.advanced && !hasAdvanced(perms, permission.advanced)) return false;
+  if (permission.advanced && !hasAdvanced(perms, permission.advanced.key, permission.advanced.op)) return false;
   return true;
 }
 
@@ -83,20 +87,24 @@ export function toolAccessError(
   if (!hasGrant(perms, permission.domain, permission.op)) {
     return "该 Agent 没有 " + permission.domain + " 的" + OP_LABEL[permission.op] + "权限，无法调用这个工具";
   }
-  if (permission.advanced === "machines_secret" && !hasAdvanced(perms, "machines_secret")) {
-    return "该 Agent 没有查看机器接入凭据的高级权限，无法调用这个工具";
+  if (permission.advanced && !hasAdvanced(perms, permission.advanced.key, permission.advanced.op)) {
+    return "该 Agent 没有 2FA 的读取权限，无法调用这个工具";
   }
-  if (permission.advanced === "vault_totp_code" && !hasAdvanced(perms, "vault_totp_code")) {
-    return "该 Agent 没有读取保险库验证码的高级权限，无法调用这个工具";
+  // Soul 归属门：soul 域严格只覆盖 agent_name 等于调用者本名的那一份 Soul。
+  // 读/写他人的 Soul（含以他人名义新建）分别要 soul_other 的读/写；对 soul 域
+  // 来说别人的 Soul 等于不存在。缺 agent_name 的写请求放行到工具自身的参数
+  // 校验（soul_patch 缺省即写自己，soul_update 仍是原来的「请提供 agent_name」）。
+  const requested = args.agent_name;
+  const targetsOther =
+    typeof requested === "string" && requested.trim() !== "" && requested.trim() !== agentName;
+  if ((name === "soul_get" || name === "soul_diff") && targetsOther) {
+    if (!hasAdvanced(perms, "soul_other", "read")) {
+      return "只能读自己的 Soul；要读其他 Agent 的 Soul，需要「操作其他 Soul」的读取权限";
+    }
   }
-  // 归属判断沿用旧口径：身份取自 Bearer，写别人的 Soul 才要 soul_write_any。
-  // 缺 agent_name 的请求放行到工具自身的参数校验（仍是原来的「请提供 agent_name」）。
-  if (name === "soul_update" || name === "soul_patch") {
-    const requested = args.agent_name;
-    if (typeof requested === "string" && requested.trim() && requested.trim() !== agentName) {
-      if (!hasAdvanced(perms, "soul_write_any")) {
-        return "只能写自己的 Soul；要代写其他 Agent 的 Soul，需要 soul_write_any 权限";
-      }
+  if ((name === "soul_update" || name === "soul_patch") && targetsOther) {
+    if (!hasAdvanced(perms, "soul_other", "write")) {
+      return "只能写自己的 Soul；要写其他 Agent 的 Soul，需要「操作其他 Soul」的写入权限";
     }
   }
   return null;
