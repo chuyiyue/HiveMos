@@ -1010,3 +1010,6 @@ article.record .card-actions { margin-top: auto; }
 @media (max-width: 639px) {
   [data-action="manage-agent"] { display: none; }
 }
+
+.perm-advanced { display: grid; gap: 4px; }
+.perm-advanced-title { font-weight: 600; }

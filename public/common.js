@@ -673,8 +673,11 @@
       '<div class="perm-mgrid" aria-label="功能权限">' +
       '<div class="perm-mrow perm-mhead"><span class="perm-mname">功能</span><span class="perm-mcol">读取</span><span class="perm-mcol">写入</span></div>' +
       rows +
-      advanced +
       "</div>" +
+      '<div class="perm-advanced"><div class="perm-advanced-title">高级权限</div><div class="perm-mgrid" aria-label="高级权限">' +
+      '<div class="perm-mrow perm-mhead"><span class="perm-mname">功能</span><span class="perm-mcol">读取</span><span class="perm-mcol">写入</span></div>' +
+      advanced +
+      "</div></div>" +
       '<div class="perm-foot"><button type="button" class="secondary perm-clear" data-perm-clear>全部关闭</button><button type="button" class="perm-save" data-perm-save disabled>保存权限</button></div>' +
       "</div>"
     );
