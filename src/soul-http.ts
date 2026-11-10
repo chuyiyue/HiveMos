@@ -17,6 +17,7 @@ import {
   rejectSoulVersion,
   rollbackSoul,
   soulDetail,
+  soulFullView,
   soulSummary,
   soulVersionPublic,
   updateSoul,
@@ -100,7 +101,7 @@ async function oneRoute(request: Request, env: Env, id: string): Promise<Respons
     return wrap(async () => {
       const row = await getSoulById(env.DB, id);
       if (!row) return json({ ok: false, error: "Soul 不存在" }, 404);
-      return json({ ok: true, soul: soulDetail(row) });
+      return json({ ok: true, soul: await soulFullView(env.DB, row, Date.now()) });
     });
   }
   if (method === "PATCH") {

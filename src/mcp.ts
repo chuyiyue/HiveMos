@@ -9,11 +9,14 @@ import { toolPermissionOf, toolAccessError, toolVisibleToAgent } from "./tool-pe
 import type { AgentPermissions } from "./permissions";
 import {
   SoulError,
+  diffSoulVersions,
   getSoulByName,
   getVersion,
   listSouls,
+  patchSoulByName,
   recordSoulRead,
   soulDetail,
+  soulFullView,
   soulSummary,
   soulVersionStatus,
   upsertSoulByName,
@@ -308,6 +311,38 @@ const TOOLS = [
         },
       },
       required: ["agent_name", "content"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "soul_patch",
+    description: "按段落增量修改 Soul：只改 persona、rules、tools、learned_context 四段中的一段（字符上限依次 2000、2000、2000、6000），不必提交整份全文。改动合成新全文先进待批准草稿，管理员批准后才生效，分段也随批准才同步。默认写自己的 Soul，代写他人需要 soul_write_any 权限",
+    inputSchema: {
+      type: "object",
+      properties: {
+        agent_name: { type: "string", description: "Agent 名，缺省为令牌对应的 Agent 自己" },
+        section: { type: "string", description: "段落名：persona、rules、tools 或 learned_context" },
+        content: { type: "string", description: "该段落的新全文" },
+        expected_version: {
+          type: "number",
+          description: "可选。当前生效版本号；与服务器不一致时返回 409，避免覆盖没看过的版本",
+        },
+      },
+      required: ["section", "content"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "soul_diff",
+    description: "对比 Soul 两个已生效版本的行级差异，只返回新增行与删除行，不回显全文。缺省对比当前版本与上一个已生效版本",
+    inputSchema: {
+      type: "object",
+      properties: {
+        agent_name: { type: "string", description: "Agent 名" },
+        from_version: { type: "number", description: "旧版本号，可选" },
+        to_version: { type: "number", description: "新版本号，可选，缺省为当前生效版本" },
+      },
+      required: ["agent_name"],
       additionalProperties: false,
     },
   },
@@ -657,7 +692,7 @@ async function callSoulTool(
     }
     if (row.version < 1) return toolResult(id, "这个 Agent 还没有生效的 Soul，草稿待管理员批准", true);
     await recordSoulRead(env.DB, row, auth.agentId, row.version, now);
-    return toolResult(id, soulDetail(row));
+    return toolResult(id, await soulFullView(env.DB, row, now));
   }
   if (name === "soul_update") {
     const requested = argString(args, "agent_name");
@@ -692,6 +727,46 @@ async function callSoulTool(
       });
     }
     return toolResult(id, soulDetail(updated));
+  }
+  if (name === "soul_patch") {
+    // agent_name 缺省写自己；写他人的归属校验在 toolAccessError
+    // （src/tool-permissions.ts）统一做，与 soul_update 同一条口径。
+    const requested = argString(args, "agent_name");
+    const targetName = requested && requested.trim() ? requested.trim() : auth.agentName;
+    const patched = await patchSoulByName(
+      env.DB,
+      targetName,
+      args.section,
+      args.content,
+      args.expected_version == null ? null : args.expected_version,
+      auth.agentId,
+      "mcp",
+      now,
+    );
+    if (patched.pending_version) {
+      await logOp(env.DB, {
+        actor: auth.agentName,
+        module: "Soul",
+        action: "草稿",
+        targetId: patched.id,
+        targetName: patched.agent_name,
+        text: `Agent ${auth.agentName} 用 soul_patch 提交了 Soul（${patched.agent_name}）的待批准草稿 v${patched.pending_version}`,
+      });
+      return toolResult(id, {
+        ...soulDetail(patched),
+        sections: patched.sections,
+        status: patched.pending_status,
+        pending_version: patched.pending_version,
+        note: "新版本已作为草稿保存，管理员批准后才会成为当前版本",
+      });
+    }
+    return toolResult(id, { ...soulDetail(patched), sections: patched.sections });
+  }
+  if (name === "soul_diff") {
+    const agentName = argString(args, "agent_name");
+    if (!agentName || !agentName.trim()) return toolResult(id, "请提供 agent_name", true);
+    const diff = await diffSoulVersions(env.DB, agentName.trim(), args.from_version ?? null, args.to_version ?? null);
+    return toolResult(id, diff);
   }
   return toolResult(id, "未知工具", true);
 }
@@ -818,7 +893,8 @@ function memoryPageResult(id: unknown, rows: MemoryRow[], page: MemoryPage): Res
 
 async function callMemoryTool(env: Env, id: unknown, name: string, args: Record<string, unknown>, agentId: string): Promise<Response> {
   const now = Date.now();
-  const channel = { actor: agentId, source: "mcp", auditReads: true };
+  // MCP 写入的记忆默认归属调用 Agent（agent_name 列），面板写入为全局。
+  const channel = { actor: agentId, source: "mcp", auditReads: true, agentName: (await agentName(env.DB, agentId)) ?? null };
   if (name === "memory_list") {
     const page = parseMemoryPage(args);
     if (!page) return toolResult(id, "游标无效", true);

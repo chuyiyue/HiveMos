@@ -28,6 +28,7 @@ export const TOOL_PERMISSIONS: Record<string, ToolPermission> = {
   memory_get: { domain: "memory", op: "read" },
   soul_list: { domain: "soul", op: "read" },
   soul_get: { domain: "soul", op: "read" },
+  soul_diff: { domain: "soul", op: "read" },
   tasks_list: { domain: "tasks", op: "read" },
   calendar_list_calendars: { domain: "calendar", op: "read" },
   calendar_list_events: { domain: "calendar", op: "read" },
@@ -41,6 +42,7 @@ export const TOOL_PERMISSIONS: Record<string, ToolPermission> = {
   memory_upsert: { domain: "memory", op: "write" },
   memory_delete: { domain: "memory", op: "write" },
   soul_update: { domain: "soul", op: "write" },
+  soul_patch: { domain: "soul", op: "write" },
   tasks_create: { domain: "tasks", op: "write" },
   tasks_update: { domain: "tasks", op: "write" },
   tasks_complete: { domain: "tasks", op: "write" },
@@ -83,7 +85,7 @@ export function toolAccessError(
   }
   // 归属判断沿用旧口径：身份取自 Bearer，写别人的 Soul 才要 soul_write_any。
   // 缺 agent_name 的请求放行到工具自身的参数校验（仍是原来的「请提供 agent_name」）。
-  if (name === "soul_update") {
+  if (name === "soul_update" || name === "soul_patch") {
     const requested = args.agent_name;
     if (typeof requested === "string" && requested.trim() && requested.trim() !== agentName) {
       if (!hasAdvanced(perms, "soul_write_any")) {
