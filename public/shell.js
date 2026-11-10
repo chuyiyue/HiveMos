@@ -441,13 +441,20 @@
     return Array.from(value)[0].toUpperCase();
   }
 
-  function showLoggedIn(username) {
+  function showLoggedIn(username, me) {
     var nameEl = document.querySelector(".account-name");
     var avatar = document.querySelector(".account-avatar");
     var accountBtn = document.querySelector(".account-btn");
     var action = document.querySelector(".account-logout");
     if (nameEl) nameEl.textContent = username;
-    if (avatar) avatar.textContent = initialOf(username);
+    if (avatar) {
+      var common = window.HiveCommon;
+      if (me && common && typeof common.paintAccountAvatar === "function") {
+        common.paintAccountAvatar(avatar, me);
+      } else {
+        avatar.textContent = initialOf(username);
+      }
+    }
     if (accountBtn) {
       var title = username + " · 设置";
       accountBtn.title = title;
@@ -479,10 +486,18 @@
 
   function paintAccount() {
     var common = window.HiveCommon;
-    if (!common || typeof common.currentUser !== "function") return;
+    if (!common) return;
+    if (typeof common.currentMe === "function") {
+      common.currentMe().then(function (me) {
+        if (!me || typeof me.username !== "string" || !me.username) return;
+        showLoggedIn(me.username, me);
+      });
+      return;
+    }
+    if (typeof common.currentUser !== "function") return;
     common.currentUser().then(function (username) {
       if (!username) return;
-      showLoggedIn(username);
+      showLoggedIn(username, null);
     });
   }
 

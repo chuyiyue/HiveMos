@@ -2249,6 +2249,7 @@
   }
 
   var sessionPromise = null;
+  var mePromise = null;
 
   function safeNext(value) {
     if (typeof value !== "string" || value.length === 0 || value.length > 2048) return "/";
@@ -2285,6 +2286,80 @@
     return sessionPromise;
   }
 
+  function currentMe() {
+    if (!mePromise) {
+      mePromise = fetch("/api/auth/me", {
+        headers: { accept: "application/json" },
+        cache: "no-store",
+      }).then(
+        function (response) {
+          if (!response.ok) return null;
+          return response.json().then(
+            function (data) {
+              if (!data || data.ok !== true) return null;
+              return data;
+            },
+            function () {
+              return null;
+            },
+          );
+        },
+        function () {
+          return null;
+        },
+      );
+    }
+    return mePromise;
+  }
+
+  // Layered account avatar, ported from SMSinBox's paintSidebarAvatar: the
+  // uploaded custom avatar first, then the bound GitHub account's avatar,
+  // then a GitHub photo when the nickname is a real GitHub handle, then a
+  // DiceBear initials avatar generated from the name, then the local initial.
+  // Any source that fails to load steps down to the next one.
+  function paintAccountAvatar(avatar, me) {
+    if (!avatar) return;
+    var profileUsername =
+      me && typeof me.profile_username === "string" ? me.profile_username.trim() : "";
+    var loginName =
+      me && me.user && typeof me.user.username === "string" ? me.user.username.trim() : "";
+    var display =
+      profileUsername || (me && typeof me.username === "string" ? me.username.trim() : "") || loginName;
+    var initial = display ? Array.from(display)[0].toUpperCase() : "管";
+    var sources = [];
+    var custom = me && typeof me.avatar_data === "string" ? me.avatar_data : "";
+    if (custom) sources.push(custom);
+    var githubAvatar = me && typeof me.github_avatar_url === "string" ? me.github_avatar_url : "";
+    if (githubAvatar) sources.push(githubAvatar);
+    if (profileUsername) {
+      sources.push("https://github.com/" + encodeURIComponent(profileUsername) + ".png?s=96");
+    }
+    var seed = profileUsername || loginName;
+    if (seed) {
+      sources.push("https://api.dicebear.com/10.x/initials/svg?seed=" + encodeURIComponent(seed));
+    }
+    var sig = initial + "|" + sources.join("|");
+    if (avatar.getAttribute("data-avatar-sig") === sig) return;
+    avatar.setAttribute("data-avatar-sig", sig);
+    if (!sources.length) {
+      avatar.textContent = initial;
+      return;
+    }
+    var img = document.createElement("img");
+    img.alt = "";
+    var step = 0;
+    img.addEventListener("error", function () {
+      step += 1;
+      if (step < sources.length) {
+        img.src = sources[step];
+        return;
+      }
+      avatar.textContent = initial;
+    });
+    img.src = sources[0];
+    avatar.replaceChildren(img);
+  }
+
   function logout() {
     return fetch("/api/auth/logout", {
       method: "POST",
@@ -2294,6 +2369,7 @@
     }).then(function (response) {
       if (!response.ok && response.status !== 401) throw new Error("logout");
       sessionPromise = null;
+      mePromise = null;
       location.assign("/login.html");
     });
   }
@@ -2784,6 +2860,8 @@
     mount: mount,
     safeNext: safeNext,
     currentUser: currentUser,
+    currentMe: currentMe,
+    paintAccountAvatar: paintAccountAvatar,
     logout: logout,
     formatMinute: formatMinute,
     askConfirm: askConfirm,
