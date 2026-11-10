@@ -889,3 +889,25 @@ article.node-card .record-info {
 article.node-card .card-meta {
   grid-template-columns: minmax(0, 1fr);
 }
+
+/* MiSub 订阅源流量条：外层轨道 6px 圆角、内层按比例填充 */
+.misub-meter {
+  height: 6px;
+  margin: 10px 0;
+  border-radius: 999px;
+  background: var(--border);
+  overflow: hidden;
+}
+.misub-meter-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+}
+.misub-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.misub-dim {
+  opacity: .55;
+}
