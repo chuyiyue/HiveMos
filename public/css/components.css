@@ -422,13 +422,14 @@ dialog.action-menu::backdrop { background: var(--overlay); }
 .perm-tag-x { border: 0; background: transparent; width: 22px; height: 22px; min-height: 22px; padding: 0; border-radius: 50%; cursor: pointer; color: var(--text-3); font-size: 14px; line-height: 1; }
 .perm-tag-x:hover { background: var(--surface-hover); color: var(--text); }
 .perm-foot { display: flex; align-items: center; gap: 10px; }
+.perm-foot > button { flex: 1 1 0; min-height: 40px; }
 .perm-save.is-dirty { background: var(--accent-button); color: var(--on-accent); border-color: transparent; }
 .perm-save.is-saved { background: var(--success-soft); color: var(--success-text); border-color: transparent; }
 
 /* Permission matrix: one row per domain with read/write checkboxes and
    an advanced section below. Changes stay local until save commits. */
 .perm-matrix { display: grid; gap: 14px; }
-.perm-clear { min-height: 32px; padding: 0 12px; }
+.perm-clear { padding: 0 12px; }
 .perm-mgrid { border: 1px solid var(--border); border-radius: var(--r-md); overflow: hidden; }
 .perm-mrow { display: grid; grid-template-columns: minmax(0, 1fr) 64px 64px; align-items: center; min-height: 44px; padding: 2px 6px 2px 12px; background: var(--surface); }
 .perm-mrow + .perm-mrow { border-top: 1px solid var(--border); }
