@@ -32,7 +32,7 @@ function q(sql) {
 const schemaRows = q(
   "SELECT type, name, sql FROM sqlite_master WHERE sql IS NOT NULL AND name != 'sqlite_sequence' " +
     "ORDER BY CASE type WHEN 'table' THEN 0 WHEN 'index' THEN 1 WHEN 'trigger' THEN 2 ELSE 3 END, name"
-);
+).filter((r) => !r.name.startsWith("_cf_")); // D1-internal tables: not queryable, not user data
 const virtualTables = new Set(
   schemaRows
     .filter((r) => r.type === "table" && /^CREATE VIRTUAL TABLE/i.test(r.sql))
