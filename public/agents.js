@@ -57,8 +57,10 @@
     });
   }
 
+  // transitional: 后端返回的 permissions 已是「域 × read/write + advanced」对象，
+  // 这里只把读取折回旧面板认识的域列表；选择器与保存载荷仍归并行任务重写。
   function permText(agent) {
-    var perms = agent.permissions || [];
+    var perms = C.permissionDomains(agent && agent.permissions);
     if (!perms.length) return "未开启任何功能";
     var labels = perms.map(function (domain) {
       var entry = PERM_DOMAINS.find(function (item) {

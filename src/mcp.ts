@@ -4,7 +4,9 @@
 
 import { json } from "./http";
 import type { Env, WaitCtx } from "./env";
-import { authenticateAgent, fetchConfigForAgent, searchServers } from "./registry";
+import { authenticateAgent, fetchConfigForAgent, recordToolDenied, searchServers } from "./registry";
+import { toolPermissionOf, toolAccessError, toolVisibleToAgent } from "./tool-permissions";
+import type { AgentPermissions } from "./permissions";
 import {
   SoulError,
   getSoulByName,
@@ -448,45 +450,8 @@ const TOOLS = [
   },
 ];
 
-// Every panel tool belongs to a permission domain (see PERMISSION_DOMAINS
-// in registry.ts). All current tools are registry-domain; future boards add
-// their own entries here.
-const TOOL_DOMAINS: Record<string, string> = {
-  mcp_search: "mcp",
-  mcp_list: "mcp",
-  mcp_get: "mcp",
-  calendar_list_calendars: "calendar",
-  calendar_list_events: "calendar",
-  calendar_get_event: "calendar",
-  calendar_search: "calendar",
-  calendar_create_event: "calendar",
-  calendar_update_event: "calendar",
-  calendar_delete_event: "calendar",
-  memory_list: "memory",
-  memory_search: "memory",
-  memory_get: "memory",
-  memory_upsert: "memory",
-  memory_delete: "memory",
-  soul_list: "soul",
-  soul_get: "soul",
-  soul_update: "soul",
-  tasks_list: "tasks",
-  tasks_create: "tasks",
-  tasks_update: "tasks",
-  tasks_complete: "tasks",
-  machines_list: "machines",
-  machines_get: "machines",
-  machines_report: "machines",
-  skills_list: "skills",
-  skills_get: "skills",
-  apis_list: "api",
-  apis_get: "api",
-  machines_get_access: "machines",
-};
-
-function domainOfTool(name: string): string | null {
-  return Object.prototype.hasOwnProperty.call(TOOL_DOMAINS, name) ? TOOL_DOMAINS[name] : null;
-}
+// 权限分类（域、操作、advanced 开关）在 src/tool-permissions.ts，单一事实
+// 来源；这里不再维护副本。
 
 // Read by the system-info endpoint so the settings page can report the
 // size of the public tool surface without duplicating the list.
@@ -534,19 +499,16 @@ function initialize(id: unknown, params: unknown): Response {
   });
 }
 
-// tools/list is filtered by the calling agent permissions: a tool whose
-// domain is not granted simply does not appear. Requests without a bearer
-// keep the historical public listing (downstream snapshot probes rely on
-// it); a bearer that fails authentication is rejected like tools/call.
+// tools/list 只返回当前 Agent 有效权限覆盖的工具：域的开关键或 advanced
+// 开关没给，工具直接不出现（machines_get_access 就是一个例子）。无 Bearer
+// 的请求保持历史行为（返回全部工具，OAuth 阶段再收紧）；Bearer 认证失败
+// 与 tools/call 一样报错。
 async function listTools(request: Request, env: Env, id: unknown): Promise<Response> {
   const token = bearerToken(request);
   if (!token) return rpcResult(id, { tools: TOOLS });
   const auth = await authenticateAgent(env.DB, token, Date.now());
   if (!auth.ok) return rpcError(id, -32001, auth.error, 401);
-  const tools = TOOLS.filter((tool) => {
-    const domain = domainOfTool(tool.name);
-    return domain !== null && auth.permissions.includes(domain);
-  });
+  const tools = TOOLS.filter((tool) => toolVisibleToAgent(tool.name, auth.permissions));
   return rpcResult(id, { tools });
 }
 
@@ -562,9 +524,12 @@ async function callTool(request: Request, env: Env, id: unknown, params: unknown
   const record = args == null ? {} : args;
   if (typeof record !== "object" || Array.isArray(record)) return rpcError(id, -32602, "参数不正确");
   const fields = record as { query?: unknown; tag?: unknown; server_id?: unknown; name?: unknown };
-  const domain = domainOfTool(name);
-  if (domain && !auth.permissions.includes(domain)) {
-    return rpcError(id, -32003, "该 Agent 没有 " + domain + " 权限，无法调用这个工具", 403);
+  // 每次调用都按 (域, 操作, advanced) 复查，不靠 tools/list 的过滤结果。
+  // 被拒也要在调用记录里留痕（沿用 mcp_fetch_audit，不新建表）。
+  const denial = toolAccessError(name, auth.permissions, auth.agentName, record as Record<string, unknown>);
+  if (denial !== null) {
+    if (toolPermissionOf(name)) await recordToolDenied(env.DB, auth.agentId, name, Date.now());
+    return rpcError(id, -32003, denial, 403);
   }
   if (name === "mcp_search") {
     const query = readString(fields.query);
@@ -662,7 +627,7 @@ async function callSoulTool(
   id: unknown,
   name: string,
   args: Record<string, unknown>,
-  auth: { agentId: string; agentName: string; permissions: string[] },
+  auth: { agentId: string; agentName: string; permissions: AgentPermissions },
 ): Promise<Response> {
   const now = Date.now();
   if (name === "soul_list") {
@@ -697,11 +662,9 @@ async function callSoulTool(
   if (name === "soul_update") {
     const requested = argString(args, "agent_name");
     if (!requested || !requested.trim()) return toolResult(id, "请提供 agent_name", true);
-    // Identity comes from the bearer, not the argument: an agent may only
-    // write its own soul unless an administrator granted soul_write_any.
-    if (requested.trim() !== auth.agentName && !auth.permissions.includes("soul_write_any")) {
-      return rpcError(id, -32003, "只能写自己的 Soul；要代写其他 Agent 的 Soul，需要 soul_write_any 权限", 403);
-    }
+    // 归属与 advanced.soul_write_any 的校验在 toolAccessError
+    // （src/tool-permissions.ts）统一做，身份仍取自 Bearer，写别人的 Soul
+    // 需要 soul_write_any。这里只管草稿与版本流程，逻辑不变。
     const expectedVersion = args.expected_version == null ? null : args.expected_version;
     const updated = await upsertSoulByName(
       env.DB,

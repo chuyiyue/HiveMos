@@ -6,9 +6,10 @@
 // through the MCP tools appear here. Everything the admin does in the
 // panel lives in user_ops instead （系统日志 tab, src/oplog.ts). Sources
 // tell the two apart as follows:
-//   mcp_fetch_audit  MCP 与 Skills — written only by the agent read paths
-//                    (fetchConfigForAgent / getSkillForAgent); no panel
-//                    writer exists, so rows are kept as-is
+//   mcp_fetch_audit  MCP 与 Skills — written by the agent read paths
+//                    (fetchConfigForAgent / getSkillForAgent) and by the
+//                    permission-denied path (server_id prefixed "denied:");
+//                    no panel writer exists, so rows are kept as-is
 //   calendar_audit   日历          — the actor column discriminates:
 //   task_audit       任务            panel writes actor 'user', MCP writes
 //   memory_audit     记忆            the agent id, calendar mirror sync
@@ -27,6 +28,7 @@
 // it never fails the whole response.
 
 import type { D1Database } from "./env";
+import { deniedToolName } from "./registry";
 
 export interface RecordItem {
   id: string;
@@ -154,6 +156,24 @@ const mcpRecords: Fetcher = async (db, _agentNames, agentId, need) => {
   return {
     ok,
     rows: rows.map((row) => {
+      // 权限不足被拒的调用也落在 mcp_fetch_audit，server_id 带保留前缀
+      // "denied:<工具名>"（见 registry.ts 的 recordToolDenied），这里单独
+      // 渲染成「调用被拒」，不当作一次取用。
+      const deniedTool = deniedToolName(row.server_id);
+      if (deniedTool) {
+        return {
+          ...base("mcp"),
+          id: `mcp:${row.id}`,
+          at: row.at,
+          actor: row.agent_name ?? "未知 Agent",
+          actor_id: row.agent_id,
+          action: "denied",
+          action_label: "调用被拒",
+          target: deniedTool,
+          target_id: null,
+          text: `调用「${deniedTool}」时权限不足，被拒绝`,
+        };
+      }
       const isSkill = !row.server_name && !row.server_title && !!row.skill_name;
       const target = row.server_title || row.server_name || row.skill_name || "未知服务";
       return {
