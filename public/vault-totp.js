@@ -139,6 +139,81 @@
     }).catch(function () {});
   }
 
+  // 验证码页签的分组与保险库/网关共用 vault_groups 池（同一端点）；
+  // 分组管理面板里的成员数按 TOTP 条目计。新建/改名弹窗在本模块内走
+  // 同一套 /api/vault/groups 接口，口径与保险库页签一致。
+  function totpGroupCounts() {
+    var counts = {};
+    (S.entries || []).forEach(function (entry) {
+      if (entry.group_id) counts[entry.group_id] = (counts[entry.group_id] || 0) + 1;
+    });
+    return counts;
+  }
+
+  function openTotpGroupDialog(group) {
+    var editing = !!group;
+    C.openFormDialog({
+      title: editing ? "重命名分组" : "添加分组",
+      bodyHtml: "<label>分组名<input name=\"name\" maxlength=\"60\" autocomplete=\"off\" value=\"" + (editing ? esc(group.name) : "") + "\" /></label>",
+      submitLabel: editing ? "保存" : "添加分组",
+      onSubmit: function (ctrl) {
+        var input = ctrl.form.querySelector('[name="name"]');
+        var name = input ? input.value.trim() : "";
+        if (!name) { ctrl.setError("请填写分组名"); return; }
+        ctrl.setBusy(true);
+        api(editing ? "PATCH" : "POST", editing ? "/api/vault/groups/" + encodeURIComponent(group.id) : "/api/vault/groups", { name: name })
+          .then(function (result) {
+            ctrl.setBusy(false);
+            if (!result.data || !result.data.ok) {
+              ctrl.setError((result.data && result.data.error) || "保存失败，请重试");
+              return;
+            }
+            ctrl.close();
+            loadGroups();
+          })
+          .catch(function () {
+            ctrl.setBusy(false);
+            ctrl.setError("网络异常，请重试");
+          });
+      },
+    });
+  }
+
+  function openTotpGroupManager(btn) {
+    C.openGroupManager({
+      anchor: btn,
+      groups: S.groups || [],
+      counts: totpGroupCounts(),
+      onCreate: function () { openTotpGroupDialog(null); },
+      onRename: function (group) { openTotpGroupDialog(group); },
+      onDelete: function (group, slot) {
+        C.askConfirm({
+          anchor: slot,
+          title: "删除分组",
+          text: "确认删除分组「" + group.name + "」吗？组内条目会回到未分组，不会被删除",
+          confirmLabel: "删除",
+          danger: true,
+        }).then(function (yes) {
+          if (!yes) return;
+          api("DELETE", "/api/vault/groups/" + encodeURIComponent(group.id)).then(function (result) {
+            if (result.data && result.data.ok) {
+              loadGroups();
+              loadEntries();
+            }
+          });
+        });
+      },
+      onReorder: function (ids) {
+        api("POST", "/api/vault/groups/reorder", { ids: ids }).then(function (result) {
+          if (result.data && result.data.ok) loadGroups();
+        });
+      },
+      onSettled: function () {
+        return { groups: S.groups || [], counts: totpGroupCounts() };
+      },
+    });
+  }
+
   function loadEntries() {
     return api("GET", "/api/vault/totp").then(function (result) {
       if (result.data && result.data.ok && Array.isArray(result.data.entries)) {
@@ -381,7 +456,7 @@
         (S.groupFilter === group.id ? "true" : "false") + "\">" + esc(group.name) + "</button>";
     });
     html += "<button type=\"button\" class=\"totp-chip\" data-totp-chip=\"__none__\" aria-pressed=\"" + (S.groupFilter === "__none__" ? "true" : "false") + "\">未分组</button>";
-    html += "<button type=\"button\" class=\"totp-chip totp-chip-add\" data-action=\"add-vgroup\">添加分组</button>";
+    html += "<button type=\"button\" class=\"totp-chip totp-chip-add\" data-totp-act=\"group-manager\">分组管理</button>";
     return html + "</div>";
   }
 
@@ -871,6 +946,7 @@
         else if (name === "add") openAddDialog(null);
         else if (name === "scan") openScanDialog();
         else if (name === "io") openIoDialog(act.getAttribute("data-io-mode") === "export" ? "export" : "import");
+        else if (name === "group-manager") openTotpGroupManager(act);
         return;
       }
       var open = target.closest("[data-totp-open]");

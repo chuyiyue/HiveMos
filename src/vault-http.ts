@@ -38,6 +38,7 @@ import {
   listEntries,
   listGateways,
   listGroups,
+  reorderGroups,
   newId,
   updateGroup,
   revealSecret,
@@ -80,6 +81,7 @@ export async function handleVaultRequest(request: Request, env: Env, ctx: WaitCt
     const emailOne = /^\/api\/vault\/emails\/([A-Za-z0-9_-]+)$/.exec(path);
     if (emailOne && emailOne[1]) return await emailOneHandler(request, env, emailOne[1]);
     if (path === "/api/vault/groups") return await groups(request, env);
+    if (path === "/api/vault/groups/reorder") return await groupReorder(request, env);
     const groupOne = /^\/api\/vault\/groups\/([A-Za-z0-9_-]+)$/.exec(path);
     if (groupOne && groupOne[1]) return await groupOneHandler(request, env, groupOne[1]);
     if (path === "/api/vault/reveal") return await reveal(request, env);
@@ -303,6 +305,22 @@ async function groups(request: Request, env: Env): Promise<Response> {
     return json({ ok: true, group: groupPublic(created) }, 201);
   }
   return json({ ok: false, error: "方法不允许" }, 405, { allow: "GET, POST" });
+}
+
+async function groupReorder(request: Request, env: Env): Promise<Response> {
+  if (request.method.toUpperCase() !== "POST") {
+    return json({ ok: false, error: "方法不允许" }, 405, { allow: "POST" });
+  }
+  const body = await readBody(request);
+  if (body instanceof Response) return body;
+  await reorderGroups(env.DB, body["ids"]);
+  await logOp(env.DB, {
+    actor: await panelActor(request, env),
+    module: "分组",
+    action: "修改",
+    text: "调整了保险库分组顺序",
+  });
+  return json({ ok: true });
 }
 
 async function groupOneHandler(request: Request, env: Env, id: string): Promise<Response> {

@@ -67,16 +67,17 @@
   }
 
   // Top action row shared by list pages and by every tab inside a section:
-  // one primary add button plus a secondary add-group button, same spot and
-  // same markup everywhere. Actions are data-action values handled by the
-  // click delegation of the page.
+  // one primary add button plus a secondary group button (labelled as the
+  // group-management entry by default; it opens the openGroupManager
+  // panel), same spot and same markup everywhere. Actions are data-action
+  // values handled by the click delegation of the page.
   function addBar(options) {
     options = options || {};
     return (
       '<div class="add-bar"><button type="button" class="secondary add-group-button" data-action="' +
       escapeHtml(options.groupAction || "add-group") +
       '">' +
-      escapeHtml(options.groupLabel || "添加分组") +
+      escapeHtml(options.groupLabel || "分组管理") +
       '</button><button type="button" class="add-button" data-action="' +
       escapeHtml(options.addAction || "add") +
       '">' +
@@ -144,9 +145,10 @@
   }
 
   // Renders items bucketed into group sections (group order as given),
-  // ungrouped items last. Group sections always render, even when empty, so
-  // rename/delete stays reachable; the ungrouped section renders when it has
-  // items or when there are no groups at all.
+  // ungrouped items last. Group sections always render, even when empty;
+  // group management itself (sort / rename / delete / create) lives in the
+  // openGroupManager panel behind each page's group button. The ungrouped
+  // section renders when it has items or when there are no groups at all.
   // options: { groups, items, groupOf, renderItem, groupActions,
   //            ungroupedTitle, emptyGroupText, emptyTitle, emptyText }
   function groupedSections(options) {
@@ -2792,6 +2794,325 @@
     initCustomSelects();
   }
 
+
+  var currentGroupManager = null;
+
+  // Anchored group-manager popover, one shared implementation for every
+  // board: a page's 「分组管理」 button opens it with that page's groups
+  // in display order. Row layout (per Roye's sketch): drag handle on the
+  // left (Pointer Events, mouse and touch), the group name in the middle
+  // (clicking the name opens the caller's rename dialog) with its member
+  // count, then ↑ / ↓ step buttons (first row cannot go up, last row
+  // cannot go down) and a round delete button on the right. Dragging and
+  // the step buttons share the caller's onReorder persistence path. The
+  // delete button runs the caller's confirm flow, anchored at the panel's
+  // own confirm slot; the footer button opens the caller's create dialog.
+  // The panel mirrors the page's state via options.onSettled(), re-read
+  // whenever #page re-renders, so it refreshes itself after any of the
+  // caller's operations land.
+  // options: { anchor, title, groups, counts, onCreate, onRename,
+  //            onDelete, onReorder, onSettled }
+  function openGroupManager(options) {
+    options = options || {};
+    var anchor = options.anchor;
+    if (!anchor) return;
+    if (currentGroupManager) {
+      var sameAnchor = currentGroupManager.anchor === anchor;
+      currentGroupManager.close();
+      if (sameAnchor) return;
+    }
+    var pop = document.createElement("div");
+    pop.className = "group-manager-pop";
+    pop.setAttribute("role", "dialog");
+    pop.setAttribute("aria-label", options.title || "分组管理");
+    var head = document.createElement("div");
+    head.className = "gm-head";
+    var title = document.createElement("span");
+    title.className = "gm-title";
+    title.textContent = options.title || "分组管理";
+    var closeBtn = document.createElement("button");
+    closeBtn.type = "button";
+    closeBtn.className = "gm-close";
+    closeBtn.setAttribute("aria-label", "关闭");
+    closeBtn.innerHTML =
+      '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+    head.append(title, closeBtn);
+    var listEl = document.createElement("div");
+    listEl.className = "gm-list";
+    var slot = document.createElement("div");
+    slot.className = "gm-confirm-slot";
+    var foot = document.createElement("div");
+    foot.className = "gm-foot";
+    var createBtn = document.createElement("button");
+    createBtn.type = "button";
+    createBtn.className = "gm-create";
+    createBtn.textContent = "新建分组";
+    foot.append(createBtn);
+    pop.append(head, listEl, slot, foot);
+    document.body.append(pop);
+
+    var HANDLE_SVG =
+      '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>';
+    var UP_SVG =
+      '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>';
+    var DOWN_SVG =
+      '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M19 12l-7 7-7-7"/></svg>';
+    var DEL_SVG =
+      '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+
+    var data = { groups: (options.groups || []).slice(), counts: options.counts || {} };
+    var dragging = false;
+    var closed = false;
+    var lastSignature = null;
+
+    function signature() {
+      return data.groups
+        .map(function (g) {
+          return g.id + ":" + g.name + ":" + (data.counts[g.id] || 0);
+        })
+        .join("|");
+    }
+
+    function currentIds() {
+      return data.groups.map(function (g) {
+        return g.id;
+      });
+    }
+
+    function draw() {
+      if (closed || dragging) return;
+      lastSignature = signature();
+      listEl.innerHTML = "";
+      if (!data.groups.length) {
+        var empty = document.createElement("p");
+        empty.className = "gm-empty";
+        empty.textContent = "还没有分组";
+        listEl.append(empty);
+        return;
+      }
+      data.groups.forEach(function (group, index) {
+        var row = document.createElement("div");
+        row.className = "gm-row";
+        row.setAttribute("data-gm-id", group.id);
+        var handle = document.createElement("span");
+        handle.className = "gm-handle";
+        handle.setAttribute("data-gm-handle", "");
+        handle.setAttribute("aria-label", "拖动排序");
+        handle.innerHTML = HANDLE_SVG;
+        var name = document.createElement("button");
+        name.type = "button";
+        name.className = "gm-name";
+        name.setAttribute("data-gm-rename", "");
+        name.title = "改名";
+        var nameText = document.createElement("span");
+        nameText.className = "gm-name-text";
+        nameText.textContent = group.name;
+        var count = document.createElement("span");
+        count.className = "gm-count";
+        count.textContent = (data.counts[group.id] || 0) + " 个";
+        name.append(nameText, count);
+        var up = document.createElement("button");
+        up.type = "button";
+        up.className = "gm-move";
+        up.setAttribute("data-gm-move", "up");
+        up.setAttribute("aria-label", "上移");
+        up.innerHTML = UP_SVG;
+        if (index === 0) up.disabled = true;
+        var down = document.createElement("button");
+        down.type = "button";
+        down.className = "gm-move";
+        down.setAttribute("data-gm-move", "down");
+        down.setAttribute("aria-label", "下移");
+        down.innerHTML = DOWN_SVG;
+        if (index === data.groups.length - 1) down.disabled = true;
+        var del = document.createElement("button");
+        del.type = "button";
+        del.className = "gm-del";
+        del.setAttribute("data-gm-delete", "");
+        del.setAttribute("aria-label", "删除分组");
+        del.innerHTML = DEL_SVG;
+        row.append(handle, name, up, down, del);
+        listEl.append(row);
+      });
+    }
+
+    function place() {
+      var rect = anchor.getBoundingClientRect();
+      var width = Math.min(320, window.innerWidth - 16);
+      pop.style.width = width + "px";
+      var left = rect.right - width;
+      if (left < 8) left = 8;
+      if (left + width > window.innerWidth - 8) left = window.innerWidth - width - 8;
+      pop.style.left = left + "px";
+      var height = pop.offsetHeight;
+      var top = rect.bottom + 6;
+      if (top + height > window.innerHeight - 8) top = Math.max(8, rect.top - height - 6);
+      pop.style.top = top + "px";
+    }
+
+    var page = document.getElementById("page");
+    var observer = null;
+    var syncTimer = 0;
+    function syncFromPage() {
+      if (closed || dragging) return;
+      if (typeof options.onSettled !== "function") return;
+      var next = options.onSettled();
+      if (!next) return;
+      data.groups = (next.groups || []).slice();
+      data.counts = next.counts || {};
+      if (signature() !== lastSignature) draw();
+    }
+    if (page && window.MutationObserver) {
+      observer = new MutationObserver(function () {
+        if (syncTimer) return;
+        syncTimer = window.setTimeout(function () {
+          syncTimer = 0;
+          syncFromPage();
+        }, 60);
+      });
+      observer.observe(page, { childList: true, subtree: true });
+    }
+
+    function close() {
+      if (closed) return;
+      closed = true;
+      if (observer) observer.disconnect();
+      if (syncTimer) window.clearTimeout(syncTimer);
+      document.removeEventListener("pointerdown", onOutside, true);
+      document.removeEventListener("keydown", onKey, true);
+      if (currentGroupManager === ctrl) currentGroupManager = null;
+      pop.remove();
+    }
+    var ctrl = { anchor: anchor, close: close };
+    currentGroupManager = ctrl;
+
+    function onOutside(event) {
+      if (closed) return;
+      if (pop.contains(event.target)) return;
+      if (anchor.contains && anchor.contains(event.target)) return;
+      // A modal dialog (rename / create / confirm is inline, dialogs are
+      // not) sits above the panel: interacting with it must not close us.
+      if (document.querySelector("dialog[open]")) return;
+      close();
+    }
+    function onKey(event) {
+      if (event.key !== "Escape") return;
+      if (document.querySelector("dialog[open]")) return;
+      if (pop.querySelector(".confirm-panel")) return;
+      close();
+    }
+    document.addEventListener("pointerdown", onOutside, true);
+    document.addEventListener("keydown", onKey, true);
+    closeBtn.addEventListener("click", close);
+    createBtn.addEventListener("click", function () {
+      if (typeof options.onCreate === "function") options.onCreate();
+    });
+
+    listEl.addEventListener("click", function (event) {
+      var target = event.target;
+      if (!(target instanceof Element)) return;
+      var row = target.closest(".gm-row");
+      if (!row) return;
+      var id = row.getAttribute("data-gm-id");
+      var group = null;
+      data.groups.forEach(function (g) {
+        if (g.id === id) group = g;
+      });
+      if (!group) return;
+      var moveBtn = target.closest("[data-gm-move]");
+      if (moveBtn) {
+        if (moveBtn.disabled) return;
+        var idx = data.groups.indexOf(group);
+        var swap = moveBtn.getAttribute("data-gm-move") === "up" ? idx - 1 : idx + 1;
+        if (swap < 0 || swap >= data.groups.length) return;
+        var tmp = data.groups[idx];
+        data.groups[idx] = data.groups[swap];
+        data.groups[swap] = tmp;
+        draw();
+        if (typeof options.onReorder === "function") options.onReorder(currentIds());
+        return;
+      }
+      if (target.closest("[data-gm-delete]")) {
+        if (typeof options.onDelete === "function") options.onDelete(group, slot);
+        return;
+      }
+      if (target.closest("[data-gm-rename]")) {
+        if (typeof options.onRename === "function") options.onRename(group);
+      }
+    });
+
+    listEl.addEventListener("pointerdown", function (event) {
+      var handle = event.target instanceof Element ? event.target.closest("[data-gm-handle]") : null;
+      if (!handle) return;
+      var row = handle.closest(".gm-row");
+      if (!row) return;
+      event.preventDefault();
+      var origIds = currentIds();
+      var startY = event.clientY;
+      dragging = true;
+      row.classList.add("is-dragging");
+      listEl.classList.add("is-dragging");
+      try {
+        handle.setPointerCapture(event.pointerId);
+      } catch (error) {
+        /* capture is best-effort */
+      }
+      function onMove(moveEvent) {
+        row.style.transform = "translateY(" + (moveEvent.clientY - startY) + "px)";
+        var next = row.nextElementSibling;
+        if (next && next.classList.contains("gm-row")) {
+          var nr = next.getBoundingClientRect();
+          if (moveEvent.clientY > nr.top + nr.height / 2) {
+            listEl.insertBefore(row, next.nextElementSibling);
+            startY += nr.height;
+            row.style.transform = "translateY(" + (moveEvent.clientY - startY) + "px)";
+            return;
+          }
+        }
+        var prev = row.previousElementSibling;
+        if (prev && prev.classList.contains("gm-row")) {
+          var pr = prev.getBoundingClientRect();
+          if (moveEvent.clientY < pr.top + pr.height / 2) {
+            listEl.insertBefore(row, prev);
+            startY -= pr.height;
+            row.style.transform = "translateY(" + (moveEvent.clientY - startY) + "px)";
+          }
+        }
+      }
+      function onUp() {
+        handle.removeEventListener("pointermove", onMove);
+        handle.removeEventListener("pointerup", onUp);
+        handle.removeEventListener("pointercancel", onUp);
+        row.classList.remove("is-dragging");
+        listEl.classList.remove("is-dragging");
+        row.style.transform = "";
+        dragging = false;
+        var ids = Array.prototype.map.call(listEl.querySelectorAll(".gm-row"), function (r) {
+          return r.getAttribute("data-gm-id");
+        });
+        var byId = {};
+        data.groups.forEach(function (g) {
+          byId[g.id] = g;
+        });
+        data.groups = ids
+          .map(function (gid) {
+            return byId[gid];
+          })
+          .filter(Boolean);
+        draw();
+        if (ids.join("|") !== origIds.join("|") && typeof options.onReorder === "function") {
+          options.onReorder(ids);
+        }
+      }
+      handle.addEventListener("pointermove", onMove);
+      handle.addEventListener("pointerup", onUp);
+      handle.addEventListener("pointercancel", onUp);
+    });
+
+    draw();
+    place();
+  }
+
   window.HiveCommon = {
     escapeHtml: escapeHtml,
     maskTail: maskTail,
@@ -2819,6 +3140,7 @@
     askConfirm: askConfirm,
     openFormDialog: openFormDialog,
     openActionMenu: openActionMenu,
+    openGroupManager: openGroupManager,
     openMenu: openMenu,
     copyText: copyText,
     openManageDialog: openManageDialog,

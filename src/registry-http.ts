@@ -21,6 +21,7 @@ import {
   revealAgentToken,
   refreshServerSnapshot,
   renameGroup,
+  reorderGroups,
   setAgentAvatar,
   rotateAgentToken,
   saveManualSnapshot,
@@ -54,6 +55,7 @@ export async function handleRegistryRequest(request: Request, env: Env, ctx: Wai
   if (server && server[1]) return mcpOne(request, env, ctx, server[1]);
   if (path === "/api/mcp-audit") return audit(request, env);
   if (path === "/api/groups") return groupCollection(request, env);
+  if (path === "/api/groups/reorder") return groupReorder(request, env);
   const group = /^\/api\/groups\/([A-Za-z0-9_-]+)$/.exec(path);
   if (group && group[1]) return groupOne(request, env, group[1]);
   if (path === "/api/sidebar/agents") return sidebarAgents(request, env);
@@ -450,6 +452,25 @@ async function groupCollection(request: Request, env: Env): Promise<Response> {
     return json({ ok: true, group: created.group }, 201);
   }
   return methodNotAllowed("GET, POST");
+}
+
+async function groupReorder(request: Request, env: Env): Promise<Response> {
+  if (request.method.toUpperCase() !== "POST") return methodNotAllowed("POST");
+  const gate = await mutationGate(request);
+  if (gate) return gate;
+  const body = await readJson(request);
+  if (!body.ok) return body.response;
+  const scope = readScope(request, body.value);
+  if (!scope) return json({ ok: false, error: "scope 不正确" }, 400);
+  const reordered = await reorderGroups(env.DB, scope, body.value);
+  if (!reordered.ok) return json({ ok: false, error: reordered.error }, reordered.status);
+  await logOp(env.DB, {
+    actor: await panelActor(request, env),
+    module: "分组",
+    action: "修改",
+    text: `调整了${GROUP_SCOPE_LABELS[scope] ?? scope}分组顺序`,
+  });
+  return json({ ok: true });
 }
 
 async function groupOne(request: Request, env: Env, id: string): Promise<Response> {
