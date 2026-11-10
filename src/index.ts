@@ -96,7 +96,7 @@ export default {
       if (path === "/mcp" && request.method.toUpperCase() === "POST") return handleMcp(request, env, wait);
 
       // OAuth 授权服务器：发现元数据、客户端注册、授权页、令牌与撤销都
-      // 在会话门之前（授权页内部再按会话分身份路径）。
+      // 在会话门之前（授权页自身要求管理员登录，未登录跳登录页）。
       const oauthPublic = await handleOAuthPublic(request, env, path);
       if (oauthPublic) return oauthPublic;
 

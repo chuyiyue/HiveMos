@@ -1,35 +1,34 @@
-// OAuth 协议端点与授权页、管理端连接接口。
+// OAuth 协议端点与授权页、管理端应用接口。
 //
-// handleOAuthPublic 挂在管理员会话门之前（协议端点与授权页必须能被未
-// 登录的外部流程到达）：授权页自身按「有没有管理员会话」分两条身份路——
-// 有会话可选已有 Agent 或新建；无会话只能粘贴接入链接密钥绑定设备。
-// handleOAuthAdmin 挂在门后，复用面板会话与 logOp 口径。
+// handleOAuthPublic 挂在管理员会话门之前（协议端点必须能被未登录的外
+// 部流程到达）：授权页只有一条路——先登录管理员，未登录跳登录页带
+// next 回授权页；登录后在授权页填应用名、勾完整权限矩阵，批准即发码，
+// 兑换时建「应用」。没有绑定已有 Agent 的路径。
+// handleOAuthAdmin 挂在门后，复用面板会话与 logOp 口径，管应用的
+// 列表 / 改权限 / 查看令牌 / 删除。
 
 import { SESSION_COOKIE, sha256Hex } from "./auth";
 import { findSessionUser } from "./accounts";
 import type { Env } from "./env";
 import { isCrossSite, json, readCookie, readJsonLimited } from "./http";
 import { logOp, panelActor } from "./oplog";
-import { parsePermissions, permissionsFromInput, intersectPermissions, PERMISSION_DOMAINS, ADVANCED_PERMISSIONS } from "./permissions";
+import { permissionsFromInput, PERMISSION_DOMAINS, ADVANCED_PERMISSIONS } from "./permissions";
 import type { AgentPermissions } from "./permissions";
 import {
-  bindAgentByLinkSecret,
-  createAgentForConsent,
-  createConnection,
+  deleteOAuthApp,
   exchangeAuthorizationCode,
   getOAuthClient,
   clientRedirectUris,
   issueAuthorizationCode,
-  listAgentConnections,
-  listConsentAgents,
+  listOAuthApps,
   registerOAuthClient,
-  revealConnectionTokens,
-  revokeConnection,
+  revealAppTokens,
   revokeTokenValue,
   rotateRefreshToken,
+  updateOAuthAppPermissions,
   writeOAuthAudit,
 } from "./oauth";
-import { extractLinkSecret, isAllowedRedirectUri, isValidCodeChallenge } from "./oauth-util";
+import { isAllowedRedirectUri, isValidCodeChallenge } from "./oauth-util";
 import type { OAuthClientRow } from "./oauth";
 
 const REGISTER_BODY_BYTES = 16 * 1024;
@@ -210,7 +209,6 @@ function pageShell(title: string, bodyHtml: string, scriptJson?: string): Respon
     ".oauth-matrix .mname{text-align:left}\n" +
     ".oauth-matrix label{text-align:center;margin:0}\n" +
     ".oauth-matrix input[type=checkbox]{width:20px;height:20px}\n" +
-    ".oauth-adv{margin-top:10px;display:grid;gap:6px}\n" +
     ".oauth-foot{display:flex;gap:10px;margin-top:20px}\n" +
     ".oauth-foot button{flex:1;padding:12px;border-radius:10px;font:inherit;cursor:pointer}\n" +
     ".oauth-msg{min-height:1.4em;margin-top:12px}\n" +
@@ -227,10 +225,10 @@ function pageShell(title: string, bodyHtml: string, scriptJson?: string): Respon
 
 function authorizeErrorPage(description: string): Response {
   return pageShell(
-    "连接授权",
-    "<div class=\"oauth-head\"><img src=\"/logo.png\" alt=\"\"><h1>连接授权</h1></div>" +
+    "应用授权",
+    "<div class=\"oauth-head\"><img src=\"/logo.png\" alt=\"\"><h1>应用授权</h1></div>" +
       "<p class=\"oauth-sub\">这个授权请求无法继续：" + escapeHtml(description) + "</p>" +
-      "<p class=\"oauth-sub\">请回到发起连接的应用里重新发起授权</p>",
+      "<p class=\"oauth-sub\">请回到发起授权的客户端，重新发起一次</p>",
   );
 }
 
@@ -255,8 +253,16 @@ async function authorizePage(request: Request, env: Env): Promise<Response> {
     return authorizeErrorPage(validated.description);
   }
   const { client, redirectUri, state, challenge } = validated.value;
+  // 只有一条路：先登录管理员。未登录跳登录页，带 next 回到本授权页
+  // （与全站 deny() 的 /login?next= 同一模式）。
   const admin = await optionalAdmin(request, env);
-  const agents = admin ? await listConsentAgents(env) : [];
+  if (!admin) {
+    const next = url.pathname + url.search;
+    return new Response(null, {
+      status: 302,
+      headers: { location: "/login?next=" + encodeURIComponent(next), "cache-control": "no-store" },
+    });
+  }
   const clientHost = (() => {
     if (!client.client_uri) return "";
     try {
@@ -274,38 +280,26 @@ async function authorizePage(request: Request, env: Env): Promise<Response> {
       code_challenge: challenge,
       code_challenge_method: "S256",
     },
-    admin: !!admin,
-    agents: agents.map((agent) => ({ id: agent.id, name: agent.name, permissions: agent.permissions })),
+    appName: client.client_name,
     domains: PERMISSION_DOMAINS.map((domain) => ({ key: domain })),
     advanced: ADVANCED_PERMISSIONS.map((key) => ({ key })),
   };
   const scriptJson = JSON.stringify(payload).replaceAll("<", "\\u003c");
-  const identityHtml = admin
-    ? "<div class=\"oauth-card\"><label><input type=\"radio\" name=\"mode\" value=\"existing\" checked> 使用已有 Agent</label>" +
-      "<select id=\"agentSel\"></select></div>" +
-      "<div class=\"oauth-card\"><label><input type=\"radio\" name=\"mode\" value=\"new\"> 创建新 Agent</label>" +
-      "<input type=\"text\" id=\"newName\" placeholder=\"新 Agent 的名字\" maxlength=\"64\">" +
-      "<p class=\"hint\">新 Agent 的基础权限（上限）在下面先设，本次连接权限不能超过它</p>" +
-      "<div id=\"baseMatrix\"></div></div>"
-    : "<div class=\"oauth-card\"><label for=\"linkSecret\">输入链接密钥绑定设备</label>" +
-      "<p class=\"hint\">粘贴这个 Agent 的接入地址（…/mcp?token=…）或其中的密钥，绑定它作为本次连接的身份</p>" +
-      "<textarea id=\"linkSecret\" rows=\"3\" autocomplete=\"off\"></textarea>" +
-      "<p><button type=\"button\" id=\"bindBtn\">验证绑定</button></p>" +
-      "<p class=\"hint\" id=\"bindState\">尚未验证</p></div>";
   const body =
-    "<div class=\"oauth-head\"><img src=\"/logo.png\" alt=\"\"><h1>连接授权</h1></div>" +
+    "<div class=\"oauth-head\"><img src=\"/logo.png\" alt=\"\"><h1>应用授权</h1></div>" +
     "<p class=\"oauth-sub\"><strong>" + escapeHtml(client.client_name) + "</strong>" +
     (clientHost ? "（" + escapeHtml(clientHost) + "）" : "") +
-    " 正在请求访问你的 HiveMos</p>" +
-    "<div class=\"oauth-sec-title\">选择身份</div>" +
-    identityHtml +
-    "<div class=\"oauth-sec-title\">本次连接的权限</div>" +
-    "<div class=\"oauth-card\"><div id=\"connMatrix\"></div>" +
-    "<p class=\"hint\">灰掉的格子是这个身份的基础权限没有开放，本次连接不能选</p></div>" +
+    " 正在请求创建一个应用，代表它访问你的 HiveMos</p>" +
+    "<div class=\"oauth-sec-title\">应用名</div>" +
+    "<div class=\"oauth-card\"><input type=\"text\" id=\"appName\" maxlength=\"64\" autocomplete=\"off\">" +
+    "<p class=\"hint\">这个名字就是应用在面板与调用记录里的身份名</p></div>" +
+    "<div class=\"oauth-sec-title\">这个应用的权限</div>" +
+    "<div class=\"oauth-card\"><div id=\"permMatrix\"></div>" +
+    "<p class=\"hint\">勾选的就是这个应用的全部权限，随时可以在 Agents 板块的「应用」页签里修改</p></div>" +
     "<div class=\"oauth-foot\"><button type=\"button\" id=\"denyBtn\">拒绝</button>" +
     "<button type=\"button\" id=\"allowBtn\">允许访问</button></div>" +
     "<p class=\"oauth-msg\" id=\"msg\" role=\"status\"></p>";
-  return pageShell("连接授权", body, scriptJson);
+  return pageShell("应用授权", body, scriptJson);
 }
 
 // ---- 授权提交 ---------------------------------------------------------------
@@ -326,80 +320,38 @@ async function authorizeSubmit(request: Request, env: Env): Promise<Response> {
   if (!validated.ok) return json({ ok: false, error: validated.description }, 400);
   const { client, redirectUri, state, challenge } = validated.value;
 
+  const admin = await optionalAdmin(request, env);
+  if (!admin) return json({ ok: false, error: "请先登录管理员再批准授权" }, 401);
+
+  const nameInput = typeof value.app_name === "string" ? value.app_name.trim() : "";
+  if (nameInput.length > 64) return json({ ok: false, error: "应用名最多 64 个字" }, 400);
+  const appName = nameInput || client.client_name;
+
   const requested = permissionsFromInput(value.grants === undefined ? {} : value.grants);
   if (!requested.ok) return json({ ok: false, error: requested.error }, requested.status);
 
-  const mode = typeof value.mode === "string" ? value.mode : "";
-  const admin = await optionalAdmin(request, env);
-  let agentId = "";
-  let agentName = "";
-  let base: AgentPermissions;
-  let bindUsed = false;
-
-  if (mode === "existing") {
-    if (!admin) return json({ ok: false, error: "选择已有 Agent 需要先登录管理员" }, 401);
-    const agents = await listConsentAgents(env);
-    const picked = agents.find((agent) => agent.id === value.agent_id);
-    if (!picked) return json({ ok: false, error: "请选择一个已启用的 Agent" }, 400);
-    agentId = picked.id;
-    agentName = picked.name;
-    base = picked.permissions;
-  } else if (mode === "new") {
-    if (!admin) return json({ ok: false, error: "创建新 Agent 需要先登录管理员" }, 401);
-    const created = await createAgentForConsent(env, typeof value.agent_name === "string" ? value.agent_name : "", value.base_permissions);
-    if (!created.ok) return json({ ok: false, error: created.error }, created.status);
-    agentId = created.agentId;
-    agentName = created.agentName;
-    base = created.base;
-  } else if (mode === "bind") {
-    const secret = extractLinkSecret(typeof value.link_secret === "string" ? value.link_secret : "");
-    const bound = await bindAgentByLinkSecret(env, secret, Date.now());
-    if (!bound.ok) return json({ ok: false, error: bound.error }, bound.status);
-    agentId = bound.agentId;
-    agentName = bound.agentName;
-    base = bound.permissions;
-    bindUsed = true;
-  } else {
-    return json({ ok: false, error: "请选择身份方式" }, 400);
-  }
-
-  // 服务端再做一次交集，不信任前端的置灰。
-  const grants = intersectPermissions(requested.permissions, base);
-  const connection = await createConnection(env.DB, { clientId: client.client_id, agentId, grants });
+  // 授权码只带快照（应用名 + 勾选的权限集），兑换时才建应用。
   const code = await issueAuthorizationCode(env.DB, {
     clientId: client.client_id,
-    connectionId: connection.id,
+    appName,
+    permissions: requested.permissions,
     redirectUri,
     challenge,
   });
-  const actor = admin?.username || agentName;
-  if (bindUsed) {
-    await writeOAuthAudit(env.DB, {
-      actor,
-      event: "bind",
-      clientId: client.client_id,
-      connectionId: connection.id,
-      agentId,
-      agentName,
-      detail: "链接密钥绑定设备",
-    });
-  }
   await writeOAuthAudit(env.DB, {
-    actor,
+    actor: admin.username,
     event: "authorize",
     clientId: client.client_id,
-    connectionId: connection.id,
-    agentId,
-    agentName,
-    detail: "grants " + JSON.stringify(grantsSummaryKeys(grants)),
+    appName,
+    detail: "grants " + JSON.stringify(grantsSummaryKeys(requested.permissions)),
   });
   await logOp(env.DB, {
-    actor,
-    module: "Agent",
-    action: bindUsed ? "OAuth 绑定" : "OAuth 授权",
-    targetId: agentId,
-    targetName: agentName,
-    text: `通过 OAuth 把 Agent「${agentName}」授权给客户端「${client.client_name}」` + (bindUsed ? "（链接密钥绑定）" : ""),
+    actor: admin.username,
+    module: "应用",
+    action: "OAuth 授权",
+    targetId: null,
+    targetName: appName,
+    text: `在授权页批准客户端「${client.client_name}」创建应用「${appName}」`,
   });
   const target = new URL(redirectUri);
   target.searchParams.set("code", code);
@@ -418,19 +370,6 @@ function grantsSummaryKeys(grants: AgentPermissions): string[] {
     if (grants.advanced[key].write) keys.push("adv:" + key + ":w");
   }
   return keys;
-}
-
-// 绑定校验：只验证密钥并回身份与基础权限，不建连接（建连接在提交时）。
-async function bindCheck(request: Request, env: Env): Promise<Response> {
-  if (request.method.toUpperCase() !== "POST") return json({ ok: false, error: "方法不允许" }, 405);
-  if (isCrossSite(request)) return json({ ok: false, error: "跨站请求被拒绝" }, 403);
-  const body = await readJsonLimited(request, TOKEN_BODY_BYTES);
-  if (!body.ok) return json({ ok: false, error: body.error }, body.status);
-  const value = (body.value && typeof body.value === "object" && !Array.isArray(body.value) ? body.value : {}) as Record<string, unknown>;
-  const secret = extractLinkSecret(typeof value.link_secret === "string" ? value.link_secret : "");
-  const bound = await bindAgentByLinkSecret(env, secret, Date.now());
-  if (!bound.ok) return json({ ok: false, error: bound.error }, bound.status);
-  return json({ ok: true, agent_name: bound.agentName, permissions: parsePermissions(bound.permissions) });
 }
 
 // ---- 令牌与撤销端点 -----------------------------------------------------------
@@ -495,36 +434,45 @@ export async function handleOAuthPublic(request: Request, env: Env, path: string
     if (method === "POST") return authorizeSubmit(request, env);
     return oauthError("invalid_request", "方法不允许", 405);
   }
-  if (path === "/oauth/bind-check") return bindCheck(request, env);
   if (path === "/oauth/token") return tokenEndpoint(request, env);
   if (path === "/oauth/revoke") return revokeEndpoint(request, env);
   return null;
 }
 
-// ---- 管理端（会话门后） ---------------------------------------------------------
+// ---- 管理端（会话门后）：应用列表 / 改权限 / 查看令牌 / 删除 ----------------------
 
 export async function handleOAuthAdmin(request: Request, env: Env, path: string): Promise<Response | null> {
-  const list = /^\/api\/agents\/([A-Za-z0-9_-]+)\/oauth-connections$/.exec(path);
-  if (list && list[1]) {
+  if (path === "/api/oauth/apps") {
     if (request.method.toUpperCase() !== "GET") return json({ ok: false, error: "方法不允许" }, 405);
-    const connections = await listAgentConnections(env, list[1]);
-    return json({ ok: true, connections });
+    const apps = await listOAuthApps(env);
+    return json({ ok: true, apps });
   }
-  const revoke = /^\/api\/oauth\/connections\/([A-Za-z0-9_-]+)\/revoke$/.exec(path);
-  if (revoke && revoke[1]) {
-    if (request.method.toUpperCase() !== "POST") return json({ ok: false, error: "方法不允许" }, 405);
+  const appMutation = /^\/api\/oauth\/apps\/([A-Za-z0-9_-]+)$/.exec(path);
+  if (appMutation && appMutation[1]) {
+    const method = request.method.toUpperCase();
+    if (method !== "PATCH" && method !== "DELETE") return json({ ok: false, error: "方法不允许" }, 405);
     if (isCrossSite(request)) return json({ ok: false, error: "跨站请求被拒绝" }, 403);
     const actor = await panelActor(request, env);
-    const result = await revokeConnection(env, revoke[1], actor);
+    if (method === "DELETE") {
+      const result = await deleteOAuthApp(env, appMutation[1], actor);
+      if (!result.ok) return json({ ok: false, error: result.error }, result.status);
+      return json({ ok: true });
+    }
+    const body = await readJsonLimited(request, AUTHORIZE_BODY_BYTES);
+    if (!body.ok) return json({ ok: false, error: body.error }, body.status);
+    const value = (body.value && typeof body.value === "object" && !Array.isArray(body.value) ? body.value : {}) as Record<string, unknown>;
+    const parsed = permissionsFromInput(value.permissions);
+    if (!parsed.ok) return json({ ok: false, error: parsed.error }, parsed.status);
+    const result = await updateOAuthAppPermissions(env, appMutation[1], parsed.permissions, actor);
     if (!result.ok) return json({ ok: false, error: result.error }, result.status);
-    return json({ ok: true });
+    return json({ ok: true, app: result.app });
   }
-  const reveal = /^\/api\/oauth\/connections\/([A-Za-z0-9_-]+)\/reveal-tokens$/.exec(path);
+  const reveal = /^\/api\/oauth\/apps\/([A-Za-z0-9_-]+)\/reveal-tokens$/.exec(path);
   if (reveal && reveal[1]) {
     if (request.method.toUpperCase() !== "POST") return json({ ok: false, error: "方法不允许" }, 405);
     if (isCrossSite(request)) return json({ ok: false, error: "跨站请求被拒绝" }, 403);
     const actor = await panelActor(request, env);
-    const result = await revealConnectionTokens(env, reveal[1], actor);
+    const result = await revealAppTokens(env, reveal[1], actor);
     if (!result.ok) return json({ ok: false, error: result.error }, result.status);
     return json({ ok: true, access_token: result.accessToken, refresh_token: result.refreshToken });
   }

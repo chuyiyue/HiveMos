@@ -8,7 +8,7 @@
 // 旧布尔高级开关迁移（soul_write_any → soul_other.write、vault_totp_code →
 // totp.read、machines_secret 丢弃）、新高级形状（agents_other / soul_other /
 // totp 各 read/write）直通与严格布尔、parse/serialize 往返、
-// hasGrant/hasAdvanced、两层交集逐项取与，以及工具校验矩阵的关键格
+// hasGrant/hasAdvanced，以及工具校验矩阵的关键格
 // （machines_get_access 无高级门、2FA 工具挂 totp.read、Soul 归属门：
 // soul 域只覆盖自己名下那一份、读/写他人分别要 soul_other 读/写）。
 //
@@ -44,7 +44,6 @@ const {
   denyAllPermissions,
   hasAdvanced,
   hasGrant,
-  intersectPermissions,
   parsePermissions,
   permissionsFromInput,
   serializePermissions,
@@ -202,21 +201,10 @@ expect("PATCH 对象未知键忽略", compact(permissionsFromInput({ mcp: { read
 expect("PATCH 非对象非数组拒绝", permissionsFromInput("mcp"), { ok: false, status: 400, error: "权限格式不正确" });
 expect("PATCH null 拒绝", permissionsFromInput(null), { ok: false, status: 400, error: "权限格式不正确" });
 
-// ---- 两层交集：普通域与高级域都逐项取与 -------------------------------------
-
-const interA = parsePermissions(
-  '{"soul":{"read":true,"write":true},"advanced":{"soul_other":{"read":true,"write":true},"totp":{"read":true,"write":false}}}',
-);
-const interB = parsePermissions(
-  '{"soul":{"read":true,"write":false},"advanced":{"soul_other":{"read":false,"write":true},"totp":{"read":true,"write":true}}}',
-);
-expect("交集：普通域逐项取与", compact(intersectPermissions(interA, interB)), ["soul:r"]);
-expect("交集：高级域逐项取与", advancedOn(intersectPermissions(interA, interB)), ["soul_other:w", "totp:r"]);
-expect(
-  "交集：连接侧存旧布尔快照先迁移再取与",
-  advancedOn(intersectPermissions(interA, parsePermissions('{"advanced":{"soul_write_any":true,"vault_totp_code":true}}'))),
-  ["soul_other:w", "totp:r"],
-);
+// ---- 权限交集已删除（2026-11-10 OAuth 改应用模型） ---------------------------
+// intersectPermissions 随连接模型一并删除：OAuth 应用的权限就是授权页
+// 勾选的完整矩阵，不再与任何基础权限取交集。旧布尔快照的迁移行为由
+// 上面的 parsePermissions / permissionsFromInput 用例继续覆盖。
 
 // ---- 工具分类表自检 ---------------------------------------------------------
 
@@ -391,4 +379,4 @@ if (failures > 0) {
   console.error(`\n${failures}/${checks} 条不符`);
   process.exit(1);
 }
-console.log(`\n全部通过：${checks} 条检查（旧数组映射 / 旧布尔高级迁移 / 垃圾输入全关 / 新对象直通 / parse-serialize 往返 / hasGrant-hasAdvanced / 两层交集 / PATCH 过渡兼容 / 35 个工具的分类与校验矩阵）`);
+console.log(`\n全部通过：${checks} 条检查（旧数组映射 / 旧布尔高级迁移 / 垃圾输入全关 / 新对象直通 / parse-serialize 往返 / hasGrant-hasAdvanced / PATCH 过渡兼容 / 35 个工具的分类与校验矩阵）`);

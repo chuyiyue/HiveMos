@@ -163,12 +163,12 @@ expect("vault read 无 totp：tools/list 无两工具", PAIR.filter((name) => to
 expect(
   "vault read 无 totp：vault_2fa_list 被拒",
   toolAccessError("vault_2fa_list", vaultRead, "agent-a", {}),
-  "该 Agent 没有 2FA 的读取权限，无法调用这个工具",
+  "该 Agent 没有「操作2FA」的读取权限，无法调用这个工具",
 );
 expect(
   "vault read 无 totp：vault_2fa_get_code 被拒",
   toolAccessError("vault_2fa_get_code", vaultRead, "agent-a", { id: "totp_x" }),
-  "该 Agent 没有 2FA 的读取权限，无法调用这个工具",
+  "该 Agent 没有「操作2FA」的读取权限，无法调用这个工具",
 );
 expect("只有 totp.read 没有 vault read：仍按域拒", toolAccessError("vault_2fa_get_code", codeOnly, "agent-a", {}), "该 Agent 没有 vault 的读取权限，无法调用这个工具");
 

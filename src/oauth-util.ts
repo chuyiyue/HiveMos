@@ -70,26 +70,3 @@ export function isAllowedRedirectUri(raw: string): boolean {
   return false;
 }
 
-// 链接密钥输入既可能是裸令牌，也可能整段粘贴接入地址（…/mcp?token=…）。
-// 能解析出 token 参数时取参数，否则把原文当令牌。取到的值还要过
-// authenticateAgent 的哈希校验，这里只做形状提取。
-export function extractLinkSecret(input: string): string {
-  const trimmed = input.trim();
-  const marker = "token=";
-  const at = trimmed.indexOf(marker);
-  if (at >= 0) {
-    const rest = trimmed.slice(at + marker.length);
-    const end = rest.search(/[&#\s]/);
-    const value = end >= 0 ? rest.slice(0, end) : rest;
-    try {
-      return decodeURIComponent(value);
-    } catch {
-      return value;
-    }
-  }
-  return trimmed;
-}
-
-export async function tokenHashOf(token: string): Promise<string> {
-  return sha256Hex(token);
-}
