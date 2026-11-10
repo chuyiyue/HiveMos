@@ -763,9 +763,9 @@
       "<div class=\"page-tabs manage-tabs\" role=\"tablist\" aria-label=\"Agent 管理\">" +
       "<button type=\"button\" class=\"page-tab\" role=\"tab\" data-mtab=\"overview\" aria-selected=\"" + (initialTab === "overview" ? "true" : "false") + "\">概览</button>" +
       "<button type=\"button\" class=\"page-tab\" role=\"tab\" data-mtab=\"perms\" aria-selected=\"" + (initialTab === "perms" ? "true" : "false") + "\">权限</button>" +
-      "<button type=\"button\" class=\"page-tab\" role=\"tab\" data-mtab=\"records\" aria-selected=\"" + (initialTab === "records" ? "true" : "false") + "\">访问记录</button>" +
+      "<button type=\"button\" class=\"page-tab\" role=\"tab\" data-mtab=\"records\" aria-selected=\"" + (initialTab === "records" ? "true" : "false") + "\">记录</button>" +
       "<button type=\"button\" class=\"page-tab\" role=\"tab\" data-mtab=\"connections\" aria-selected=\"false\">连接</button>" +
-      "<button type=\"button\" class=\"page-tab\" role=\"tab\" data-mtab=\"advanced\" aria-selected=\"" + (initialTab === "advanced" ? "true" : "false") + "\">高级设置</button>" +
+      "<button type=\"button\" class=\"page-tab\" role=\"tab\" data-mtab=\"advanced\" aria-selected=\"" + (initialTab === "advanced" ? "true" : "false") + "\">高级</button>" +
       "</div>" +
       "<div data-mpanel=\"overview\"" + (initialTab === "overview" ? "" : " hidden") + ">" +
       "<dl class=\"kv\">" +
