@@ -238,14 +238,19 @@ await expectThrow(
 expect("soul_patch 登记为 soul write", toolPermissionOf("soul_patch"), { domain: "soul", op: "write" });
 expect("soul_diff 登记为 soul read", toolPermissionOf("soul_diff"), { domain: "soul", op: "read" });
 const soulWriter = parsePermissions('{"soul":{"read":false,"write":true}}');
-const soulAny = parsePermissions('{"soul":{"read":false,"write":true},"advanced":{"soul_write_any":true}}');
+const soulAny = parsePermissions('{"soul":{"read":false,"write":true},"advanced":{"soul_other":{"read":false,"write":true}}}');
 expect("patch 写自己放行", toolAccessError("soul_patch", soulWriter, "AgentA", { agent_name: "AgentA" }), null);
 expect(
   "patch 写他人被拒",
   toolAccessError("soul_patch", soulWriter, "AgentA", { agent_name: "AgentB" }),
-  "只能写自己的 Soul；要代写其他 Agent 的 Soul，需要 soul_write_any 权限",
+  "只能写自己的 Soul；要写其他 Agent 的 Soul，需要「操作其他 Soul」的写入权限",
 );
-expect("patch 写他人 + soul_write_any 放行", toolAccessError("soul_patch", soulAny, "AgentA", { agent_name: "AgentB" }), null);
+expect("patch 写他人 + soul_other.write 放行", toolAccessError("soul_patch", soulAny, "AgentA", { agent_name: "AgentB" }), null);
+expect(
+  "patch 写他人 + 旧 soul_write_any（迁移）放行",
+  toolAccessError("soul_patch", parsePermissions('{"soul":{"read":false,"write":true},"advanced":{"soul_write_any":true}}'), "AgentA", { agent_name: "AgentB" }),
+  null,
+);
 
 // patch 落 pending：全文与分段都不动
 const patched = await soul.patchSoulByName(db, "AgentA", "persona", "I am A.", null, "agt_a", "mcp", T0);
