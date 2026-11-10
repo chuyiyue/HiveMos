@@ -692,6 +692,9 @@
 
   // ---------- 管理弹窗 ----------
 
+  var EYE_SVG = "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z\"/><circle cx=\"12\" cy=\"12\" r=\"3\"/></svg>";
+  var EYE_OFF_SVG = "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M4 4l16 16\"/><path d=\"M2 12s3.5-7 10-7c1.7 0 3.2.4 4.5 1.1M22 12s-3.5 7-10 7c-1.7 0-3.2-.4-4.5-1.1\"/><path d=\"M9.9 9.9a3 3 0 0 0 4.2 4.2\"/></svg>";
+
   function openManage(entry) {
     var state = { icon: entry.icon || "" };
     var body =
@@ -700,11 +703,11 @@
       "<span class=\"subtle\">图标</span></div>" +
       "<label>服务名<input name=\"issuer\" maxlength=\"120\" autocomplete=\"off\" value=\"" + esc(entry.issuer || "") + "\" /></label>" +
       "<label>账号<input name=\"account\" maxlength=\"200\" autocomplete=\"off\" value=\"" + esc(entry.account || "") + "\" /></label>" +
+      "<label>密钥<span class=\"secret-field\"><input type=\"password\" data-totp-secret readonly placeholder=\"••••••••••\" autocomplete=\"off\" />" +
+      "<button type=\"button\" class=\"secret-eye\" data-totp-eye aria-label=\"显示密钥\">" + EYE_SVG + "</button></span></label>" +
       "<label>分组" + C.groupSelect("group_id", S.groups || [], entry.group_id || "") + "</label>" +
       "<label>备注<textarea name=\"note\" rows=\"2\" maxlength=\"300\">" + esc(entry.note || "") + "</textarea></label>" +
       switchHtml("ai_read", entry.ai_read !== false, "允许 AI 读取") +
-      "<div class=\"totp-secret-row\"><span>密钥</span><span data-totp-secret-zone>" +
-      "<button type=\"button\" class=\"secondary\" data-totp-reveal>显示密钥</button></span></div>" +
       "<p class=\"field-error\" data-mng-error hidden></p>" +
       "<div class=\"manage-actions\">" +
       "<button type=\"button\" class=\"danger\" data-confirm-delete data-totp-delete=\"" + esc(entry.id) + "\">删除</button>" +
@@ -714,7 +717,6 @@
     var dialog = ctrl.dialog;
     C.refreshSelects(dialog);
     wireFormBits(dialog, null);
-    var revealArmed = false;
     dialog.addEventListener("click", function (event) {
       var target = event.target;
       if (!(target instanceof Element)) return;
@@ -726,40 +728,43 @@
         });
         return;
       }
-      var revealBtn = target.closest("[data-totp-reveal]");
-      if (revealBtn) {
-        if (!revealArmed) {
-          revealArmed = true;
-          revealBtn.textContent = "再点一次显示";
-          window.setTimeout(function () {
-            revealArmed = false;
-            if (revealBtn.isConnected) revealBtn.textContent = "显示密钥";
-          }, 3500);
+      var eyeBtn = target.closest("[data-totp-eye]");
+      if (eyeBtn) {
+        var secretInput = dialog.querySelector("[data-totp-secret]");
+        if (!secretInput) return;
+        if (secretInput.type === "text") {
+          secretInput.type = "password";
+          eyeBtn.innerHTML = EYE_SVG;
+          eyeBtn.setAttribute("aria-label", "显示密钥");
           return;
         }
-        revealBtn.disabled = true;
+        if (secretInput.getAttribute("data-loaded")) {
+          secretInput.type = "text";
+          eyeBtn.innerHTML = EYE_OFF_SVG;
+          eyeBtn.setAttribute("aria-label", "隐藏密钥");
+          return;
+        }
+        eyeBtn.disabled = true;
         api("POST", "/api/vault/reveal", { kind: "totp", id: entry.id }).then(function (result) {
-          var zone = dialog.querySelector("[data-totp-secret-zone]");
-          if (!zone || !dialog.isConnected) return;
+          eyeBtn.disabled = false;
+          if (!dialog.isConnected) return;
           var value = result.data && result.data.ok && result.data.reveal ? result.data.reveal.value : null;
           if (typeof value === "string" && value) {
-            var shown = esc(value);
-            zone.innerHTML = "<span class=\"copy-text\" data-copy=\"" + shown + "\" data-label=\"" + shown + "\" title=\"点击复制\">" + shown + "</span>";
+            secretInput.value = value;
+            secretInput.setAttribute("data-loaded", "1");
+            secretInput.type = "text";
+            eyeBtn.innerHTML = EYE_OFF_SVG;
+            eyeBtn.setAttribute("aria-label", "隐藏密钥");
           } else {
             C.toast((result.data && result.data.error) || "读取失败", "danger");
-            revealBtn.disabled = false;
-            revealBtn.textContent = "显示密钥";
-            revealArmed = false;
           }
         }).catch(function () {
-          if (!dialog.isConnected) return;
-          C.toast("网络异常，请重试", "danger");
-          revealBtn.disabled = false;
-          revealBtn.textContent = "显示密钥";
-          revealArmed = false;
+          eyeBtn.disabled = false;
+          if (dialog.isConnected) C.toast("网络异常，请重试", "danger");
         });
         return;
       }
+
       if (target.closest("[data-totp-delete]")) {
         api("DELETE", "/api/vault/totp/" + encodeURIComponent(entry.id)).then(function (result) {
           if (result.data && result.data.ok) {
