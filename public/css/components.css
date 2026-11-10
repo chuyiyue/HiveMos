@@ -590,7 +590,9 @@ article.soul-version .ver-rename .manage-actions { margin-top: 0; }
 
 .manage-body > .kv { margin-bottom: 4px; }
 
-.manage-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.manage-actions { display: flex; flex-wrap: nowrap; gap: 8px; margin-top: 14px; }
+.manage-actions > button { min-width: 0; white-space: nowrap; }
+.manage-actions:not(.avatar-picker-foot) > button { flex: 1 1 0; padding-left: 6px; padding-right: 6px; }
 
 .manage-actions button { min-height: 36px; }
 

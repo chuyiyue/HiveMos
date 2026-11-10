@@ -733,7 +733,7 @@
         : "<button type=\"button\" data-agent-act=\"enable\">启用</button>") +
       "<button type=\"button\" class=\"secondary\" data-agent-act=\"move\">设置分组</button>" +
       (active ? "<button type=\"button\" class=\"secondary\" data-agent-act=\"rotate\">轮换令牌</button>" : "") +
-      "<button type=\"button\" class=\"danger\" data-agent-act=\"delete\">删除 Agent</button>" +
+      "<button type=\"button\" class=\"danger\" data-agent-act=\"delete\">删除</button>" +
       "</div>" +
       (active ? "" : "<p class=\"subtle\">这个 Agent 已停用，启用后可继续调用</p>");
     var permSection = partial
