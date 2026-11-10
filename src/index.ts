@@ -42,6 +42,7 @@ import { handleRecordsRequest } from "./records-http";
 import { handleOplogRequest } from "./oplog-http";
 import { handleSystemRequest, recordCronRun } from "./system-http";
 import { handleSettingsRequest } from "./settings-http";
+import { handleMisubRequest } from "./misub-http";
 import { handleBackupRequest } from "./backup-http";
 import { maybeRunScheduledBackup } from "./backup";
 import { cronSweepDue } from "./settings";
@@ -149,6 +150,11 @@ export default {
       // same admin gate.
       const settings = await handleSettingsRequest(request, env, path);
       if (settings) return settings;
+      // MiSub 瘦客户端（云计算资源「代理」页）：只读快照、密封配置、
+      // 脱敏/显示与订阅组触发刷新开关。全部在管理员会话门之后，出站只
+      // 发生在管理员手动请求时，与 cron sweep 无关。
+      const misub = await handleMisubRequest(request, env, path);
+      if (misub) return misub;
       // 同步与备份：目标配置、活体测试与手动备份。
       const backup = await handleBackupRequest(request, env, path);
       if (backup) return backup;
