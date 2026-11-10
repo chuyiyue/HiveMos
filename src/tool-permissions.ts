@@ -39,6 +39,7 @@ export const TOOL_PERMISSIONS: Record<string, ToolPermission> = {
 
   // ---- write ----
   memory_upsert: { domain: "memory", op: "write" },
+  memory_remember: { domain: "memory", op: "write" },
   memory_delete: { domain: "memory", op: "write" },
   soul_update: { domain: "soul", op: "write" },
   tasks_create: { domain: "tasks", op: "write" },

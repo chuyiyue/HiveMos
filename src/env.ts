@@ -17,12 +17,33 @@ export interface AiBinding {
   run(model: string, input: Record<string, unknown>): Promise<unknown>;
 }
 
+// Vectorize 绑定的最小接口。本地 dev 没有索引时绑定缺省，所有调用方都必须
+// 在缺失时直接降级为纯词法检索。
+export interface VectorizeMatch {
+  id: string;
+  score: number;
+  metadata?: Record<string, unknown>;
+}
+
+export interface VectorizeIndex {
+  query(
+    vector: number[],
+    options?: { topK?: number; returnMetadata?: "none" | "indexed" | "all" },
+  ): Promise<{ matches?: VectorizeMatch[] }>;
+  upsert(
+    vectors: Array<{ id: string; values: number[]; metadata?: Record<string, unknown> }>,
+  ): Promise<unknown>;
+  deleteByIds(ids: string[]): Promise<unknown>;
+}
+
 export interface Env {
   ASSETS: {
     fetch(input: Request | string): Promise<Response>;
   };
   DB: D1Database;
   AI?: AiBinding;
+  // 记忆向量索引（hivemos-memories）。本地 dev 不绑定，搜索与回填自动降级。
+  MEMORY_VECTORS?: VectorizeIndex;
   ADMIN_USERNAME?: string;
   BUILD_ID?: string;
   ADMIN_PASSWORD?: string;

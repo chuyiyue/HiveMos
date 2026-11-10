@@ -71,13 +71,13 @@ POST /mcp
 Authorization: Bearer <agent-token>
 ```
 
-也支持把令牌放在接入地址的 `?token=` 参数里（请求头优先）。`tools/list` 只返回该 Agent 权限覆盖的工具，`tools/call` 每次再按域与读写复查。共 30 个工具：
+也支持把令牌放在接入地址的 `?token=` 参数里（请求头优先）。`tools/list` 只返回该 Agent 权限覆盖的工具，`tools/call` 每次再按域与读写复查。共 31 个工具：
 
 | 域 | 工具 |
 | --- | --- |
 | MCP 注册表 | `mcp_search`、`mcp_list`、`mcp_get` |
 | Skills / API | `skills_list`、`skills_get`、`apis_list`、`apis_get` |
-| 记忆 | `memory_list`、`memory_search`、`memory_get`、`memory_upsert`、`memory_delete` |
+| 记忆 | `memory_list`、`memory_search`、`memory_get`、`memory_remember`、`memory_upsert`、`memory_delete` |
 | Soul | `soul_list`、`soul_get`、`soul_update` |
 | 任务 | `tasks_list`、`tasks_create`、`tasks_update`、`tasks_complete` |
 | 日历 | `calendar_list_calendars`、`calendar_list_events`、`calendar_get_event`、`calendar_search`、`calendar_create_event`、`calendar_update_event`、`calendar_delete_event` |

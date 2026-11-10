@@ -41,7 +41,8 @@ import {
   memoryPublic,
   parseTags,
   readMemory,
-  searchMemoriesAudited,
+  rememberMemory,
+  searchMemoriesHybridAudited,
   upsertMemory,
 } from "./memory";
 import type { MemoryRow } from "./memory";
@@ -234,6 +235,20 @@ const TOOLS = [
         full: { type: "boolean", description: "true 时每条返回完整内容" },
       },
       required: ["query"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "memory_remember",
+    description: "用一句话记住一件事：立即同步落一条待补全的记忆并返回 id，拆分、打标、摘要由后台异步完成。适合 Agent 随手记下一条线索；需要精确覆盖已有条目时仍用 memory_upsert",
+    inputSchema: {
+      type: "object",
+      properties: {
+        text: { type: "string", description: "要记住的内容（一句话或一小段）" },
+        title: { type: "string", description: "可选标题；不填则取正文开头作为标题" },
+        tags: { type: "array", items: { type: "string" }, description: "可选标签" },
+      },
+      required: ["text"],
       additionalProperties: false,
     },
   },
@@ -838,8 +853,8 @@ async function callMemoryTool(env: Env, id: unknown, name: string, args: Record<
     const page = parseMemoryPage(args);
     if (!page) return toolResult(id, "游标无效", true);
     const scope = argString(args, "scope");
-    const rows = await searchMemoriesAudited(
-      env.DB,
+    const rows = await searchMemoriesHybridAudited(
+      env,
       query.trim(),
       scope || null,
       { limit: page.limit + 1, offset: page.offset },
@@ -847,6 +862,17 @@ async function callMemoryTool(env: Env, id: unknown, name: string, args: Record<
       now,
     );
     return memoryPageResult(id, rows, page);
+  }
+  if (name === "memory_remember") {
+    const text = argString(args, "text");
+    if (!text || !text.trim()) return toolResult(id, "请提供 text", true);
+    const row = await rememberMemory(
+      env.DB,
+      { text: text.trim(), title: argString(args, "title"), tags: args.tags, scope: args.scope },
+      channel,
+      now,
+    );
+    return toolResult(id, { memory: memoryPublic(row), id: row.id, ai_state: "pending" });
   }
   if (name === "memory_get") {
     const memId = argString(args, "id");

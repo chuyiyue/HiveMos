@@ -1,9 +1,9 @@
-// 记忆的 Workers AI 入口：面板自然语言保存时一次调用完成拆分 + 打标；
-// 已落库的条目（面板直存或 MCP 写入）事后补打标，且只给「标签为空」的
-// 记忆自动打标，已有标签的永不覆盖或补充。AI 是地基不是门槛：
-// 拆分不可用/超时/不可解析时，保存退化为整段一条（ai_state=failed），
-// 绝不因 AI 失败丢掉用户要存的内容。模型口径与注册表打标一致：
-// AI_MODEL 变量可配，缺省 gemma-4-26b-a4b-it，只输出 JSON、解析容错。
+// 记忆的 Workers AI 入口。自然语言保存已移出请求路径：ingest 先同步落一条
+// ai_state=pending 的原文并立即返回，拆分/打标/摘要由 cron 的
+// processPendingMemories 批量补全；AI 不可用或超时时保留 pending，下一轮重试。
+// 已落库条目的事后补标仍只给「标签为空」的记忆，已有标签的永不覆盖或补充。
+// 模型口径与注册表打标一致：AI_MODEL 变量可配，缺省 gemma-4-26b-a4b-it，
+// 只输出 JSON、解析容错。
 
 import { readChatResponse, resolveAiModel } from "./ai-model";
 import type { Env } from "./env";
@@ -13,10 +13,13 @@ import {
   MemError,
   applyAiTags,
   createMemory,
+  deriveMemoryTitle,
   getMemoryRow,
+  invalidateMemoryWithAudit,
   listAllActiveMemories,
   listMemoryTagStats,
   listMemoryTags,
+  listPendingAiMemories,
   normalizeTagKey,
   parseTags,
   rewriteMemoryTags,
@@ -32,6 +35,8 @@ const TAG_MAX_TOKENS = 2048;
 const TAG_TIMEOUT_MS = 45000;
 const MERGE_MAX_TOKENS = 2048;
 const MERGE_TIMEOUT_MS = 45000;
+const SUMMARY_MAX_TOKENS = 1024;
+const SUMMARY_TIMEOUT_MS = 45000;
 const TAG_LIMIT = 3;
 const MERGE_TAG_LIMIT = 60;
 const INGEST_TEXT_MAX = 20000;
@@ -191,6 +196,9 @@ const SPLIT_SYSTEM =
 const TAG_SYSTEM =
   "你负责给一条记忆打标签。你只输出一个 JSON 对象，不要输出其他文字。格式为 {\"tags\":[\"标签\"]}，给 1 到 3 个中文短标签，概括这条记忆的主题";
 
+const SUMMARY_SYSTEM =
+  "你负责给一条记忆写摘要。只输出摘要正文，不要输出其他文字、不要加引号。用一句不超过 60 个汉字的陈述概括这条记忆的核心信息，保留关键事实、偏好或约定";
+
 // 大分类示例：提示词、库满约束、存量收敛共用同一份宽泛类目口径。
 const BIG_CATEGORY_HINT = "偏好、凭据、项目、沟通、设备、账户、约定、环境、流程、人物关系、时间安排、健康、财务";
 
@@ -216,16 +224,30 @@ export async function splitAndTag(env: Env, text: string, existing: string[]): P
   return parseSplitPayload(raw, existing);
 }
 
-export async function suggestTags(env: Env, title: string, content: string, existing: string[]): Promise<string[] | null> {
+export async function suggestTags(
+  env: Env,
+  title: string,
+  content: string,
+  existing: string[] = [],
+): Promise<string[] | null> {
   const user = "标题：" + title + "\n内容：" + (content || "").slice(0, 1200);
   const raw = await runAi(env, tagSystem(TAG_SYSTEM, existing), user, TAG_MAX_TOKENS, TAG_TIMEOUT_MS);
   return parseTagsPayload(raw, existing);
 }
 
-
-function deriveTitle(text: string): string {
-  const flat = text.replace(/\s+/g, " ").trim();
-  return (flat.slice(0, TITLE_MAX_CHARS) || "未命名记忆").trim();
+// cron 补摘要用：只产出一句话，失败返回 null（调用方跳过这条）。
+export async function summarizeMemory(env: Env, title: string, content: string): Promise<string | null> {
+  const raw = await runAi(
+    env,
+    SUMMARY_SYSTEM,
+    "标题：" + title + "\n内容：" + (content || "").slice(0, 1200),
+    SUMMARY_MAX_TOKENS,
+    SUMMARY_TIMEOUT_MS,
+  );
+  if (!raw) return null;
+  const flat = raw.replace(/\s+/g, " ").trim();
+  if (!flat) return null;
+  return flat.slice(0, 120);
 }
 
 // 同作用域同名唯一：拆分点或重复保存撞标题时加序号后缀重试，
@@ -269,11 +291,14 @@ function mergeWithUserTags(aiTags: string[], userTags: string[]): string[] {
 
 export interface IngestResult {
   split: boolean;
+  // pending=true 表示请求路径只落了原文，拆分/打标/摘要交给 cron 异步完成。
+  pending: boolean;
   memories: MemoryRow[];
 }
 
-// 面板自然语言保存：先尝试 AI 拆分，成功逐点落库（ai_state=split）；
-// 任何一步不可用都退化为整段一条（ai_state=failed），保证先存下来。
+// 面板自然语言保存（AI 已移出请求路径）：同步先落一条原文记忆，标
+// ai_state=pending 后立即返回；拆分/打标/摘要由 cron 批量补全。AI 不可用
+// 或失败都不影响这次保存，原文已经安全落库。
 export async function ingestMemories(
   env: Env,
   input: Record<string, unknown>,
@@ -284,34 +309,88 @@ export async function ingestMemories(
   const text = input.text.trim();
   if (text.length > INGEST_TEXT_MAX) throw new MemError("内容过长，请分段保存");
   // 录入不推导置顶或权重：显式不置顶、权重 0，不从内容重要程度换算。
-  const base: Record<string, unknown> = { scope: input.scope, group_id: input.group_id, weight: 0, pinned: false };
+  const base: Record<string, unknown> = {
+    scope: input.scope,
+    group_id: input.group_id,
+    weight: 0,
+    pinned: false,
+    ai_state: "pending",
+    ai_pending_at: now,
+  };
   const userTags: string[] = Array.isArray(input.tags)
     ? Array.from(new Set(input.tags.filter((x): x is string => typeof x === "string").map((x) => x.trim()).filter(Boolean)))
     : [];
-  // 已有标签库：一次查询，提示词注入与 normalize 复用同一份清单。
-  const existing = await listMemoryTags(env.DB);
-  const points = await splitAndTag(env, text, existing);
-  if (points && points.length > 0) {
-    const rows: MemoryRow[] = [];
-    for (const point of points) {
-      rows.push(
-        await insertPoint(
-          env.DB,
-          { ...base, title: deriveTitle(point.content), content: point.content, tags: mergeWithUserTags(point.tags, userTags), ai_state: "split" },
-          channel,
-          now,
-        ),
-      );
-    }
-    return { split: true, memories: rows };
-  }
   const row = await insertPoint(
     env.DB,
-    { ...base, title: deriveTitle(text), content: text, tags: userTags, ai_state: "failed" },
+    { ...base, title: deriveMemoryTitle(text), content: text, tags: userTags },
     channel,
     now,
   );
-  return { split: false, memories: [row] };
+  return { split: false, pending: true, memories: [row] };
+}
+
+export type PendingSplitFn = (env: Env, text: string, existing: string[]) => Promise<SplitPoint[] | null>;
+
+export interface PendingProcessResult {
+  scanned: number;
+  split: number;
+  tagged: number;
+  failed: number;
+}
+
+// cron 批量补全 pending 记忆：拆出多个记忆点时子条目落库、原文以 ai_split
+// 审计软删除；只有一个记忆点时原地补标签。AI 失败保留 pending，下一轮再试。
+export async function processPendingMemories(
+  env: Env,
+  now: number,
+  limit = 10,
+  splitFn: PendingSplitFn = splitAndTag,
+): Promise<PendingProcessResult> {
+  const result: PendingProcessResult = { scanned: 0, split: 0, tagged: 0, failed: 0 };
+  if (!env.AI || typeof env.AI.run !== "function") return result;
+  const rows = await listPendingAiMemories(env.DB, limit);
+  result.scanned = rows.length;
+  if (!rows.length) return result;
+  const existing = await listMemoryTags(env.DB);
+  for (const row of rows) {
+    const points = await splitFn(env, row.content, existing);
+    if (!points || points.length === 0) {
+      // AI 不可用/超时/不可解析：状态保持 pending，下一轮自动重试。
+      result.failed++;
+      continue;
+    }
+    const userTags = parseTags(row.tags_json);
+    const channel: Channel = { actor: "cron", source: row.source || "panel", auditReads: false };
+    if (points.length === 1) {
+      const only = points[0] as SplitPoint;
+      const tags = mergeWithUserTags(only.tags, userTags);
+      await applyAiTags(env.DB, row.id, tags, channel, now);
+      result.tagged++;
+      continue;
+    }
+    const children: string[] = [];
+    for (const point of points) {
+      const child = await insertPoint(
+        env.DB,
+        {
+          scope: row.scope,
+          group_id: row.group_id,
+          weight: 0,
+          pinned: false,
+          title: deriveMemoryTitle(point.content),
+          content: point.content,
+          tags: mergeWithUserTags(point.tags, userTags),
+          ai_state: "split",
+        },
+        channel,
+        now,
+      );
+      children.push(child.id);
+    }
+    await invalidateMemoryWithAudit(env.DB, row.id, channel, now, "ai_split", { children });
+    result.split++;
+  }
+  return result;
 }
 
 export type SuggestTagsFn = (
@@ -602,17 +681,20 @@ export interface MergeTagsResult {
   updated: number;
 }
 
-// 存量近义合并：先算全量映射（含代码侧校验），再一次性落库。
-// AI 不可用或映射不可用 → 抛错，一条都不改。
-export async function mergeSimilarTags(
+export interface TagMergePlan {
+  mapping: Record<string, string>;
+  stats: MemoryTagStat[];
+  converging: boolean;
+}
+
+// 只算“会合并什么”，不落库：cron 把它做成提案，管理员批准后才执行。
+// 判定逻辑与 mergeSimilarTags 共用这一份，禁止复制。
+export async function planSimilarTags(
   env: Env,
-  channel: Channel,
-  now: number,
   ask: MergeMappingFn = askMergeMapping,
-): Promise<MergeTagsResult> {
-  void channel;
+): Promise<TagMergePlan> {
   const stats = await listMemoryTagStats(env.DB);
-  if (stats.length < 2) return { mapping: {}, updated: 0 };
+  if (stats.length < 2) return { mapping: {}, stats, converging: false };
   if (stats.length > MERGE_TAG_LIMIT) {
     throw new MemError("当前有 " + stats.length + " 个标签，超过 " + MERGE_TAG_LIMIT + " 个上限，请先手动整理再合并", 400);
   }
@@ -624,13 +706,22 @@ export async function mergeSimilarTags(
   const plan = converging ? planTagConverge(mapping, stats) : planTagMerge(mapping, stats);
   if (Object.keys(plan).length === 0) {
     if (Object.keys(mapping).length > 0) throw new MemError("AI 返回的标签合并结果不合法，标签没有做任何改动", 502);
-    return { mapping: {}, updated: 0 };
+    return { mapping: {}, stats, converging };
   }
   if (converging && convergeTagTotal(plan, stats) > MAX_MEMORY_TAGS) {
     throw new MemError("AI 未能把标签收敛到 " + MAX_MEMORY_TAGS + " 个以内，标签没有做任何改动", 502);
   }
+  return { mapping: plan, stats, converging };
+}
+
+// 把映射落到记忆上（不改 AI、不再算映射）：批准标签提案与手动合并共用。
+export async function applyTagPlan(
+  env: Env,
+  mapping: Record<string, string>,
+  now: number,
+): Promise<number> {
   const replace = new Map<string, string>();
-  for (const [from, to] of Object.entries(plan)) replace.set(normalizeTagKey(from), to);
+  for (const [from, to] of Object.entries(mapping)) replace.set(normalizeTagKey(from), to);
   const updates: Array<{ id: string; tags: string[] }> = [];
   for (const row of await listAllActiveMemories(env.DB)) {
     const tags = parseTags(row.tags_json);
@@ -638,6 +729,19 @@ export async function mergeSimilarTags(
     if (next.length === tags.length && next.every((tag, index) => tag === tags[index])) continue;
     updates.push({ id: row.id, tags: next });
   }
-  const updated = updates.length ? await rewriteMemoryTags(env.DB, updates, now) : 0;
-  return { mapping: plan, updated };
+  return updates.length ? await rewriteMemoryTags(env.DB, updates, now) : 0;
+}
+
+// 存量近义合并（手动入口）：先算全量映射（含代码侧校验），再一次性落库。
+// AI 不可用或映射不可用 → 抛错，一条都不改。
+export async function mergeSimilarTags(
+  env: Env,
+  channel: Channel,
+  now: number,
+  ask: MergeMappingFn = askMergeMapping,
+): Promise<MergeTagsResult> {
+  void channel;
+  const plan = await planSimilarTags(env, ask);
+  if (Object.keys(plan.mapping).length === 0) return { mapping: {}, updated: 0 };
+  return { mapping: plan.mapping, updated: await applyTagPlan(env, plan.mapping, now) };
 }
