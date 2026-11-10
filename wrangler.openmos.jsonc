@@ -5,10 +5,11 @@
   // 2026-10-30 is the newest date this Wrangler's workerd accepts.
   "compatibility_date": "2026-10-30",
   "workers_dev": true,
-  // Custom domain picked by the owner 2026-11-10 (zone oonn.pp.ua is on
-  // this Cloudflare account; mos.loko.pp.ua stays with the hivemos
-  // script for now).
-  "routes": [{ "pattern": "mos.oonn.pp.ua", "custom_domain": true }],
+  // Custom domain mos.oonn.pp.ua is PENDING: its zone is on Cloudflare
+  // but not visible from this account's deploy token (wrangler error
+  // 10082 "Can't infer zone from route", 2026-11-10), so the route is
+  // intentionally not declared yet. Adding it back is a one-line change
+  // once the zone/account question is resolved.
   "assets": {
     "directory": "./public",
     "binding": "ASSETS",
