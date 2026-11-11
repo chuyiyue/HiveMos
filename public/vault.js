@@ -6,7 +6,7 @@
    邮箱 SMTP 密码只在管理弹窗里经同一条 reveal 取出后全量展示，点文本复制。 */
 (function () {
   var C = window.HiveCommon;
-  var activeTab = location.hash === "#gateway" ? "gateway" : location.hash === "#email" ? "email" : location.hash === "#totp" ? "totp" : "vault";
+  var activeTab = location.hash === "#gateway" ? "gateway" : location.hash === "#email" ? "email" : location.hash === "#totp" ? "totp" : location.hash === "#guide" ? "guide" : "vault";
 
   var ENTRIES = null;
   var GROUPS = null;
@@ -616,6 +616,9 @@
       '<button class="page-tab" type="button" role="tab" data-tab="gateway" aria-selected="' +
       (activeTab === "gateway" ? "true" : "false") +
       '">模型网关</button>' +
+      '<button class="page-tab" type="button" role="tab" data-tab="guide" aria-selected="' +
+      (activeTab === "guide" ? "true" : "false") +
+      '">外部指引</button>' +
       "</div>" +
       '<div class="page-head-actions">' +
       (activeTab === "vault"
@@ -624,7 +627,9 @@
           ? C.addBar({ addLabel: "添加网关", addAction: "add-gateway", groupAction: "add-vgroup" })
           : activeTab === "totp"
             ? '<button type=\"button\" class=\"secondary\" data-totp-act=\"scan\" data-totp-add-btn>扫码添加</button><button type=\"button\" class=\"secondary\" data-totp-act=\"io\" data-totp-add-btn>导入导出</button><button type=\"button\" class=\"add-button\" data-totp-act=\"add\" data-totp-add-btn>手动添加</button>'
-            : '<button type="button" class="add-button" data-add="email">添加邮箱</button>') +
+            : activeTab === "guide"
+              ? ""
+              : '<button type="button" class="add-button" data-add="email">添加邮箱</button>') +
       "</div></div>";
     C.mount(
       C.layout(
@@ -632,10 +637,12 @@
           "<div data-panel=\"vault\"" + (activeTab === "vault" ? "" : " hidden") + ">" + vaultHtml + "</div>" +
           "<div data-panel=\"gateway\"" + (activeTab === "gateway" ? "" : " hidden") + ">" + gatewayHtml + "</div>" +
           "<div data-panel=\"email\"" + (activeTab === "email" ? "" : " hidden") + ">" + emailHtml + "</div>" +
-          "<div data-panel=\"totp\"" + (activeTab === "totp" ? "" : " hidden") + "><div data-totp-root></div></div>"
+          "<div data-panel=\"totp\"" + (activeTab === "totp" ? "" : " hidden") + "><div data-totp-root></div></div>" +
+          "<div data-panel=\"guide\"" + (activeTab === "guide" ? "" : " hidden") + "><div data-guide-root></div></div>"
       )
     );
     if (window.HiveVaultTotp) window.HiveVaultTotp.afterRender(activeTab === "totp");
+    if (window.HiveVaultGuide) window.HiveVaultGuide.afterRender(activeTab === "guide");
   }
 
   function submitForm(ctrl, request, onOk) {
