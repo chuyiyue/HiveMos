@@ -46,6 +46,7 @@ import { handleMisubRequest } from "./misub-http";
 import { handleBackupRequest } from "./backup-http";
 import { maybeRunScheduledBackup } from "./backup";
 import { cronSweepDue } from "./settings";
+import { runMisubSweep } from "./misub-store";
 import { handleVaultRequest } from "./vault-http";
 import { handleVaultGuideRequest } from "./vault-guide-http";
 import { handleOAuthAdmin, handleOAuthPublic } from "./oauth-http";
@@ -182,6 +183,17 @@ export default {
     // chosen in 功能设置. Between due runs this handler returns without
     // touching anything: no snapshot refresh, no mirror sync, no probe, and
     // no stamp — the stamp only moves when a sweep actually ran.
+    //
+    // Exception: the MiSub node store (misub-store.ts) is gated by its own
+    // per-connection / per-subscription intervals (default 6h), so it runs on
+    // every hourly trigger before the global gate. It spends at most
+    // SWEEP_SUBREQUEST_BUDGET outbound fetches per invocation (oldest first),
+    // leaving the rest of the free-plan budget to the sweep below.
+    try {
+      await runMisubSweep(env, now);
+    } catch {
+      // Failures are recorded per row; the old node lists stay in D1.
+    }
     try {
       if (!(await cronSweepDue(env.DB, now))) return;
     } catch {
