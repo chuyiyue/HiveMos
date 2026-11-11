@@ -12,8 +12,10 @@
    分组：三页签共用一个分组池（groups 表 scope=machines），按分组分区
    展示、未分组置后；分组可改名/删除，删组后条目回未分组、不删条目。
    代理页签是 MiSub 瘦客户端：服务商连接的地址与令牌密封保存，界面只显示
-   令牌末 4 位，快照走 /api/misub；全部节点 / 机场订阅节点走
-   /api/misub/nodes 与 /api/misub/subscriptions/:id/nodes（不落库），
+   令牌末 4 位。MiSub 列表与机场订阅节点存在 D1（0078），页面只读 D1、
+   打开时不出站：快照 /api/misub，全部节点 /api/misub/nodes，单个订阅
+   /api/misub/subscriptions/:id/nodes。更新靠每小时 cron（按连接/订阅的
+   自动拉取间隔，默认 6 小时）和手动「同步节点」/「拉取节点」（5 分钟冷却）；
    复制链接先走 reveal 写操作日志。 */
 (function () {
   var C = window.HiveCommon;
@@ -617,7 +619,7 @@
       (activeTab === "proxy"
         ? state.misubMetaLoaded
           ? (misubActiveConn()
-              ? '<button type="button" class="secondary add-group-button" data-mshead="reload">刷新</button>'
+              ? misubSyncButtonHtml("secondary add-group-button")
               : "") +
             '<button type="button" class="secondary add-group-button" data-misub-connections>服务商设置</button>' +
             '<button type="button" class="add-button misub-add-conn" data-misub-add>添加服务商</button>'
@@ -2765,6 +2767,164 @@
     return when && when !== "—" ? result + " · " + when : result;
   }
 
+  // ---- 同步状态与冷却 ----
+  var misubCooldownTimer = 0;
+
+  function misubSyncInfo() {
+    return (state.misub && state.misub.sync) || (state.misubMeta && state.misubMeta.sync) || null;
+  }
+
+  function misubCooling(ts) {
+    return !!ts && Number(ts) > Date.now();
+  }
+
+  function misubMinutesUntil(ts) {
+    return Math.max(1, Math.ceil((Number(ts) - Date.now()) / 60000));
+  }
+
+  function misubAgo(ts) {
+    if (!ts) return "从未";
+    var diff = Date.now() - Number(ts);
+    if (diff < 60000) return "刚刚";
+    if (diff < 3600000) return Math.floor(diff / 60000) + " 分钟前";
+    if (diff < 86400000) return Math.floor(diff / 3600000) + " 小时前";
+    return fmtLocalTime(ts);
+  }
+
+  function misubIntervalLabel(hours) {
+    var h = Number(hours);
+    return h > 0 ? "每 " + h + " 小时" : "已关闭";
+  }
+
+  function misubNextAutoLabel(ts, hours) {
+    if (!(Number(hours) > 0)) return "不自动拉取";
+    if (!ts || Number(ts) <= Date.now()) return "下一个整点";
+    return fmtLocalTime(ts);
+  }
+
+  // 冷却结束时重画一次，让按钮自己恢复可点。
+  function scheduleMisubCooldownRepaint(ts) {
+    if (!misubCooling(ts)) return;
+    var wait = Math.min(Number(ts) - Date.now() + 500, 6 * 60 * 1000);
+    if (misubCooldownTimer) clearTimeout(misubCooldownTimer);
+    misubCooldownTimer = setTimeout(function () {
+      misubCooldownTimer = 0;
+      if (activeTab === "proxy") render();
+    }, wait);
+  }
+
+  function misubSyncButtonHtml(cls) {
+    var sync = misubSyncInfo();
+    var next = sync && sync.next_manual_at;
+    if (misubCooling(next)) {
+      scheduleMisubCooldownRepaint(next);
+      return (
+        '<button type="button" class="' + cls + '" data-misub-sync disabled title="手动同步有 5 分钟冷却，' +
+        C.escapeHtml(fmtLocalTime(next)) + ' 后可再同步">' + misubMinutesUntil(next) + " 分钟后可同步</button>"
+      );
+    }
+    return '<button type="button" class="' + cls + '" data-misub-sync title="从 MiSub 拉列表，并拉取最久没更新的机场订阅">同步节点</button>';
+  }
+
+  function misubSyncBarHtml() {
+    var sync = misubSyncInfo();
+    if (!sync) return "";
+    var parts = [];
+    if (sync.synced_at) parts.push("上次同步 " + misubAgo(sync.synced_at) + "（" + fmtLocalTime(sync.synced_at) + "）");
+    parts.push("自动拉取 " + misubIntervalLabel(sync.auto_interval_hours));
+    if (Number(sync.auto_interval_hours) > 0) parts.push("下次自动 " + misubNextAutoLabel(sync.next_auto_at, sync.auto_interval_hours));
+    if (misubCooling(sync.next_manual_at)) parts.push(fmtLocalTime(sync.next_manual_at) + " 后可再手动同步");
+    var html = '<p class="subtle misub-sync-bar">' + C.escapeHtml(parts.join(" · ")) + "</p>";
+    if (sync.last_attempt_at && !sync.last_ok && sync.last_error) {
+      html +=
+        '<p class="callout warn" role="status">最近一次同步 MiSub 列表失败（' + C.escapeHtml(fmtLocalTime(sync.last_attempt_at)) + "）：" +
+        C.escapeHtml(sync.last_error) + (sync.synced_at ? "。下面仍是上次成功同步的数据" : "") + "</p>";
+    }
+    return html;
+  }
+
+  function misubNeverSyncedHtml() {
+    var sync = misubSyncInfo() || {};
+    return (
+      misubSyncBarHtml() +
+      '<div class="misub-never">' +
+      C.emptyState(
+        "还没有同步过",
+        "节点数据保存在 D1，打开页面不会访问 MiSub。点「同步节点」拉取一次，之后按" +
+          misubIntervalLabel(sync.auto_interval_hours) + "自动更新"
+      ) +
+      '<div class="manage-actions">' + misubSyncButtonHtml("add-button misub-sync-primary") + "</div>" +
+      "</div>"
+    );
+  }
+
+  function misubSyncNow(button) {
+    if (!button || button.disabled) return;
+    button.disabled = true;
+    button.textContent = "同步中…";
+    api("POST", "/api/misub/sync")
+      .then(function (res) {
+        var data = res.data || {};
+        if (!data.ok) {
+          C.toast(data.error || "同步失败，请稍后重试", "danger");
+        } else {
+          var parts = [];
+          if (!data.snapshot_ok) parts.push("MiSub 列表失败：" + (data.snapshot_error || "未知错误"));
+          var tried = (data.fetched || 0) + ((data.failed && data.failed.length) || 0);
+          parts.push("拉取了 " + tried + " 个机场订阅");
+          if (data.failed && data.failed.length) parts.push(data.failed.length + " 个失败（保留上次的节点）");
+          if (data.remaining) parts.push(data.remaining + " 个留到下次");
+          C.toast("同步完成：" + parts.join("，"), data.snapshot_ok && !(data.failed && data.failed.length) ? undefined : "danger");
+        }
+        resetMisubAll();
+        return loadMisubSnapshot(false, true).then(function () {
+          if (misubSegment === "all" && activeTab === "proxy") loadMisubAllNodes();
+        });
+      })
+      .catch(function () {
+        if (button.isConnected) {
+          button.disabled = false;
+          button.textContent = "同步节点";
+        }
+        C.toast("同步失败，请稍后重试", "danger");
+      });
+  }
+
+  function misubFetchSub(id, button, after) {
+    if (!id || !button || button.disabled) return;
+    button.disabled = true;
+    button.textContent = "拉取中…";
+    api("POST", "/api/misub/subscriptions/" + encodeURIComponent(id) + "/fetch")
+      .then(function (res) {
+        var data = res.data || {};
+        if (!data.ok) C.toast(data.error || "拉取失败", "danger");
+        else if (!data.fetch_ok) C.toast("拉取失败：" + (data.error || "未知错误") + "，保留上次的节点", "danger");
+        else C.toast("已拉取 " + misubCount(data.node_count) + " 个节点");
+        resetMisubAll();
+        if (after) after();
+        return loadMisubSnapshot(false, true);
+      })
+      .catch(function () {
+        if (button.isConnected) {
+          button.disabled = false;
+          button.textContent = "拉取节点";
+        }
+        C.toast("拉取失败，请稍后重试", "danger");
+      });
+  }
+
+  function misubFetchButtonHtml(sub, extraAttr) {
+    if (misubCooling(sub.next_manual_at)) {
+      scheduleMisubCooldownRepaint(sub.next_manual_at);
+      return (
+        '<button type="button" class="secondary" disabled title="' + C.escapeHtml(fmtLocalTime(sub.next_manual_at)) +
+        ' 后可再拉取">' + misubMinutesUntil(sub.next_manual_at) + " 分钟后可拉取</button>"
+      );
+    }
+    if (sub.enabled === false) return "";
+    return '<button type="button" class="secondary" ' + extraAttr + ">拉取节点</button>";
+  }
+
   // 只记录连接元信息，不出站；当前连接变化时清掉旧快照，避免串数据。
   function applyMisubMeta(res) {
     state.misubMetaLoaded = true;
@@ -2814,7 +2974,7 @@
     state.misubSnapshotLoading = true;
     if (!state.misub) state.misubError = "";
     render();
-    return api("GET", "/api/misub" + (fresh ? "?fresh=1" : ""))
+    return api("GET", "/api/misub")
       .then(function (res) {
         // 请求期间切换了当前连接：丢弃旧连接的结果，交给新一轮加载。
         if (misubActiveId() !== requestActive) return;
@@ -2823,6 +2983,8 @@
           state.misub = res.data;
           state.misubSnapshotLoaded = true;
           state.misubError = "";
+          if (state.misubMeta && res.data.sync) state.misubMeta.sync = res.data.sync;
+          if (misubPanelCtrl && misubPanelCtrl.dialog.open) paintMisubPanel();
           if (state.misubMeta) {
             if (Array.isArray(res.data.connections)) state.misubMeta.connections = res.data.connections;
             if (typeof res.data.active_id === "string") state.misubMeta.active_id = res.data.active_id;
@@ -2926,7 +3088,13 @@
   function misubSubscriptionCard(item) {
     var used = (Number(item.upload) || 0) + (Number(item.download) || 0);
     var total = Number(item.total) || 0;
-    var facts = [["节点", misubCount(item.node_count) + " 个"]];
+    var facts = [["MiSub 节点数", misubCount(item.node_count) + " 个"]];
+    facts.push(["已存节点", item.last_fetch_success_at ? misubCount(item.fetched_node_count) + " 个" : "—"]);
+    facts.push(["节点拉取", C.escapeHtml(!item.last_fetch_at ? "尚未拉取" : (item.last_fetch_ok ? "成功" : "失败") + " · " + misubAgo(item.last_fetch_at))]);
+    if (item.enabled !== false) {
+      facts.push(["自动拉取", C.escapeHtml(misubIntervalLabel(item.effective_interval_hours) + (item.interval_hours == null ? "（跟随连接）" : "（单独设置）"))]);
+      if (Number(item.effective_interval_hours) > 0) facts.push(["下次自动", C.escapeHtml(misubNextAutoLabel(item.next_auto_at, item.effective_interval_hours))]);
+    }
     if (item.url_masked) facts.push(["订阅地址", '<code class="misub-mono">' + C.escapeHtml(item.url_masked) + "</code>"]);
     if (item.group) facts.push(["分组", C.escapeHtml(item.group)]);
     facts.push(["流量", fmtBytes(used) + " / " + fmtBytes(total)]);
@@ -2944,17 +3112,24 @@
     var extra =
       misubMeter(used, total) +
       (item.last_error
-        ? '<p class="callout danger" role="alert">' + C.escapeHtml(item.last_error) + "</p>"
+        ? '<p class="callout danger" role="alert">MiSub 记录的错误：' + C.escapeHtml(item.last_error) + "</p>"
+        : "") +
+      (item.last_fetch_at && !item.last_fetch_ok
+        ? '<p class="callout warn" role="status">节点拉取失败（' + C.escapeHtml(fmtLocalTime(item.last_fetch_at)) + "）：" +
+          C.escapeHtml(item.last_fetch_error || "未知错误") +
+          (item.last_fetch_success_at ? "。仍保留 " + C.escapeHtml(fmtLocalTime(item.last_fetch_success_at)) + " 拉到的节点" : "") + "</p>"
         : "");
     var sid = C.escapeHtml(item.id);
     return C.record({
       id: item.id,
       title: item.name || "未命名订阅",
+      className: "misub-sub-card",
       statusHtml: misubDisabledBadge(item) + (expired ? C.badge("已过期", "warn") : ""),
       extra: extra,
       facts: facts,
       actions:
         '<button type="button" class="secondary" data-mssub-nodes="' + sid + '">查看节点</button>' +
+        misubFetchButtonHtml(item, 'data-mssub-fetch="' + sid + '"') +
         (misubConfig().refresh_enabled
           ? '<button type="button" class="secondary" data-mssub-refresh="' + sid + '">触发刷新</button>'
           : ""),
@@ -3115,34 +3290,34 @@
       '<div class="misub-toolbar">' +
       '<input type="search" class="misub-search" ' + attr + ' placeholder="' + C.escapeHtml(placeholder) +
       '" autocomplete="off" value="' + C.escapeHtml(misubFilter.q) + '" />' +
-      (misubSegment === "all"
-        ? '<button type="button" class="secondary" data-misub-all-reload' + (misubAll.loading ? " disabled" : "") + ">" +
-          (misubAll.loading ? "拉取中…" : "重新拉取机场节点") + "</button>"
-        : "") +
+      (misubSegment === "all" ? misubSyncButtonHtml("secondary") : "") +
       "</div>"
     );
   }
 
   function misubAllStatusHtml() {
-    if (misubAll.loading && !misubAll.data) return C.emptyState("正在拉取机场订阅", "Worker 会逐个打开机场订阅地址读取节点，订阅多时需要十几秒");
+    if (misubAll.loading && !misubAll.data) return C.emptyState("正在读取", "");
     if (misubAll.error) return '<p class="callout danger" role="alert">' + C.escapeHtml(misubAll.error) + "</p>";
     var data = misubAll.data;
     if (!data) return "";
     var subs = (data.sources || []).filter(function (src) { return src.type === "subscription"; });
-    var failed = subs.filter(function (src) { return !src.ok && !src.skipped; });
-    var skipped = subs.filter(function (src) { return src.skipped; });
-    var okCount = subs.length - failed.length - skipped.length;
-    var text = "已读取 " + okCount + " 个机场订阅" +
-      (failed.length ? "，" + failed.length + " 个读取失败" : "") +
-      (skipped.length ? "，跳过 " + skipped.length + " 个（" + skipped.map(function (src) { return (src.name || "未命名订阅") + "：" + src.error; }).join("；") + "）" : "") +
-      " · 拉取于 " + fmtLocalTime(data.fetched_at);
+    var off = subs.filter(function (src) { return src.enabled === false; });
+    var live = subs.filter(function (src) { return src.enabled !== false; });
+    var never = live.filter(function (src) { return !src.last_fetch_at; });
+    var failed = live.filter(function (src) { return src.last_fetch_at && !src.last_fetch_ok; });
+    var okCount = live.length - never.length - failed.length;
+    var text = okCount + " 个机场订阅已拉到节点" +
+      (failed.length ? "，" + failed.length + " 个最近一次拉取失败" : "") +
+      (never.length ? "，" + never.length + " 个还没拉取" : "") +
+      (off.length ? "，" + off.length + " 个已停用不拉取" : "");
     return (
       '<p class="subtle">' + C.escapeHtml(text) + "</p>" +
       (failed.length
         ? '<div class="callout warn misub-source-errors" role="status"><ul>' +
           failed
             .map(function (src) {
-              return "<li>" + C.escapeHtml((src.name || "未命名订阅") + "：" + (src.error || "读取失败")) + "</li>";
+              return "<li>" + C.escapeHtml((src.name || "未命名订阅") + "：" + (src.last_fetch_error || "拉取失败") +
+                (src.last_fetch_success_at ? "（保留 " + fmtLocalTime(src.last_fetch_success_at) + " 的 " + src.count + " 个节点）" : "")) + "</li>";
             })
             .join("") +
           "</ul></div>"
@@ -3157,7 +3332,7 @@
     var loadingAll = withSource && misubAll.loading && !misubAll.data;
     if (!nodes.length && !loadingAll) {
       return misubSearchHtml("搜索节点名、服务器、备注", "data-misub-search") + status +
-        '<p class="subtle">' + (withSource ? "还没有节点：MiSub 里没有手工节点，机场订阅也没读到节点" : "MiSub 里还没有手工节点") + "</p>";
+        '<p class="subtle">' + (withSource ? "还没有节点：MiSub 里没有手工节点，机场订阅也还没拉到节点" : "MiSub 里还没有手工节点") + "</p>";
     }
     return (
       misubSearchHtml("搜索节点名、服务器、备注", "data-misub-search") +
@@ -3208,14 +3383,14 @@
     rows.innerHTML = misubRowsHtml(nodes, misubFilter, withSource, misubShowLimit, false);
   }
 
-  function loadMisubAllNodes(fresh) {
+  function loadMisubAllNodes() {
     var connId = misubActiveId();
     if (!connId || misubAll.loading) return;
-    if (!fresh && misubAll.data && misubAll.connId === connId) return;
+    if (misubAll.data && misubAll.connId === connId) return;
     misubAll.loading = true;
     misubAll.error = "";
     updateMisubList();
-    api("GET", "/api/misub/nodes" + (fresh ? "?fresh=1" : ""))
+    api("GET", "/api/misub/nodes")
       .then(function (res) {
         if (misubActiveId() !== connId) return;
         misubAll.loading = false;
@@ -3309,7 +3484,7 @@
       });
   }
 
-  // 机场订阅详情：拉一次订阅原文，列出节点（脱敏），可搜索、复制。
+  // 机场订阅详情：读 D1 里最近一次成功拉到的节点（脱敏），可搜索、复制、手动再拉一次。
   function openMisubSubNodes(sub) {
     var filter = { q: "", protocol: "", region: "", source: "" };
     var limit = MISUB_PAGE;
@@ -3317,33 +3492,47 @@
     var ctrl = C.openManageDialog({
       title: (sub.name || "机场订阅") + " · 节点",
       size: "lg",
-      bodyHtml: C.emptyState("正在拉取订阅", "Worker 正在打开机场订阅地址读取节点"),
+      bodyHtml: C.emptyState("正在读取", ""),
     });
     function rowsHtml() {
       return result ? misubRowsHtml(result.nodes || [], filter, false, limit, true) : "";
     }
     function infoHtml() {
+      var st = result.state || {};
       var rows = [["订阅地址", '<code class="misub-mono">' + C.escapeHtml(sub.url_masked || "—") + "</code>"]];
-      rows.push(["节点", String((result.nodes || []).length) + " 个" + (result.truncated ? "（只读取了前 3000 个）" : "")]);
-      rows.push(["内容格式", result.format === "clash" ? "Clash 配置（无原始链接，不能复制）" : result.format === "base64" ? "base64 链接列表" : "明文链接列表"]);
-      rows.push(["拉取时间", C.escapeHtml(fmtLocalTime(result.fetched_at))]);
-      var info = result.user_info;
+      rows.push(["最近拉取", C.escapeHtml(st.last_fetch_at ? (st.last_fetch_ok ? "成功" : "失败") + " · " + fmtLocalTime(st.last_fetch_at) : "尚未拉取")]);
+      if (st.last_fetch_at && !st.last_fetch_ok) rows.push(["失败原因", C.escapeHtml(st.last_fetch_error || "未知错误")]);
+      if (st.last_fetch_success_at) {
+        rows.push(["节点", String((result.nodes || []).length) + " 个（" + C.escapeHtml(fmtLocalTime(st.last_fetch_success_at)) + " 拉到）" + (st.fetch_truncated ? "，只保存了前一部分" : "")]);
+        rows.push(["内容格式", st.fetch_format === "clash" ? "Clash 配置（无原始链接，不能复制）" : st.fetch_format === "base64" ? "base64 链接列表" : "明文链接列表"]);
+      }
+      rows.push(["自动拉取", C.escapeHtml(misubIntervalLabel(st.effective_interval_hours) + (st.interval_hours == null ? "（跟随连接）" : "（单独设置）") +
+        (Number(st.effective_interval_hours) > 0 ? " · 下次 " + misubNextAutoLabel(st.next_auto_at, st.effective_interval_hours) : ""))]);
+      var info = st.live_user_info;
       if (info) {
         rows.push(["实时流量", fmtBytes((info.upload || 0) + (info.download || 0)) + " / " + fmtBytes(info.total || 0)]);
         if (info.expire) rows.push(["到期", fmtDate(info.expire * 1000)]);
       }
       return '<dl class="kv">' + rows.map(function (r) { return "<div><dt>" + r[0] + "</dt><dd>" + r[1] + "</dd></div>"; }).join("") + "</dl>";
     }
+    function fetchBtn() {
+      var st = (result && result.state) || {};
+      return misubFetchButtonHtml({ enabled: sub.enabled, next_manual_at: st.next_manual_at }, "data-mssub-reload");
+    }
     function paint() {
       if (!result) return;
       var nodes = result.nodes || [];
+      var st = result.state || {};
       ctrl.setBody(
         infoHtml() +
           '<div class="misub-toolbar"><input type="search" class="misub-search" data-mssub-search placeholder="搜索节点名或服务器" autocomplete="off" value="' +
-          C.escapeHtml(filter.q) + '" />' +
-          '<button type="button" class="secondary" data-mssub-reload>重新拉取</button></div>' +
+          C.escapeHtml(filter.q) + '" />' + fetchBtn() + "</div>" +
           '<div data-mssub-chips>' + misubChipsHtml(nodes, filter, false) + "</div>" +
-          '<div data-mssub-rows>' + (nodes.length ? rowsHtml() : '<p class="subtle">这个订阅里没有读到节点</p>') + "</div>"
+          '<div data-mssub-rows>' +
+          (nodes.length
+            ? rowsHtml()
+            : '<p class="subtle">' + (st.last_fetch_success_at ? "这个订阅里没有读到节点" : "还没有拉取过这个订阅的节点：等自动拉取，或点「拉取节点」") + "</p>") +
+          "</div>"
       );
     }
     function repaintRows() {
@@ -3352,23 +3541,19 @@
       if (chips) chips.innerHTML = misubChipsHtml(result.nodes || [], filter, false);
       if (rows) rows.innerHTML = rowsHtml();
     }
-    function load(fresh) {
-      api("GET", "/api/misub/subscriptions/" + encodeURIComponent(sub.id) + "/nodes" + (fresh ? "?fresh=1" : ""))
+    function load() {
+      api("GET", "/api/misub/subscriptions/" + encodeURIComponent(sub.id) + "/nodes")
         .then(function (res) {
           if (!ctrl.dialog.open) return;
           if (!res.data || !res.data.ok) {
-            ctrl.setBody(
-              '<p class="callout danger" role="alert">' + C.escapeHtml((res.data && res.data.error) || "拉取失败") + "</p>" +
-                '<p class="subtle">MiSub 的管理接口不提供订阅里的具体节点，这里由 HiveMos 直接读取机场订阅地址；机场拦截 Cloudflare 出口时会失败</p>' +
-                '<div class="manage-actions"><button type="button" class="secondary" data-mssub-reload>重试</button></div>'
-            );
+            ctrl.setBody('<p class="callout danger" role="alert">' + C.escapeHtml((res.data && res.data.error) || "读取失败") + "</p>");
             return;
           }
           result = res.data;
           paint();
         })
         .catch(function () {
-          if (ctrl.dialog.open) ctrl.setBody('<p class="callout danger" role="alert">拉取失败，请稍后重试</p>');
+          if (ctrl.dialog.open) ctrl.setBody('<p class="callout danger" role="alert">读取失败，请稍后重试</p>');
         });
     }
     ctrl.dialog.addEventListener("input", function (event) {
@@ -3394,10 +3579,8 @@
         return;
       }
       var reload = t.closest("[data-mssub-reload]");
-      if (reload) {
-        result = null;
-        ctrl.setBody(C.emptyState("正在拉取订阅", ""));
-        load(true);
+      if (reload && !reload.disabled) {
+        misubFetchSub(sub.id, reload, function () { if (ctrl.dialog.open) load(); });
         return;
       }
       var copyBtn = t.closest("[data-msnode-copy]");
@@ -3405,7 +3588,7 @@
       var showBtn = t.closest("[data-msnode-show]");
       if (showBtn) return void misubNodeShow(showBtn);
     });
-    load(false);
+    load();
   }
 
   function refreshMisubSubscription(id, button) {
@@ -3525,16 +3708,17 @@
     var config = misubConfig();
     var baseUrl = conn.base_url || config.base_url || "";
     var hint = "当前连接 · " + (conn.name || "未命名连接") + " · " + baseUrl;
-    if (state.misub) hint += " · 上次获取 " + fmtLocalTime(state.misub.fetched_at);
     if (!state.misub) {
       if (state.misubSnapshotLoading) return C.section("MiSub", hint, C.emptyState("正在加载", "正在读取 MiSub 数据"));
       if (state.misubError) return misubErrorState(conn, baseUrl, hint);
       return C.section("MiSub", hint, C.emptyState("正在加载", ""));
     }
+    if (state.misub.sync && state.misub.sync.never_synced) return C.section("MiSub", hint, misubNeverSyncedHtml());
     if (misubSegment === "all" && !misubAll.loading && !(misubAll.data && misubAll.connId === misubActiveId()) && !misubAll.error) {
-      setTimeout(function () { loadMisubAllNodes(false); }, 0);
+      setTimeout(function () { loadMisubAllNodes(); }, 0);
     }
     var body =
+      misubSyncBarHtml() +
       misubOverview() +
       '<div class="stack">' +
       misubSegmented() +
@@ -3721,6 +3905,7 @@
       ["令牌", conn.token_tail ? "末 4 位 " + C.escapeHtml(conn.token_tail) : "已保存"],
       ["最近测试", C.escapeHtml(misubTestSummary(conn))],
       ["订阅 UA", C.escapeHtml(conn.node_ua || "默认 v2rayN/7.23")],
+      ["自动拉取", C.escapeHtml(misubIntervalLabel(conn.auto_interval_hours))],
       ["触发刷新", conn.refresh_enabled ? "已允许" : "未允许"],
       ["创建时间", C.escapeHtml(misubTimeLabel(conn.created_at))],
     ];
@@ -3787,11 +3972,115 @@
       "</div>" +
       "</form>" +
       "</section>" +
+      misubFreqSectionHtml(conn) +
       '<div class="manage-actions conn-danger-row">' +
       '<button type="button" class="danger" data-misub-delete="' + cid + '">删除连接</button>' +
       "</div>" +
       "</div>"
     );
+  }
+
+  var MISUB_INTERVAL_CHOICES = [1, 3, 6, 12, 24, 48, 72, 168];
+
+  function misubIntervalSelectHtml(subId, current) {
+    var opts = [["", "跟随连接"], ["0", "不自动拉取"]].concat(
+      MISUB_INTERVAL_CHOICES.map(function (h) { return [String(h), "每 " + h + " 小时"]; })
+    );
+    var cur = current == null ? "" : String(current);
+    if (cur && opts.every(function (o) { return o[0] !== cur; })) opts.push([cur, "每 " + cur + " 小时"]);
+    return (
+      '<select data-misub-sub-interval="' + C.escapeHtml(subId) + '" aria-label="自动拉取间隔">' +
+      opts.map(function (o) {
+        return '<option value="' + o[0] + '"' + (o[0] === cur ? " selected" : "") + ">" + o[1] + "</option>";
+      }).join("") +
+      "</select>"
+    );
+  }
+
+  // 拉取频率：连接默认间隔 + 每个机场订阅的覆盖值（只对当前连接列出订阅，数据来自 D1）。
+  function misubFreqSectionHtml(conn) {
+    var isActive = conn.id === misubActiveId();
+    var hours = conn.auto_interval_hours == null ? 6 : conn.auto_interval_hours;
+    var subs = isActive && state.misub ? state.misub.subscriptions || [] : [];
+    var list = "";
+    if (isActive && subs.length) {
+      list =
+        '<ul class="misub-freq-list">' +
+        subs.map(function (sub) {
+          return (
+            '<li class="misub-freq-row"><span class="misub-freq-name">' + C.escapeHtml(sub.name || "未命名订阅") +
+            (sub.enabled === false ? " " + C.badge("已停用", "warn") : "") +
+            '<span class="subtle">' + C.escapeHtml(sub.last_fetch_at ? "上次拉取 " + misubAgo(sub.last_fetch_at) + (sub.last_fetch_ok ? "" : "（失败）") : "尚未拉取") +
+            "</span></span>" + misubIntervalSelectHtml(sub.id, sub.interval_hours) + "</li>"
+          );
+        }).join("") +
+        "</ul>";
+    } else if (isActive) {
+      list = '<p class="subtle">同步一次后，这里会列出机场订阅，可以单独设置间隔</p>';
+    } else {
+      list = '<p class="subtle">设为当前连接后可以单独设置每个机场订阅的间隔</p>';
+    }
+    return (
+      '<section class="conn-section">' +
+      '<h3 class="conn-section-title">拉取频率</h3>' +
+      '<form data-misub-freq novalidate>' +
+      '<label>自动拉取间隔（小时）<input name="auto_interval_hours" type="number" inputmode="numeric" min="0" max="168" step="1" value="' +
+      C.escapeHtml(String(hours)) + '" /></label>' +
+      '<p class="subtle">每小时的定时任务检查一次，到期才访问 MiSub 和机场；填 0 关闭自动拉取。手动同步有 5 分钟冷却。每次定时任务最多拉 16 个，订阅多时分几个小时轮完</p>' +
+      '<div class="manage-actions"><button type="submit">保存间隔</button></div>' +
+      "</form>" +
+      '<h4 class="misub-freq-title">单个机场订阅</h4>' +
+      list +
+      "</section>"
+    );
+  }
+
+  function submitMisubFreq(form) {
+    if (!misubPanelState || !misubPanelState.selectedId) return;
+    var raw = misubField(form, "auto_interval_hours");
+    var hours = Number(raw);
+    if (raw === "" || !Number.isInteger(hours) || hours < 0 || hours > 168) {
+      setMisubPanelNotice("间隔要填 0 到 168 之间的整数", true);
+      return;
+    }
+    var button = form.querySelector('[type="submit"]');
+    if (button) button.disabled = true;
+    api("PATCH", "/api/misub/connections/" + encodeURIComponent(misubPanelState.selectedId), { auto_interval_hours: hours })
+      .then(function (res) {
+        if (!res.data || !res.data.ok) {
+          if (button && button.isConnected) button.disabled = false;
+          setMisubPanelNotice((res.data && res.data.error) || "保存失败，请重试", true);
+          return;
+        }
+        return reloadMisubMeta().then(function () {
+          setMisubPanelNotice(hours > 0 ? "自动拉取改为每 " + hours + " 小时" : "已关闭自动拉取", false);
+          if (activeTab === "proxy") return loadMisubSnapshot(false, true);
+        });
+      })
+      .catch(function () {
+        if (button && button.isConnected) button.disabled = false;
+        setMisubPanelNotice("网络异常，请重试", true);
+      });
+  }
+
+  function saveMisubSubInterval(select) {
+    var subId = select.getAttribute("data-misub-sub-interval");
+    var value = select.value;
+    select.disabled = true;
+    api("PATCH", "/api/misub/subscriptions/" + encodeURIComponent(subId) + "/interval", { interval_hours: value === "" ? null : Number(value) })
+      .then(function (res) {
+        if (select.isConnected) select.disabled = false;
+        if (!res.data || !res.data.ok) {
+          setMisubPanelNotice((res.data && res.data.error) || "保存失败，请重试", true);
+          return;
+        }
+        setMisubPanelNotice("已保存", false);
+        loadMisubSnapshot(false, true);
+      })
+      .catch(function () {
+        if (select.isConnected) select.disabled = false;
+        setMisubPanelNotice("网络异常，请重试", true);
+      });
   }
 
   function misubPanelHtml() {
@@ -3835,6 +4124,10 @@
     paintMisubPanel();
     misubPanelCtrl.dialog.addEventListener("click", handleMisubPanelClick);
     misubPanelCtrl.dialog.addEventListener("submit", handleMisubPanelSubmit);
+    misubPanelCtrl.dialog.addEventListener("change", function (event) {
+      var t = event.target;
+      if (t instanceof HTMLSelectElement && t.hasAttribute("data-misub-sub-interval")) saveMisubSubInterval(t);
+    });
   }
 
   function selectMisubConnection(id) {
@@ -4027,6 +4320,11 @@
     if (form.hasAttribute("data-misub-cred")) {
       event.preventDefault();
       submitMisubCredentials(form);
+      return;
+    }
+    if (form.hasAttribute("data-misub-freq")) {
+      event.preventDefault();
+      submitMisubFreq(form);
     }
   }
 
@@ -4074,6 +4372,7 @@
         '<label>MiSub 地址<input name="base_url" maxlength="2048" autocomplete="off" placeholder="https://你的 MiSub 域名" /></label>' +
         '<label>令牌<input name="token" type="password" maxlength="16384" autocomplete="new-password" data-misub-token="1" data-1p-ignore="true" data-lpignore="true" readonly placeholder="在 MiSub 系统设置里创建的令牌" /></label>' +
         misubUaFieldHtml("") +
+        '<label>自动拉取间隔（小时）<input name="auto_interval_hours" type="number" inputmode="numeric" min="0" max="168" step="1" value="6" /></label>' +
         misubTokenHelpHtml() +
         '<label class="misub-check"><input type="checkbox" name="set_active" checked />保存后设为当前连接</label>',
       actionsLeftHtml:
@@ -4104,6 +4403,7 @@
           refresh_enabled: false,
           active: makeActive,
           node_ua: misubField(c.form, "node_ua"),
+          auto_interval_hours: misubField(c.form, "auto_interval_hours") === "" ? 6 : Number(misubField(c.form, "auto_interval_hours")),
         })
           .then(function (res) {
             c.setBusy(false);
@@ -4203,20 +4503,9 @@
       if (misubForm) testMisubConnection(misubForm, misubTest);
       return;
     }
-    var misubHead = target.closest("[data-mshead]");
-    if (misubHead && !misubHead.disabled) {
-      if (misubHead.getAttribute("data-mshead") !== "reload") return;
-      misubHead.disabled = true;
-      misubHead.textContent = "刷新中…";
-      var reloadAll = misubSegment === "all";
-      if (reloadAll) resetMisubAll();
-      loadMisubSnapshot(true, true).then(function () {
-        if (misubHead.isConnected) {
-          misubHead.disabled = false;
-          misubHead.textContent = "刷新";
-        }
-        if (reloadAll && activeTab === "proxy") loadMisubAllNodes(true);
-      });
+    var misubSyncBtn = target.closest("[data-misub-sync]");
+    if (misubSyncBtn) {
+      misubSyncNow(misubSyncBtn);
       return;
     }
     var misubRefresh = target.closest("[data-msrefresh]");
@@ -4233,7 +4522,7 @@
         misubShowLimit = MISUB_PAGE;
       }
       updateMisubList();
-      if (misubSegment === "all") loadMisubAllNodes(false);
+      if (misubSegment === "all") loadMisubAllNodes();
       return;
     }
     var misubFilterBtn = target.closest("[data-misub-filter]");
@@ -4248,11 +4537,6 @@
       updateMisubRows();
       return;
     }
-    var misubAllReload = target.closest("[data-misub-all-reload]");
-    if (misubAllReload && !misubAllReload.disabled) {
-      loadMisubAllNodes(true);
-      return;
-    }
     var msCopy = target.closest("[data-msnode-copy]");
     if (msCopy) return void misubNodeCopy(msCopy);
     var msShow = target.closest("[data-msnode-show]");
@@ -4265,6 +4549,11 @@
         if (entry.id === subId) subItem = entry;
       });
       if (subItem) openMisubSubNodes(subItem);
+      return;
+    }
+    var msSubFetch = target.closest("[data-mssub-fetch]");
+    if (msSubFetch) {
+      misubFetchSub(msSubFetch.getAttribute("data-mssub-fetch"), msSubFetch);
       return;
     }
     var msSubRefresh = target.closest("[data-mssub-refresh]");

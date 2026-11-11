@@ -941,13 +941,20 @@ article.node-card .card-meta {
   }
   .misub-segmented .segment {
     flex: 1 1 0;
+    min-width: 0;
+    padding-left: 4px;
+    padding-right: 4px;
     white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   /* 代理页签的主按钮保留完整文案，别被全局 add-button 缩成「添加」 */
   button.add-button.misub-add-conn,
-  button.add-button.misub-save-conn { font-size: var(--fs-md); }
+  button.add-button.misub-save-conn,
+  button.add-button.misub-sync-primary { font-size: var(--fs-md); }
   button.add-button.misub-add-conn::after,
-  button.add-button.misub-save-conn::after { content: none; }
+  button.add-button.misub-save-conn::after,
+  button.add-button.misub-sync-primary::after { content: none; }
 }
 
 /* 代理页签（MiSub）：节点列表、筛选与搜索 */
@@ -1007,3 +1014,35 @@ article.node-card .card-meta {
   .misub-chip-row { flex-direction: column; gap: 4px; }
   .misub-chip-label { padding-top: 0; }
 }
+/* 节点行按列表自身宽度切换成两行布局：弹窗里（平板宽度下只有 500px 左右）也不会把名称挤成一列字 */
+.misub-node-list { container-type: inline-size; }
+@container (max-width: 640px) {
+  .misub-node-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "main proto"
+      "server server"
+      "region actions";
+    row-gap: 6px;
+  }
+  .misub-node-main { grid-area: main; }
+  .misub-node-proto { grid-area: proto; justify-content: flex-end; }
+  .misub-node-region { grid-area: region; }
+  .misub-node-server { grid-area: server; }
+  .misub-node-actions { grid-area: actions; justify-content: flex-end; }
+}
+/* MiSub 落库后的同步状态与拉取频率 */
+.misub-sync-bar { margin: 0 0 10px; overflow-wrap: anywhere; }
+.misub-never .manage-actions { justify-content: center; }
+.misub-freq-title { margin: 14px 0 6px; font-size: var(--fs-sm); color: var(--text-2); font-weight: 600; }
+.misub-freq-list { list-style: none; margin: 0; padding: 0; border: 1px solid var(--border); border-radius: var(--r-lg); }
+.misub-freq-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+.misub-freq-row:last-child { border-bottom: 0; }
+.misub-freq-name { display: grid; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
+.misub-freq-name .badge { justify-self: start; }
+.misub-freq-row select { flex: none; width: auto; max-width: 48%; }
+@media (max-width: 479px) {
+  .misub-freq-row { flex-direction: column; align-items: stretch; }
+  .misub-freq-row select { max-width: none; width: 100%; }
+}
+.misub-sub-card .card-meta dd { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }

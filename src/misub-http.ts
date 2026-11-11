@@ -2,8 +2,9 @@
 // index.ts 已做过管理员会话校验；写操作在这里补跨站检查，口径与其它模块一致。
 //
 // Routes:
-//   GET    /api/misub                          只读快照（未配置时 configured:false，追加 connections 与 active_id）
-//   GET    /api/misub?meta=1                   不出站元信息：configured、config、connections、active_id、vault_key_state
+//   GET    /api/misub                          D1 里的快照（不出站；未配置时 configured:false；追加 connections、active_id、sync）
+//   GET    /api/misub?meta=1                   元信息：configured、config、connections、active_id、vault_key_state
+//   POST   /api/misub/sync                     手动同步全部：列表 + 最久没拉的订阅（5 分钟冷却，429 带 next_manual_at）
 //   POST   /api/misub/test                     用提交的地址+令牌测一次连接（不保存）
 //   GET    /api/misub/connections              列表：{ connections, active_id, vault_key_state }
 //   POST   /api/misub/connections              新增，201 返回 { connection, connections, active_id }
@@ -14,12 +15,14 @@
 //   PUT    /api/misub/config                   保存配置（兼容旧 API：有当前连接时更新、无连接时新建并设为当前）
 //   PATCH  /api/misub/config                   只改「触发刷新」开关（兼容旧 API：改当前连接）
 //   DELETE /api/misub/config                   清空配置（兼容旧 API：只删当前连接）
-//   POST   /api/misub/manual-nodes/:id/reveal  显示节点的服务器与链接（先写审计）
+//   POST   /api/misub/manual-nodes/:id/reveal  显示节点的服务器与链接（先写审计，从 D1 密封列解开）
 //   POST   /api/misub/profiles/:id/refresh     触发订阅组刷新（开关打开时）
-//   POST   /api/misub/subscriptions/:id/refresh            触发单个机场订阅刷新（开关打开时）
-//   GET    /api/misub/subscriptions/:id/nodes[?fresh=1]    拉机场订阅原文并列出节点（脱敏，不落库）
+//   POST   /api/misub/subscriptions/:id/refresh            触发 MiSub 端刷新单个机场订阅（开关打开时），随后同步列表
+//   POST   /api/misub/subscriptions/:id/fetch              手动拉取机场订阅节点写入 D1（订阅级 5 分钟冷却）
+//   PATCH  /api/misub/subscriptions/:id/interval           { interval_hours: null|0..168 } 订阅自己的自动拉取间隔
+//   GET    /api/misub/subscriptions/:id/nodes              D1 里这个订阅的节点（脱敏）与拉取状态
 //   POST   /api/misub/subscriptions/:id/nodes/:index/reveal 显示/复制一条机场节点（先写审计）
-//   GET    /api/misub/nodes[?fresh=1]                      全部节点：手工节点 + 各机场订阅节点
+//   GET    /api/misub/nodes                                全部节点：手工节点 + 各机场订阅节点（D1）
 
 import { isCrossSite, json, readJsonLimited } from "./http";
 import type { Env } from "./env";
@@ -31,14 +34,12 @@ import {
   clearMisubConfig,
   deleteMisubConnection,
   getMisubConnection,
-  getMisubSnapshot,
   listMisubConnections,
   misubVaultKeyState,
   normalizeMisubBaseUrl,
   readMisubConfig,
   refreshMisubProfile,
   resolveMisubTestToken,
-  revealMisubManualNode,
   saveMisubConfig,
   setMisubRefreshEnabled,
   testMisubConnection,
@@ -46,19 +47,27 @@ import {
   testMisubConnectionTemp,
   updateMisubConnection,
   refreshMisubSubscription,
+  validateIntervalHours,
 } from "./misub";
 import {
-  clearMisubNodesCache,
-  listAllMisubNodes,
-  listMisubSubscriptionNodes,
-  revealMisubSubscriptionNode,
-} from "./misub-nodes";
+  deleteMisubStore,
+  manualFetchSubscription,
+  manualSyncAll,
+  readAllMisubNodes,
+  readMisubSubscriptionNodes,
+  readMisubView,
+  revealStoredManualNode,
+  revealStoredSubscriptionNode,
+  setSubscriptionInterval,
+  syncMisubListsNow,
+} from "./misub-store";
 
 const MAX_BODY_BYTES = 16 * 1024;
 
 export async function handleMisubRequest(request: Request, env: Env, path: string): Promise<Response | null> {
   // 精确匹配优先
   if (path === "/api/misub") return snapshot(request, env);
+  if (path === "/api/misub/sync") return syncAll(request, env);
   if (path === "/api/misub/test") return testConnection(request, env);
   if (path === "/api/misub/config") return configRoute(request, env);
   if (path === "/api/misub/connections") return connectionsRoute(request, env);
@@ -84,6 +93,12 @@ export async function handleMisubRequest(request: Request, env: Env, path: strin
 
   const subRefresh = /^\/api\/misub\/subscriptions\/([A-Za-z0-9_-]+)\/refresh$/.exec(path);
   if (subRefresh && subRefresh[1]) return refreshSubscription(request, env, subRefresh[1]);
+
+  const subFetch = /^\/api\/misub\/subscriptions\/([A-Za-z0-9_-]+)\/fetch$/.exec(path);
+  if (subFetch && subFetch[1]) return fetchSubscriptionNodes(request, env, subFetch[1]);
+
+  const subInterval = /^\/api\/misub\/subscriptions\/([A-Za-z0-9_-]+)\/interval$/.exec(path);
+  if (subInterval && subInterval[1]) return subscriptionInterval(request, env, subInterval[1]);
 
   const subNodes = /^\/api\/misub\/subscriptions\/([A-Za-z0-9_-]+)\/nodes$/.exec(path);
   if (subNodes && subNodes[1]) return subscriptionNodes(request, env, subNodes[1]);
@@ -134,7 +149,6 @@ async function snapshot(request: Request, env: Env): Promise<Response> {
   if (request.method.toUpperCase() !== "GET") return methodNotAllowed("GET");
   const url = new URL(request.url);
   const metaOnly = url.searchParams.get("meta") === "1";
-  const fresh = url.searchParams.get("fresh") === "1";
 
   const config = await readMisubConfig(env.DB).catch(() => null);
   const vaultState = misubVaultKeyState(env);
@@ -147,18 +161,89 @@ async function snapshot(request: Request, env: Env): Promise<Response> {
     return json({ ok: true, configured: false, vault_key_state: vaultState });
   }
 
-  if (metaOnly) {
-    return wrap(async () => {
-      const data = await getMisubSnapshot(env, fresh);
-      const { connections, active_id } = await listMisubConnections(env.DB);
-      return json({ ok: true, configured: true, config: data.config, connections, active_id, vault_key_state: vaultState });
-    });
-  }
-
   return wrap(async () => {
-    const data = await getMisubSnapshot(env, fresh);
+    // 只读 D1，打开页面不出站；从没同步过时 snapshot 为 null，由面板提示「立即同步」。
+    const view = await readMisubView(env);
     const { connections, active_id } = await listMisubConnections(env.DB);
-    return json({ ok: true, configured: true, ...data, connections, active_id });
+    const cfg = { base_url: view.connection.base_url, token_tail: config.token_tail, refresh_enabled: view.connection.refresh_enabled };
+    if (metaOnly) {
+      return json({ ok: true, configured: true, config: cfg, connections, active_id, vault_key_state: vaultState, sync: view.sync });
+    }
+    const data = view.snapshot;
+    return json({
+      ok: true,
+      configured: true,
+      ...(data ?? { overview: null, subscriptions: [], manual_nodes: [], profiles: [] }),
+      fetched_at: view.sync.synced_at,
+      config: cfg,
+      sync: view.sync,
+      connections,
+      active_id,
+    });
+  });
+}
+
+// POST /api/misub/sync  手动同步全部
+async function syncAll(request: Request, env: Env): Promise<Response> {
+  if (request.method.toUpperCase() !== "POST") return methodNotAllowed("POST");
+  const gate = await mutationGate(request);
+  if (gate) return gate;
+  return wrap(async () => {
+    const result = await manualSyncAll(env, Date.now());
+    const parts = [result.snapshot_ok ? "列表已更新" : `列表失败：${result.snapshot_error}`, `拉取 ${result.fetched + result.failed.length} 个订阅`];
+    if (result.failed.length) parts.push(`${result.failed.length} 个失败`);
+    if (result.remaining) parts.push(`${result.remaining} 个留待下次`);
+    await logOp(env.DB, {
+      actor: await panelActor(request, env),
+      module: "网络节点",
+      action: "刷新",
+      targetId: "misub",
+      targetName: "MiSub",
+      text: `手动同步了 MiSub 节点：${parts.join("，")}`,
+    });
+    return json({ ok: true, ...result });
+  });
+}
+
+// POST /api/misub/subscriptions/:id/fetch  手动拉取单个机场订阅
+async function fetchSubscriptionNodes(request: Request, env: Env, id: string): Promise<Response> {
+  if (request.method.toUpperCase() !== "POST") return methodNotAllowed("POST");
+  const gate = await mutationGate(request);
+  if (gate) return gate;
+  return wrap(async () => {
+    const result = await manualFetchSubscription(env, id, Date.now());
+    await logOp(env.DB, {
+      actor: await panelActor(request, env),
+      module: "网络节点",
+      action: "刷新",
+      targetId: id,
+      targetName: id,
+      text: result.ok ? `拉取了 MiSub 机场订阅 ${id}，共 ${result.count} 个节点` : `拉取 MiSub 机场订阅 ${id} 失败：${result.error}`,
+    });
+    return json({ ok: true, fetch_ok: result.ok, error: result.error, node_count: result.count, next_manual_at: result.next_manual_at });
+  });
+}
+
+// PATCH /api/misub/subscriptions/:id/interval  { interval_hours: null | 0..168 }
+async function subscriptionInterval(request: Request, env: Env, id: string): Promise<Response> {
+  if (request.method.toUpperCase() !== "PATCH") return methodNotAllowed("PATCH");
+  const gate = await mutationGate(request);
+  if (gate) return gate;
+  const body = await readBody(request);
+  if (!body.ok) return body.response;
+  return wrap(async () => {
+    const raw = body.value["interval_hours"];
+    const hours = raw === null || raw === "" || raw === undefined ? null : validateIntervalHours(raw, "订阅自动拉取间隔");
+    await setSubscriptionInterval(env, id, hours);
+    await logOp(env.DB, {
+      actor: await panelActor(request, env),
+      module: "网络节点",
+      action: "修改",
+      targetId: id,
+      targetName: id,
+      text: hours === null ? `MiSub 机场订阅 ${id} 的自动拉取间隔改为跟随连接` : hours === 0 ? `关闭了 MiSub 机场订阅 ${id} 的自动拉取` : `MiSub 机场订阅 ${id} 的自动拉取间隔改为 ${hours} 小时`,
+    });
+    return json({ ok: true, interval_hours: hours });
   });
 }
 
@@ -201,6 +286,7 @@ async function connectionsRoute(request: Request, env: Env): Promise<Response> {
         refresh_enabled: body.value["refresh_enabled"],
         active: body.value["active"],
         node_ua: body.value["node_ua"],
+        auto_interval_hours: body.value["auto_interval_hours"],
       });
       await logOp(env.DB, {
         actor: await panelActor(request, env),
@@ -237,8 +323,12 @@ async function connectionByIdRoute(request: Request, env: Env, id: string): Prom
         token: body.value["token"],
         refresh_enabled: body.value["refresh_enabled"],
         node_ua: body.value["node_ua"],
+        auto_interval_hours: body.value["auto_interval_hours"],
       });
-      clearMisubNodesCache();
+      // 地址或令牌变了，旧数据就不再可信：清掉，下一次同步重建。
+      if (result.connection.base_url !== before.base_url || (typeof body.value["token"] === "string" && body.value["token"].trim())) {
+        await deleteMisubStore(env.DB, id);
+      }
       await logOp(env.DB, {
         actor: await panelActor(request, env),
         module: "网络节点",
@@ -257,7 +347,7 @@ async function connectionByIdRoute(request: Request, env: Env, id: string): Prom
       const before = await getMisubConnection(env.DB, id);
       if (!before) throw new MisubError(404, "MiSub 连接不存在");
       const result = await deleteMisubConnection(env, id);
-      clearMisubNodesCache();
+      await deleteMisubStore(env.DB, id);
       await logOp(env.DB, {
         actor: await panelActor(request, env),
         module: "网络节点",
@@ -321,6 +411,10 @@ async function configRoute(request: Request, env: Env): Promise<Response> {
         token: body.value["token"],
         refresh_enabled: body.value["refresh_enabled"],
       });
+      if (before && (before.base_url !== saved.base_url || saved.token_tail !== before.token_tail)) {
+        const { active_id } = await listMisubConnections(env.DB);
+        if (active_id) await deleteMisubStore(env.DB, active_id);
+      }
       await logOp(env.DB, {
         actor: await panelActor(request, env),
         module: "网络节点",
@@ -358,7 +452,9 @@ async function configRoute(request: Request, env: Env): Promise<Response> {
     const gate = await mutationGate(request);
     if (gate) return gate;
     return wrap(async () => {
+      const { active_id } = await listMisubConnections(env.DB);
       await clearMisubConfig(env.DB);
+      if (active_id) await deleteMisubStore(env.DB, active_id);
       await logOp(env.DB, {
         actor: await panelActor(request, env),
         module: "网络节点",
@@ -387,7 +483,7 @@ async function revealNode(request: Request, env: Env, id: string): Promise<Respo
       targetName: id,
       text: `显示 MiSub 手工节点 ${id} 的服务器与链接`,
     });
-    const revealed = await revealMisubManualNode(env, id);
+    const revealed = await revealStoredManualNode(env, id);
     return json({ ok: true, server: revealed.server, url: revealed.url });
   });
 }
@@ -407,15 +503,16 @@ async function refreshProfile(request: Request, env: Env, id: string): Promise<R
       targetName: name,
       text: `触发刷新了 MiSub 订阅组「${name}」，共 ${result.total_nodes} 个节点`,
     });
-    return json({ ok: true, total_nodes: result.total_nodes });
+    // MiSub 端刷新后订阅源的流量/节点数会变：顺手同步一次列表（3 个子请求，不占手动冷却）
+    const synced = await syncMisubListsNow(env).catch(() => ({ ok: false, error: "" }));
+    return json({ ok: true, total_nodes: result.total_nodes, synced: synced.ok });
   });
 }
 // GET /api/misub/nodes  全部节点
 async function allNodes(request: Request, env: Env): Promise<Response> {
   if (request.method.toUpperCase() !== "GET") return methodNotAllowed("GET");
-  const fresh = new URL(request.url).searchParams.get("fresh") === "1";
   return wrap(async () => {
-    const result = await listAllMisubNodes(env, fresh);
+    const result = await readAllMisubNodes(env);
     return json({ ok: true, ...result });
   });
 }
@@ -423,9 +520,8 @@ async function allNodes(request: Request, env: Env): Promise<Response> {
 // GET /api/misub/subscriptions/:id/nodes  单个机场订阅的节点
 async function subscriptionNodes(request: Request, env: Env, id: string): Promise<Response> {
   if (request.method.toUpperCase() !== "GET") return methodNotAllowed("GET");
-  const fresh = new URL(request.url).searchParams.get("fresh") === "1";
   return wrap(async () => {
-    const result = await listMisubSubscriptionNodes(env, id, fresh);
+    const result = await readMisubSubscriptionNodes(env, id);
     return json({ ok: true, ...result });
   });
 }
@@ -448,7 +544,7 @@ async function revealSubscriptionNode(request: Request, env: Env, id: string, in
       targetName: expected || id,
       text: `显示 MiSub 机场订阅 ${id} 第 ${index + 1} 个节点「${expected || "未命名"}」的服务器与链接`,
     });
-    const revealed = await revealMisubSubscriptionNode(env, id, index, expected);
+    const revealed = await revealStoredSubscriptionNode(env, id, index, expected);
     return json({ ok: true, server: revealed.server, url: revealed.url });
   });
 }
@@ -460,7 +556,7 @@ async function refreshSubscription(request: Request, env: Env, id: string): Prom
   if (gate) return gate;
   return wrap(async () => {
     const result = await refreshMisubSubscription(env, id);
-    clearMisubNodesCache();
+    await syncMisubListsNow(env).catch(() => null);
     const name = result.name || id;
     await logOp(env.DB, {
       actor: await panelActor(request, env),
