@@ -184,15 +184,11 @@ export default {
     // touching anything: no snapshot refresh, no mirror sync, no probe, and
     // no stamp — the stamp only moves when a sweep actually ran.
     //
-    // Exception: the MiSub node store (misub-store.ts) is gated by its own
-    // per-connection / per-subscription intervals (default 6h), so it runs on
-    // every hourly trigger before the global gate. It spends at most
-    // SWEEP_SUBREQUEST_BUDGET outbound fetches per invocation (oldest first),
-    // leaving the rest of the free-plan budget to the sweep below.
+    // MiSub sync has its own per-connection interval, so it runs before the gate.
     try {
       await runMisubSweep(env, now);
     } catch {
-      // Failures are recorded per row; the old node lists stay in D1.
+      // Recorded per connection; the last good snapshot stays.
     }
     try {
       if (!(await cronSweepDue(env.DB, now))) return;

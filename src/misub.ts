@@ -1,20 +1,12 @@
 // MiSub 客户端：云计算资源「代理」页的数据来自管理员自己的 MiSub 实例
 // （External Management API，/api/ext/v1，Bearer Token）。
 //
-// 口径（2026-11-12 用户改为「写到 D1，控制拉取频率」）：
-//   · 连接元信息存 schema_meta.misub_connections（JSON），令牌用 VAULT_KEY
-//     信封密封（enc1: AES-GCM），界面只给末 4 位。
-//   · 抓到的数据落 D1（migrations/0078_misub_store.sql，读写见 misub-store.ts）：
-//     MiSub 列表快照一行、每个机场订阅的节点一行；订阅地址、节点原始链接
-//     一律密封保存。页面只读 D1，打开页面不出站。
-//   · 拉取频率：每个连接有自动拉取间隔（默认 6 小时，0 关闭），每个订阅可单独
-//     覆盖；hourly cron 按间隔挑到期的拉，每次调用有子请求预算。手动刷新有
-//     5 分钟冷却。拉取失败保留上一次成功的数据，只记录错误。
-//   · 不做节点测活；协议只做展示所需的最小解析（misub-nodes-parse.ts）。
+// 连接存 schema_meta.misub_connections（JSON），令牌用 VAULT_KEY 密封；
+// 抓到的快照密封后存 D1（misub-store.ts）。Worker 只调 MiSub API，不拉机场订阅。
 
 import type { D1Database, Env } from "./env";
 import { decryptString, resolveContentKey, sealString, type ContentKey } from "./crypto";
-import { detectRegion } from "./misub-nodes-parse";
+import { detectRegion } from "./misub-region";
 
 export class MisubError extends Error {
   status: number;
@@ -51,11 +43,7 @@ export interface MisubConnection {
   base_url: string;
   token_tail: string;
   refresh_enabled: boolean;
-  // 拉取机场订阅原文时的 User-Agent：MiSub 订阅源自己配了 UA 时优先用它的，
-  // 否则用这里的，再否则用默认 v2rayN（多数机场对它回 base64 链接列表）。
-  node_ua: string;
-  // 自动拉取间隔（小时）：0 表示关闭自动拉取，只能手动刷新。
-  auto_interval_hours: number;
+  auto_interval_hours: number; // 0 = 不自动同步
   active: boolean;
   last_test_at: number;
   last_test_ok: boolean;
@@ -71,7 +59,6 @@ interface StoredConnection {
   token_enc: string;
   token_tail: string;
   refresh_enabled: boolean;
-  node_ua: string;
   auto_interval_hours: number;
   last_test_at: number;
   last_test_ok: boolean;
@@ -93,7 +80,6 @@ function projectConnection(c: StoredConnection, active: boolean): MisubConnectio
     base_url: c.base_url,
     token_tail: c.token_tail,
     refresh_enabled: c.refresh_enabled,
-    node_ua: c.node_ua,
     auto_interval_hours: c.auto_interval_hours,
     active,
     last_test_at: c.last_test_at,
@@ -104,7 +90,6 @@ function projectConnection(c: StoredConnection, active: boolean): MisubConnectio
   };
 }
 
-const NODE_UA_MAX = 200;
 export const DEFAULT_AUTO_INTERVAL_HOURS = 6;
 export const MAX_INTERVAL_HOURS = 168;
 
@@ -117,18 +102,9 @@ function normalizeStoredInterval(value: unknown): number {
 export function validateIntervalHours(value: unknown, label: string): number {
   const n = typeof value === "string" && value.trim() !== "" ? Number(value) : value;
   if (typeof n !== "number" || !Number.isInteger(n) || n < 0 || n > MAX_INTERVAL_HOURS) {
-    throw new MisubError(400, label + "需要是 0 到 168 之间的整数小时（0 表示关闭自动拉取）");
+    throw new MisubError(400, label + "需要是 0 到 168 的整数");
   }
   return n;
-}
-
-function validateNodeUa(value: unknown): string {
-  if (value === undefined || value === null) return "";
-  if (typeof value !== "string") throw new MisubError(400, "User-Agent 格式不正确");
-  const text = value.trim();
-  if (text.length > NODE_UA_MAX) throw new MisubError(400, "User-Agent 过长（最多 200 字符）");
-  if (/[\r\n]/.test(text)) throw new MisubError(400, "User-Agent 不能换行");
-  return text;
 }
 
 interface LegacyStoredConfig {
@@ -190,7 +166,6 @@ async function readStoredConnections(db: D1Database): Promise<StoredConnections 
           token_enc: c.token_enc,
           token_tail: typeof c.token_tail === "string" ? c.token_tail : "",
           refresh_enabled: c.refresh_enabled,
-          node_ua: typeof c.node_ua === "string" ? c.node_ua : "",
           auto_interval_hours: normalizeStoredInterval(c.auto_interval_hours),
           last_test_at: typeof c.last_test_at === "number" ? c.last_test_at : 0,
           last_test_ok: c.last_test_ok === true,
@@ -270,7 +245,6 @@ async function migrateLegacyIfNeeded(db: D1Database): Promise<void> {
     token_enc: legacy.token_enc,
     token_tail: tokenTail,
     refresh_enabled: legacy.refresh_enabled,
-    node_ua: "",
     auto_interval_hours: DEFAULT_AUTO_INTERVAL_HOURS,
     last_test_at: 0,
     last_test_ok: false,
@@ -370,7 +344,6 @@ export async function saveMisubConfig(
       token_enc: tokenEnc,
       token_tail: tokenTail,
       refresh_enabled: input.refresh_enabled === true,
-      node_ua: "",
       auto_interval_hours: DEFAULT_AUTO_INTERVAL_HOURS,
       last_test_at: now,
       last_test_ok: true,
@@ -437,12 +410,10 @@ export async function listMisubConnections(db: D1Database): Promise<{ connection
   return { connections, active_id: stored.active_id };
 }
 
-// 读取当前连接（含解密后的 token，供内部出站用）
-// 供 misub-store 与 cron 用：按 id 取连接并解开令牌；id 省略时取当前连接。
+// 按 id（省略取当前）取连接并解开令牌。
 export interface MisubConnectionHandle {
   id: string;
   base_url: string;
-  node_ua: string;
   auto_interval_hours: number;
   refresh_enabled: boolean;
   token: string;
@@ -461,11 +432,17 @@ export async function openMisubConnection(env: Env, id?: string): Promise<MisubC
   return {
     id: conn.id,
     base_url: conn.base_url,
-    node_ua: conn.node_ua,
     auto_interval_hours: conn.auto_interval_hours,
     refresh_enabled: conn.refresh_enabled,
     token,
   };
+}
+
+// 面板明文显示令牌用。
+export async function revealMisubToken(env: Env, id: string): Promise<string> {
+  const conn = await getConnectionById(env, id);
+  if (!conn) throw new MisubError(404, "MiSub 连接不存在");
+  return openToken(env, conn);
 }
 
 export async function listMisubConnectionIds(db: D1Database): Promise<{ ids: string[]; active_id: string }> {
@@ -525,7 +502,7 @@ function defaultNameFromBaseUrl(baseUrl: string): string {
 // 新增连接
 export async function addMisubConnection(
   env: Env,
-  input: { name: unknown; base_url: unknown; token: unknown; refresh_enabled?: unknown; active?: unknown; node_ua?: unknown; auto_interval_hours?: unknown },
+  input: { name: unknown; base_url: unknown; token: unknown; refresh_enabled?: unknown; active?: unknown; auto_interval_hours?: unknown },
 ): Promise<{ connection: MisubConnection; connections: MisubConnection[]; active_id: string }> {
   await migrateLegacyIfNeeded(env.DB);
   const baseUrl = normalizeMisubBaseUrl(input.base_url);
@@ -538,11 +515,10 @@ export async function addMisubConnection(
   if (input.refresh_enabled !== undefined && typeof input.refresh_enabled !== "boolean") {
     throw new MisubError(400, "刷新开关格式不正确");
   }
-  const nodeUa = validateNodeUa(input.node_ua);
   const autoInterval =
     input.auto_interval_hours === undefined || input.auto_interval_hours === null || input.auto_interval_hours === ""
       ? DEFAULT_AUTO_INTERVAL_HOURS
-      : validateIntervalHours(input.auto_interval_hours, "自动拉取间隔");
+      : validateIntervalHours(input.auto_interval_hours, "同步间隔");
 
   const key = vaultKeyOf(env);
   if (key.state === "invalid") throw new MisubError(503, VAULT_INVALID_SAVE_MESSAGE);
@@ -569,7 +545,6 @@ export async function addMisubConnection(
     token_enc: sealed,
     token_tail: tokenTail,
     refresh_enabled: input.refresh_enabled === true,
-    node_ua: nodeUa,
     auto_interval_hours: autoInterval,
     last_test_at: now,
     last_test_ok: true,
@@ -589,7 +564,7 @@ export async function addMisubConnection(
 export async function updateMisubConnection(
   env: Env,
   id: string,
-  input: { name?: unknown; base_url?: unknown; token?: unknown; refresh_enabled?: unknown; node_ua?: unknown; auto_interval_hours?: unknown },
+  input: { name?: unknown; base_url?: unknown; token?: unknown; refresh_enabled?: unknown; auto_interval_hours?: unknown },
 ): Promise<{ connection: MisubConnection; connections: MisubConnection[]; active_id: string }> {
   await migrateLegacyIfNeeded(env.DB);
   const stored = await readStoredConnections(env.DB);
@@ -622,10 +597,9 @@ export async function updateMisubConnection(
     newRefreshEnabled = input.refresh_enabled;
   }
 
-  const newNodeUa = input.node_ua !== undefined ? validateNodeUa(input.node_ua) : current.node_ua;
   const newAutoInterval =
     input.auto_interval_hours !== undefined
-      ? validateIntervalHours(input.auto_interval_hours, "自动拉取间隔")
+      ? validateIntervalHours(input.auto_interval_hours, "同步间隔")
       : current.auto_interval_hours;
 
   // 验证 token
@@ -664,7 +638,6 @@ export async function updateMisubConnection(
     token_enc: newTokenEnc,
     token_tail: newTokenTail,
     refresh_enabled: newRefreshEnabled,
-    node_ua: newNodeUa,
     auto_interval_hours: newAutoInterval,
     last_test_at: needTest ? now : current.last_test_at,
     last_test_ok: needTest ? true : current.last_test_ok,
@@ -942,31 +915,6 @@ function asEpochMs(value: unknown): number | null {
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : null;
 }
 
-// 域名：首段前 2 个字符 + *** + 其余段（hk-node1.example.com → hk***.example.com）；
-// IPv4：只保留第一段；单段短名：前 2 个字符 + ***。
-// IPv6：第一组 + :***:***
-export function maskHost(host: string): string {
-  const text = (typeof host === "string" ? host : "").trim();
-  if (!text) return "";
-  // IPv4
-  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(text)) {
-    return text.split(".")[0] + ".***.***.***";
-  }
-  // IPv6（包含冒号，且不像是带端口的 host:port）
-  if (text.includes(":") && !/^\d{1,3}(\.\d{1,3}){3}$/.test(text)) {
-    const firstColon = text.indexOf(":");
-    if (firstColon > 0) {
-      return text.slice(0, firstColon) + ":***:***";
-    }
-    return text.slice(0, 2) + "***";
-  }
-  const dot = text.indexOf(".");
-  if (dot > 0) {
-    return text.slice(0, dot).slice(0, 2) + "***" + text.slice(dot);
-  }
-  return text.slice(0, 2) + "***";
-}
-
 // 从节点链接取 host:port。vmess 的链接是 vmess:// 后跟整段 base64 JSON，
 // URL 解析会把载荷本身当主机名，所以先按 vmess 处理：base64（兼容
 // url-safe 与填充）解码 JSON，取 add 与 port；解不出返回空。其余协议
@@ -1005,21 +953,8 @@ export function nodeServerOf(rawUrl: string): { host: string; port: number | nul
   }
 }
 
-export function maskServer(host: string, port: number | null): string {
-  const masked = maskHost(host);
-  if (!masked) return "";
-  // IPv6 host 已在 nodeServerOf 中带方括号，这里只需在 masked 后加端口
-  // maskHost 对 IPv6 返回第一组 + :***:***，需加方括号
-  let result = masked;
-  if (host.includes(":") && !/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) {
-    result = `[${masked}]`;
-  }
-  return result + (port ? ":" + port : "");
-}
-
 // ---------------------------------------------------------------------------
-// 快照组装：三路列表各取一次，字段严格按用户裁定的口径，不向面板下发
-// url（订阅源地址与节点链接）。
+// 快照：三路列表各取一次，原样带明文地址与链接（落库时整体密封）。
 
 export interface MisubSubscription {
   id: string;
@@ -1027,8 +962,7 @@ export interface MisubSubscription {
   enabled: boolean;
   group: string;
   tags: string[];
-  // 订阅地址只给脱敏串（协议 + 脱敏主机 + ••••），明文不出模块。
-  url_masked: string;
+  url: string;
   node_count: number;
   upload: number;
   download: number;
@@ -1047,8 +981,8 @@ export interface MisubManualNode {
   tags: string[];
   remarks: string;
   region: string;
-  server_masked: string;
-  has_server: boolean;
+  server: string;
+  url: string;
 }
 
 export interface MisubProfile {
@@ -1080,35 +1014,9 @@ export interface MisubSnapshot {
   profiles: MisubProfile[];
 }
 
-// 订阅源的拉取参数与手工节点原始链接：只在 Worker 内部使用，落库时整体密封。
-export interface MisubSubscriptionSource {
-  url: string;
-  user_agent: string;
-}
-
-export interface MisubFetchedLists {
-  snapshot: MisubSnapshot;
-  sources: Record<string, MisubSubscriptionSource>;
-  manual_links: Record<string, string>;
-}
-
 function asTags(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value.filter((t): t is string => typeof t === "string" && t.trim() !== "").map((t) => t.trim()).slice(0, 20);
-}
-
-// https://ab***.example.com/•••• ：只露协议与脱敏主机，路径与参数（通常含
-// 机场的订阅令牌）一律不露。
-export function maskSubscriptionUrl(rawUrl: string): string {
-  const text = typeof rawUrl === "string" ? rawUrl.trim() : "";
-  if (!text) return "";
-  try {
-    const url = new URL(text);
-    const host = maskHost(url.hostname.replace(/^\[|\]$/g, ""));
-    return url.protocol + "//" + (host || "***") + "/••••";
-  } catch {
-    return "••••";
-  }
 }
 
 function normalizeSubscription(row: Record<string, unknown>): MisubSubscription {
@@ -1120,7 +1028,7 @@ function normalizeSubscription(row: Record<string, unknown>): MisubSubscription 
     enabled: row["enabled"] !== false,
     group: asText(row["group"]),
     tags: asTags(row["tags"]),
-    url_masked: maskSubscriptionUrl(asText(row["url"])),
+    url: asText(row["url"]).trim(),
     node_count: asCount(row["nodeCount"]),
     upload: userInfo ? asCount(userInfo["upload"]) : 0,
     download: userInfo ? asCount(userInfo["download"]) : 0,
@@ -1144,32 +1052,19 @@ function normalizeManualNode(row: Record<string, unknown>): MisubManualNode {
     tags: asTags(row["tags"]),
     remarks: asText(row["remarks"]),
     region: detectRegion(asText(row["name"]) + " " + asText(row["group"])),
-    server_masked: maskServer(server.host, server.port),
-    has_server: server.host !== "",
+    server: server.server,
+    url: rawUrl.trim(),
   };
 }
 
-// 从 MiSub 拉三路列表并组装快照；不缓存，由 misub-store 写进 D1。
-export async function fetchMisubLists(conn: MisubConnectionHandle): Promise<MisubFetchedLists> {
+export async function fetchMisubLists(conn: MisubConnectionHandle): Promise<MisubSnapshot> {
   const [subRows, nodeRows, profileRows] = await Promise.all([
     misubList(conn.base_url, conn.token, "/subscriptions"),
     misubList(conn.base_url, conn.token, "/manual-nodes"),
     misubList(conn.base_url, conn.token, "/profiles"),
   ]);
   const subscriptions = subRows.map(normalizeSubscription);
-  const sources: Record<string, MisubSubscriptionSource> = {};
-  for (const row of subRows) {
-    const id = asText(row["id"]);
-    const url = asText(row["url"]).trim();
-    if (id && url) sources[id] = { url, user_agent: asText(row["userAgent"]).trim() };
-  }
   const manualNodes = nodeRows.map(normalizeManualNode);
-  const manualLinks: Record<string, string> = {};
-  for (const row of nodeRows) {
-    const id = asText(row["id"]);
-    const url = asText(row["url"]).trim();
-    if (id && url) manualLinks[id] = url;
-  }
   const subCounts = new Map(subscriptions.map((sub) => [sub.id, sub.node_count]));
   const profiles = profileRows.map((row) => profileNodes(row, subCounts));
 
@@ -1187,7 +1082,6 @@ export async function fetchMisubLists(conn: MisubConnectionHandle): Promise<Misu
     }
   }
   return {
-    snapshot: {
       config: { base_url: conn.base_url, token_tail: "", refresh_enabled: conn.refresh_enabled },
       fetched_at: Date.now(),
       overview: {
@@ -1202,14 +1096,10 @@ export async function fetchMisubLists(conn: MisubConnectionHandle): Promise<Misu
       subscriptions,
       manual_nodes: manualNodes,
       profiles,
-    },
-    sources,
-    manual_links: manualLinks,
   };
 }
 
-// 订阅组的节点数在本地算：所引订阅源 nodeCount 之和 + manualNodeIds 个数，
-// 与 MiSub 的存储计数口径一致，不逐组再调 preview。
+// 订阅组节点数 = 所引订阅源 nodeCount 之和 + 手工节点数。
 function profileNodes(row: Record<string, unknown>, subCounts: Map<string, number>): MisubProfile {
   const subIds = Array.isArray(row["subscriptionIds"]) ? (row["subscriptionIds"] as unknown[]) : [];
   const manualIds = Array.isArray(row["manualNodeIds"]) ? (row["manualNodeIds"] as unknown[]) : [];
@@ -1229,9 +1119,7 @@ function profileNodes(row: Record<string, unknown>, subCounts: Map<string, numbe
   };
 }
 
-// 触发订阅组 refresh：MiSub 会真去拉上游并回写计数，有副作用，只在设置
-// 开关打开时放行（HTTP 层也会先查开关，这里再兜一层）。成功后清缓存；
-// total_nodes 取 preview.totalNodes，取不到就回退本地聚合。
+// 让 MiSub 刷新订阅组（有副作用，需打开「允许触发刷新」）。
 export async function refreshMisubProfile(
   env: Env,
   id: string,
@@ -1255,8 +1143,7 @@ export async function refreshMisubProfile(
   const summaryTotal = asCount(summary["totalNodes"]);
   return { name: previewName || asText(profileObj["name"]), total_nodes: previewTotal ?? summaryTotal };
 }
-// 触发单个订阅源刷新：MiSub 真去拉上游并回写 nodeCount / userInfo，有副作用，
-// 与订阅组刷新共用同一个开关。
+// 让 MiSub 刷新单个订阅源，开关同上。
 export async function refreshMisubSubscription(
   env: Env,
   id: string,
