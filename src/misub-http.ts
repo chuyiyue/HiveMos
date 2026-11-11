@@ -16,6 +16,10 @@
 //   DELETE /api/misub/config                   清空配置（兼容旧 API：只删当前连接）
 //   POST   /api/misub/manual-nodes/:id/reveal  显示节点的服务器与链接（先写审计）
 //   POST   /api/misub/profiles/:id/refresh     触发订阅组刷新（开关打开时）
+//   POST   /api/misub/subscriptions/:id/refresh            触发单个机场订阅刷新（开关打开时）
+//   GET    /api/misub/subscriptions/:id/nodes[?fresh=1]    拉机场订阅原文并列出节点（脱敏，不落库）
+//   POST   /api/misub/subscriptions/:id/nodes/:index/reveal 显示/复制一条机场节点（先写审计）
+//   GET    /api/misub/nodes[?fresh=1]                      全部节点：手工节点 + 各机场订阅节点
 
 import { isCrossSite, json, readJsonLimited } from "./http";
 import type { Env } from "./env";
@@ -41,7 +45,14 @@ import {
   testMisubConnectionById,
   testMisubConnectionTemp,
   updateMisubConnection,
+  refreshMisubSubscription,
 } from "./misub";
+import {
+  clearMisubNodesCache,
+  listAllMisubNodes,
+  listMisubSubscriptionNodes,
+  revealMisubSubscriptionNode,
+} from "./misub-nodes";
 
 const MAX_BODY_BYTES = 16 * 1024;
 
@@ -68,6 +79,17 @@ export async function handleMisubRequest(request: Request, env: Env, path: strin
 
   const refresh = /^\/api\/misub\/profiles\/([A-Za-z0-9_-]+)\/refresh$/.exec(path);
   if (refresh && refresh[1]) return refreshProfile(request, env, refresh[1]);
+
+  if (path === "/api/misub/nodes") return allNodes(request, env);
+
+  const subRefresh = /^\/api\/misub\/subscriptions\/([A-Za-z0-9_-]+)\/refresh$/.exec(path);
+  if (subRefresh && subRefresh[1]) return refreshSubscription(request, env, subRefresh[1]);
+
+  const subNodes = /^\/api\/misub\/subscriptions\/([A-Za-z0-9_-]+)\/nodes$/.exec(path);
+  if (subNodes && subNodes[1]) return subscriptionNodes(request, env, subNodes[1]);
+
+  const subReveal = /^\/api\/misub\/subscriptions\/([A-Za-z0-9_-]+)\/nodes\/(\d{1,5})\/reveal$/.exec(path);
+  if (subReveal && subReveal[1] && subReveal[2]) return revealSubscriptionNode(request, env, subReveal[1], Number(subReveal[2]));
 
   if (path === "/api/misub" || path.startsWith("/api/misub/")) {
     return json({ ok: false, error: "未找到" }, 404);
@@ -178,6 +200,7 @@ async function connectionsRoute(request: Request, env: Env): Promise<Response> {
         token: body.value["token"],
         refresh_enabled: body.value["refresh_enabled"],
         active: body.value["active"],
+        node_ua: body.value["node_ua"],
       });
       await logOp(env.DB, {
         actor: await panelActor(request, env),
@@ -185,7 +208,7 @@ async function connectionsRoute(request: Request, env: Env): Promise<Response> {
         action: "新增",
         targetId: result.connection.id,
         targetName: result.connection.name,
-        text: `新增了 MiSub 连接「${result.connection.name}」（${result.connection.base_url}）`,
+        text: `新增了 MiSub 服务商连接「${result.connection.name}」（${result.connection.base_url}）`,
       });
       return json(
         { ok: true, connection: result.connection, connections: result.connections, active_id: result.active_id },
@@ -213,14 +236,16 @@ async function connectionByIdRoute(request: Request, env: Env, id: string): Prom
         base_url: body.value["base_url"],
         token: body.value["token"],
         refresh_enabled: body.value["refresh_enabled"],
+        node_ua: body.value["node_ua"],
       });
+      clearMisubNodesCache();
       await logOp(env.DB, {
         actor: await panelActor(request, env),
         module: "网络节点",
         action: "修改",
         targetId: id,
         targetName: result.connection.name,
-        text: `修改了 MiSub 连接「${result.connection.name}」（${result.connection.base_url}）`,
+        text: `修改了 MiSub 服务商连接「${result.connection.name}」（${result.connection.base_url}）`,
       });
       return json({ ok: true, connection: result.connection, connections: result.connections, active_id: result.active_id });
     });
@@ -232,13 +257,14 @@ async function connectionByIdRoute(request: Request, env: Env, id: string): Prom
       const before = await getMisubConnection(env.DB, id);
       if (!before) throw new MisubError(404, "MiSub 连接不存在");
       const result = await deleteMisubConnection(env, id);
+      clearMisubNodesCache();
       await logOp(env.DB, {
         actor: await panelActor(request, env),
         module: "网络节点",
         action: "删除",
         targetId: id,
         targetName: before.name,
-        text: `删除了 MiSub 连接「${before.name}」（${before.base_url}）`,
+        text: `删除了 MiSub 服务商连接「${before.name}」（${before.base_url}）`,
       });
       return json({ ok: true, connections: result.connections, active_id: result.active_id });
     });
@@ -359,7 +385,7 @@ async function revealNode(request: Request, env: Env, id: string): Promise<Respo
       action: "显示",
       targetId: id,
       targetName: id,
-      text: `显示 MiSub 手动节点 ${id} 的服务器与链接`,
+      text: `显示 MiSub 手工节点 ${id} 的服务器与链接`,
     });
     const revealed = await revealMisubManualNode(env, id);
     return json({ ok: true, server: revealed.server, url: revealed.url });
@@ -382,5 +408,70 @@ async function refreshProfile(request: Request, env: Env, id: string): Promise<R
       text: `触发刷新了 MiSub 订阅组「${name}」，共 ${result.total_nodes} 个节点`,
     });
     return json({ ok: true, total_nodes: result.total_nodes });
+  });
+}
+// GET /api/misub/nodes  全部节点
+async function allNodes(request: Request, env: Env): Promise<Response> {
+  if (request.method.toUpperCase() !== "GET") return methodNotAllowed("GET");
+  const fresh = new URL(request.url).searchParams.get("fresh") === "1";
+  return wrap(async () => {
+    const result = await listAllMisubNodes(env, fresh);
+    return json({ ok: true, ...result });
+  });
+}
+
+// GET /api/misub/subscriptions/:id/nodes  单个机场订阅的节点
+async function subscriptionNodes(request: Request, env: Env, id: string): Promise<Response> {
+  if (request.method.toUpperCase() !== "GET") return methodNotAllowed("GET");
+  const fresh = new URL(request.url).searchParams.get("fresh") === "1";
+  return wrap(async () => {
+    const result = await listMisubSubscriptionNodes(env, id, fresh);
+    return json({ ok: true, ...result });
+  });
+}
+
+// POST /api/misub/subscriptions/:id/nodes/:index/reveal  { name }
+async function revealSubscriptionNode(request: Request, env: Env, id: string, index: number): Promise<Response> {
+  if (request.method.toUpperCase() !== "POST") return methodNotAllowed("POST");
+  const gate = await mutationGate(request);
+  if (gate) return gate;
+  const body = await readBody(request);
+  if (!body.ok) return body.response;
+  const expected = typeof body.value["name"] === "string" ? body.value["name"].slice(0, 300) : "";
+  return wrap(async () => {
+    // 先写审计再取明文，与手工节点 reveal 同口径。
+    await logOp(env.DB, {
+      actor: await panelActor(request, env),
+      module: "网络节点",
+      action: "显示",
+      targetId: id + "#" + index,
+      targetName: expected || id,
+      text: `显示 MiSub 机场订阅 ${id} 第 ${index + 1} 个节点「${expected || "未命名"}」的服务器与链接`,
+    });
+    const revealed = await revealMisubSubscriptionNode(env, id, index, expected);
+    return json({ ok: true, server: revealed.server, url: revealed.url });
+  });
+}
+
+// POST /api/misub/subscriptions/:id/refresh  触发 MiSub 刷新单个订阅源
+async function refreshSubscription(request: Request, env: Env, id: string): Promise<Response> {
+  if (request.method.toUpperCase() !== "POST") return methodNotAllowed("POST");
+  const gate = await mutationGate(request);
+  if (gate) return gate;
+  return wrap(async () => {
+    const result = await refreshMisubSubscription(env, id);
+    clearMisubNodesCache();
+    const name = result.name || id;
+    await logOp(env.DB, {
+      actor: await panelActor(request, env),
+      module: "网络节点",
+      action: "刷新",
+      targetId: id,
+      targetName: name,
+      text: result.last_error
+        ? `触发刷新了 MiSub 机场订阅「${name}」，失败：${result.last_error}`
+        : `触发刷新了 MiSub 机场订阅「${name}」，共 ${result.node_count} 个节点`,
+    });
+    return json({ ok: true, node_count: result.node_count, last_error: result.last_error });
   });
 }

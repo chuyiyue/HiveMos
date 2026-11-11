@@ -7,12 +7,15 @@
 //   · schema_meta 只存一行 misub_connections：连接数组、当前连接 id。
 //     Token 用 VAULT_KEY 信封密封（与保险库同一套 enc1: AES-GCM）、末 4 位。
 //   · 出站只发生在管理员手动请求时：保存/测试一次、打开页面读一次、
-//     点「显示」取一次、开关打开时手动触发订阅组 refresh。
+//     点「显示」取一次、开关打开时手动触发订阅组 / 订阅源 refresh。
+//   · 机场订阅里的具体节点 MiSub 不提供，由 misub-nodes.ts 拿订阅地址直接拉
+//     原文、在内存里做最小解析（节点名、协议、服务器、地区），同样不落库。
 //
 // 内存缓存只是 45 秒防抖缓冲，Workers 的隔离环境随时可能丢弃它。
 
 import type { D1Database, Env } from "./env";
 import { decryptString, resolveContentKey, sealString, type ContentKey } from "./crypto";
+import { detectRegion } from "./misub-nodes-parse";
 
 export class MisubError extends Error {
   status: number;
@@ -45,10 +48,14 @@ function newId(prefix: string): string {
 
 export interface MisubConnection {
   id: string;
+  provider: "misub";
   name: string;
   base_url: string;
   token_tail: string;
   refresh_enabled: boolean;
+  // 拉取机场订阅原文时的 User-Agent：MiSub 订阅源自己配了 UA 时优先用它的，
+  // 否则用这里的，再否则用默认 v2rayN（多数机场对它回 base64 链接列表）。
+  node_ua: string;
   active: boolean;
   last_test_at: number;
   last_test_ok: boolean;
@@ -64,6 +71,7 @@ interface StoredConnection {
   token_enc: string;
   token_tail: string;
   refresh_enabled: boolean;
+  node_ua: string;
   last_test_at: number;
   last_test_ok: boolean;
   last_error: string;
@@ -74,6 +82,35 @@ interface StoredConnection {
 interface StoredConnections {
   connections: StoredConnection[];
   active_id: string;
+}
+
+function projectConnection(c: StoredConnection, active: boolean): MisubConnection {
+  return {
+    id: c.id,
+    provider: "misub",
+    name: c.name,
+    base_url: c.base_url,
+    token_tail: c.token_tail,
+    refresh_enabled: c.refresh_enabled,
+    node_ua: c.node_ua,
+    active,
+    last_test_at: c.last_test_at,
+    last_test_ok: c.last_test_ok,
+    last_error: c.last_error,
+    created_at: c.created_at,
+    updated_at: c.updated_at,
+  };
+}
+
+const NODE_UA_MAX = 200;
+
+function validateNodeUa(value: unknown): string {
+  if (value === undefined || value === null) return "";
+  if (typeof value !== "string") throw new MisubError(400, "User-Agent 格式不正确");
+  const text = value.trim();
+  if (text.length > NODE_UA_MAX) throw new MisubError(400, "User-Agent 过长（最多 200 字符）");
+  if (/[\r\n]/.test(text)) throw new MisubError(400, "User-Agent 不能换行");
+  return text;
 }
 
 interface LegacyStoredConfig {
@@ -135,6 +172,7 @@ async function readStoredConnections(db: D1Database): Promise<StoredConnections 
           token_enc: c.token_enc,
           token_tail: typeof c.token_tail === "string" ? c.token_tail : "",
           refresh_enabled: c.refresh_enabled,
+          node_ua: typeof c.node_ua === "string" ? c.node_ua : "",
           last_test_at: typeof c.last_test_at === "number" ? c.last_test_at : 0,
           last_test_ok: c.last_test_ok === true,
           last_error: typeof c.last_error === "string" ? c.last_error : "",
@@ -213,6 +251,7 @@ async function migrateLegacyIfNeeded(db: D1Database): Promise<void> {
     token_enc: legacy.token_enc,
     token_tail: tokenTail,
     refresh_enabled: legacy.refresh_enabled,
+    node_ua: "",
     last_test_at: 0,
     last_test_ok: false,
     last_error: "",
@@ -312,6 +351,7 @@ export async function saveMisubConfig(
       token_enc: tokenEnc,
       token_tail: tokenTail,
       refresh_enabled: input.refresh_enabled === true,
+      node_ua: "",
       last_test_at: now,
       last_test_ok: true,
       last_error: "",
@@ -378,19 +418,7 @@ export async function listMisubConnections(db: D1Database): Promise<{ connection
   await migrateLegacyIfNeeded(db);
   const stored = await readStoredConnections(db);
   if (!stored) return { connections: [], active_id: "" };
-  const connections: MisubConnection[] = stored.connections.map((c) => ({
-    id: c.id,
-    name: c.name,
-    base_url: c.base_url,
-    token_tail: c.token_tail,
-    refresh_enabled: c.refresh_enabled,
-    active: c.id === stored.active_id,
-    last_test_at: c.last_test_at,
-    last_test_ok: c.last_test_ok,
-    last_error: c.last_error,
-    created_at: c.created_at,
-    updated_at: c.updated_at,
-  }));
+  const connections: MisubConnection[] = stored.connections.map((c) => (projectConnection(c, c.id === stored.active_id)));
   return { connections, active_id: stored.active_id };
 }
 
@@ -418,19 +446,7 @@ export async function getMisubConnection(db: D1Database, id: string): Promise<Mi
   if (!stored) return null;
   const c = stored.connections.find((c) => c.id === id);
   if (!c) return null;
-  return {
-    id: c.id,
-    name: c.name,
-    base_url: c.base_url,
-    token_tail: c.token_tail,
-    refresh_enabled: c.refresh_enabled,
-    active: c.id === stored.active_id,
-    last_test_at: c.last_test_at,
-    last_test_ok: c.last_test_ok,
-    last_error: c.last_error,
-    created_at: c.created_at,
-    updated_at: c.updated_at,
-  };
+  return projectConnection(c, c.id === stored.active_id);
 }
 
 // 名称校验
@@ -458,7 +474,7 @@ function defaultNameFromBaseUrl(baseUrl: string): string {
 // 新增连接
 export async function addMisubConnection(
   env: Env,
-  input: { name: unknown; base_url: unknown; token: unknown; refresh_enabled?: unknown; active?: unknown },
+  input: { name: unknown; base_url: unknown; token: unknown; refresh_enabled?: unknown; active?: unknown; node_ua?: unknown },
 ): Promise<{ connection: MisubConnection; connections: MisubConnection[]; active_id: string }> {
   await migrateLegacyIfNeeded(env.DB);
   const baseUrl = normalizeMisubBaseUrl(input.base_url);
@@ -471,6 +487,7 @@ export async function addMisubConnection(
   if (input.refresh_enabled !== undefined && typeof input.refresh_enabled !== "boolean") {
     throw new MisubError(400, "刷新开关格式不正确");
   }
+  const nodeUa = validateNodeUa(input.node_ua);
 
   const key = vaultKeyOf(env);
   if (key.state === "invalid") throw new MisubError(503, VAULT_INVALID_SAVE_MESSAGE);
@@ -497,6 +514,7 @@ export async function addMisubConnection(
     token_enc: sealed,
     token_tail: tokenTail,
     refresh_enabled: input.refresh_enabled === true,
+    node_ua: nodeUa,
     last_test_at: now,
     last_test_ok: true,
     last_error: "",
@@ -508,19 +526,7 @@ export async function addMisubConnection(
   await writeStoredConnections(env.DB, { connections, active_id: newActiveId });
   clearMisubCache();
 
-  const resultConnections: MisubConnection[] = connections.map((c) => ({
-    id: c.id,
-    name: c.name,
-    base_url: c.base_url,
-    token_tail: c.token_tail,
-    refresh_enabled: c.refresh_enabled,
-    active: c.id === newActiveId,
-    last_test_at: c.last_test_at,
-    last_test_ok: c.last_test_ok,
-    last_error: c.last_error,
-    created_at: c.created_at,
-    updated_at: c.updated_at,
-  }));
+  const resultConnections: MisubConnection[] = connections.map((c) => (projectConnection(c, c.id === newActiveId)));
   return { connection: resultConnections.find((c) => c.id === conn.id)!, connections: resultConnections, active_id: newActiveId };
 }
 
@@ -528,7 +534,7 @@ export async function addMisubConnection(
 export async function updateMisubConnection(
   env: Env,
   id: string,
-  input: { name?: unknown; base_url?: unknown; token?: unknown; refresh_enabled?: unknown },
+  input: { name?: unknown; base_url?: unknown; token?: unknown; refresh_enabled?: unknown; node_ua?: unknown },
 ): Promise<{ connection: MisubConnection; connections: MisubConnection[]; active_id: string }> {
   await migrateLegacyIfNeeded(env.DB);
   const stored = await readStoredConnections(env.DB);
@@ -560,6 +566,8 @@ export async function updateMisubConnection(
     if (typeof input.refresh_enabled !== "boolean") throw new MisubError(400, "刷新开关格式不正确");
     newRefreshEnabled = input.refresh_enabled;
   }
+
+  const newNodeUa = input.node_ua !== undefined ? validateNodeUa(input.node_ua) : current.node_ua;
 
   // 验证 token
   let newTokenEnc = current.token_enc;
@@ -597,6 +605,7 @@ export async function updateMisubConnection(
     token_enc: newTokenEnc,
     token_tail: newTokenTail,
     refresh_enabled: newRefreshEnabled,
+    node_ua: newNodeUa,
     last_test_at: needTest ? now : current.last_test_at,
     last_test_ok: needTest ? true : current.last_test_ok,
     last_error: needTest ? "" : current.last_error,
@@ -605,19 +614,7 @@ export async function updateMisubConnection(
   await writeStoredConnections(env.DB, stored);
   clearMisubCache();
 
-  const resultConnections: MisubConnection[] = stored.connections.map((c) => ({
-    id: c.id,
-    name: c.name,
-    base_url: c.base_url,
-    token_tail: c.token_tail,
-    refresh_enabled: c.refresh_enabled,
-    active: c.id === stored.active_id,
-    last_test_at: c.last_test_at,
-    last_test_ok: c.last_test_ok,
-    last_error: c.last_error,
-    created_at: c.created_at,
-    updated_at: c.updated_at,
-  }));
+  const resultConnections: MisubConnection[] = stored.connections.map((c) => (projectConnection(c, c.id === stored.active_id)));
   return { connection: resultConnections.find((c) => c.id === id)!, connections: resultConnections, active_id: stored.active_id };
 }
 
@@ -643,19 +640,7 @@ export async function testMisubConnectionById(env: Env, id: string): Promise<Mis
     };
     await writeStoredConnections(env.DB, stored);
     clearMisubCache();
-    return {
-      id: stored.connections[index].id,
-      name: stored.connections[index].name,
-      base_url: stored.connections[index].base_url,
-      token_tail: stored.connections[index].token_tail,
-      refresh_enabled: stored.connections[index].refresh_enabled,
-      active: stored.connections[index].id === stored.active_id,
-      last_test_at: stored.connections[index].last_test_at,
-      last_test_ok: stored.connections[index].last_test_ok,
-      last_error: stored.connections[index].last_error,
-      created_at: stored.connections[index].created_at,
-      updated_at: stored.connections[index].updated_at,
-    };
+    return projectConnection(stored.connections[index], stored.connections[index].id === stored.active_id);
   } catch (error) {
     const now = Date.now();
     const message = error instanceof MisubError ? error.message : "连接测试失败";
@@ -691,19 +676,7 @@ export async function activateMisubConnection(
   await writeStoredConnections(env.DB, stored);
   clearMisubCache();
 
-  const connections: MisubConnection[] = stored.connections.map((c) => ({
-    id: c.id,
-    name: c.name,
-    base_url: c.base_url,
-    token_tail: c.token_tail,
-    refresh_enabled: c.refresh_enabled,
-    active: c.id === id,
-    last_test_at: c.last_test_at,
-    last_test_ok: c.last_test_ok,
-    last_error: c.last_error,
-    created_at: c.created_at,
-    updated_at: c.updated_at,
-  }));
+  const connections: MisubConnection[] = stored.connections.map((c) => (projectConnection(c, c.id === id)));
   return { connections, active_id: id };
 }
 
@@ -734,19 +707,7 @@ export async function deleteMisubConnection(
   await writeStoredConnections(env.DB, stored);
   clearMisubCache();
 
-  const connections: MisubConnection[] = stored.connections.map((c) => ({
-    id: c.id,
-    name: c.name,
-    base_url: c.base_url,
-    token_tail: c.token_tail,
-    refresh_enabled: c.refresh_enabled,
-    active: c.id === stored.active_id,
-    last_test_at: c.last_test_at,
-    last_test_ok: c.last_test_ok,
-    last_error: c.last_error,
-    created_at: c.created_at,
-    updated_at: c.updated_at,
-  }));
+  const connections: MisubConnection[] = stored.connections.map((c) => (projectConnection(c, c.id === stored.active_id)));
   return { connections, active_id: stored.active_id };
 }
 
@@ -826,7 +787,7 @@ async function misubFetch(
     throw new MisubError(502, UNREACHABLE_MESSAGE);
   }
   if (response.status === 401) {
-    throw new MisubError(401, "MiSub 令牌无效，请在设置里更新令牌");
+    throw new MisubError(401, "MiSub 令牌无效，请在服务商设置里更新令牌");
   }
   if (response.status === 403) {
     throw new MisubError(403, "MiSub 未启用 External Management API 或令牌无权限，请在 MiSub 系统设置里开启");
@@ -1010,6 +971,9 @@ export interface MisubSubscription {
   name: string;
   enabled: boolean;
   group: string;
+  tags: string[];
+  // 订阅地址只给脱敏串（协议 + 脱敏主机 + ••••），明文不出模块。
+  url_masked: string;
   node_count: number;
   upload: number;
   download: number;
@@ -1025,7 +989,9 @@ export interface MisubManualNode {
   protocol: string;
   enabled: boolean;
   group: string;
+  tags: string[];
   remarks: string;
+  region: string;
   server_masked: string;
   has_server: boolean;
 }
@@ -1059,11 +1025,19 @@ export interface MisubSnapshot {
   profiles: MisubProfile[];
 }
 
+// 订阅源的拉取参数只留在内存里，供「机场订阅节点」去拉原文；不进快照、
+// 不下发面板。
+export interface MisubSubscriptionSource {
+  url: string;
+  user_agent: string;
+}
+
 interface CacheEntry {
   at: number;
   connection_id: string;
   connection_updated_at: number;
   snapshot: MisubSnapshot;
+  sources: Map<string, MisubSubscriptionSource>;
 }
 
 // 使用 Promise 合并机制避免同一缓存 key 的并发请求重复出站
@@ -1075,6 +1049,25 @@ export function clearMisubCache(): void {
   inflightPromises.clear();
 }
 
+function asTags(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((t): t is string => typeof t === "string" && t.trim() !== "").map((t) => t.trim()).slice(0, 20);
+}
+
+// https://ab***.example.com/•••• ：只露协议与脱敏主机，路径与参数（通常含
+// 机场的订阅令牌）一律不露。
+export function maskSubscriptionUrl(rawUrl: string): string {
+  const text = typeof rawUrl === "string" ? rawUrl.trim() : "";
+  if (!text) return "";
+  try {
+    const url = new URL(text);
+    const host = maskHost(url.hostname.replace(/^\[|\]$/g, ""));
+    return url.protocol + "//" + (host || "***") + "/••••";
+  } catch {
+    return "••••";
+  }
+}
+
 function normalizeSubscription(row: Record<string, unknown>): MisubSubscription {
   const info = row["userInfo"];
   const userInfo = info && typeof info === "object" && !Array.isArray(info) ? (info as Record<string, unknown>) : null;
@@ -1083,6 +1076,8 @@ function normalizeSubscription(row: Record<string, unknown>): MisubSubscription 
     name: asText(row["name"]),
     enabled: row["enabled"] !== false,
     group: asText(row["group"]),
+    tags: asTags(row["tags"]),
+    url_masked: maskSubscriptionUrl(asText(row["url"])),
     node_count: asCount(row["nodeCount"]),
     upload: userInfo ? asCount(userInfo["upload"]) : 0,
     download: userInfo ? asCount(userInfo["download"]) : 0,
@@ -1103,7 +1098,9 @@ function normalizeManualNode(row: Record<string, unknown>): MisubManualNode {
     protocol: asText(row["protocol"]) || derived,
     enabled: row["enabled"] !== false,
     group: asText(row["group"]),
+    tags: asTags(row["tags"]),
     remarks: asText(row["remarks"]),
+    region: detectRegion(asText(row["name"]) + " " + asText(row["group"])),
     server_masked: maskServer(server.host, server.port),
     has_server: server.host !== "",
   };
@@ -1144,6 +1141,12 @@ export async function getMisubSnapshot(env: Env, fresh: boolean): Promise<MisubS
       misubList(connection.base_url, token, "/profiles"),
     ]);
     const subscriptions = subRows.map(normalizeSubscription);
+    const sources = new Map<string, MisubSubscriptionSource>();
+    for (const row of subRows) {
+      const id = asText(row["id"]);
+      const url = asText(row["url"]).trim();
+      if (id && url) sources.set(id, { url, user_agent: asText(row["userAgent"]).trim() });
+    }
     const manualNodes = nodeRows.map(normalizeManualNode);
     const subCounts = new Map(subscriptions.map((sub) => [sub.id, sub.node_count]));
     const profiles = profileRows.map((row) => profileNodes(row, subCounts));
@@ -1183,7 +1186,7 @@ export async function getMisubSnapshot(env: Env, fresh: boolean): Promise<MisubS
       manual_nodes: manualNodes,
       profiles,
     };
-    cache = { at: snapshot.fetched_at, connection_id: connection.id, connection_updated_at: connection.updated_at, snapshot };
+    cache = { at: snapshot.fetched_at, connection_id: connection.id, connection_updated_at: connection.updated_at, snapshot, sources };
     return snapshot;
   })();
 
@@ -1238,7 +1241,7 @@ export async function refreshMisubProfile(
   id: string,
 ): Promise<{ name: string; total_nodes: number }> {
   const { connection, token } = await requireConnection(env);
-  if (!connection.refresh_enabled) throw new MisubError(403, "触发刷新未开启，请先在设置里打开");
+  if (!connection.refresh_enabled) throw new MisubError(403, "触发刷新未开启，请先在服务商设置里打开");
   const { data } = await misubFetch(
     connection.base_url,
     token,
@@ -1256,4 +1259,54 @@ export async function refreshMisubProfile(
   const snapshot = await getMisubSnapshot(env, false);
   const profile = snapshot.profiles.find((entry) => entry.id === id);
   return { name: previewName || (profile?.name ?? ""), total_nodes: profile?.total_nodes ?? 0 };
+}
+// 机场订阅源的拉取参数：先看快照缓存（列表里本来就带 url），缓存没有就单独
+// 取一次 GET /subscriptions/:id。返回值只在 Worker 内部使用。
+export async function getMisubSubscriptionSource(
+  env: Env,
+  id: string,
+): Promise<{ connection_id: string; node_ua: string; name: string; enabled: boolean; source: MisubSubscriptionSource }> {
+  const { connection, token } = await requireConnection(env);
+  if (cache && cache.connection_id === connection.id && cache.connection_updated_at === connection.updated_at) {
+    const hit = cache.sources.get(id);
+    const sub = cache.snapshot.subscriptions.find((entry) => entry.id === id);
+    if (hit && sub) {
+      return { connection_id: connection.id, node_ua: connection.node_ua, name: sub.name, enabled: sub.enabled, source: hit };
+    }
+  }
+  const { data } = await misubFetch(connection.base_url, token, "/subscriptions/" + encodeURIComponent(id), "GET");
+  const row = data && typeof data === "object" && !Array.isArray(data) ? (data as Record<string, unknown>) : {};
+  const url = asText(row["url"]).trim();
+  if (!url) throw new MisubError(404, "订阅源不存在");
+  return {
+    connection_id: connection.id,
+    node_ua: connection.node_ua,
+    name: asText(row["name"]),
+    enabled: row["enabled"] !== false,
+    source: { url, user_agent: asText(row["userAgent"]).trim() },
+  };
+}
+
+// 触发单个订阅源刷新：MiSub 真去拉上游并回写 nodeCount / userInfo，有副作用，
+// 与订阅组刷新共用同一个开关。
+export async function refreshMisubSubscription(
+  env: Env,
+  id: string,
+): Promise<{ name: string; node_count: number; last_error: string }> {
+  const { connection, token } = await requireConnection(env);
+  if (!connection.refresh_enabled) throw new MisubError(403, "触发刷新未开启，请先在服务商设置里打开");
+  const { data } = await misubFetch(
+    connection.base_url,
+    token,
+    "/subscriptions/" + encodeURIComponent(id) + "/refresh",
+    "POST",
+  );
+  clearMisubCache();
+  const row = data && typeof data === "object" && !Array.isArray(data) ? (data as Record<string, unknown>) : {};
+  const inner = row["subscription"] && typeof row["subscription"] === "object" ? (row["subscription"] as Record<string, unknown>) : row;
+  return {
+    name: asText(inner["name"]),
+    node_count: asCount(inner["nodeCount"]),
+    last_error: asText(inner["lastError"]),
+  };
 }
