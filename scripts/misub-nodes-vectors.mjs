@@ -93,6 +93,57 @@ eq("clash count", [sub.format, sub.nodes.length], ["clash", 2]);
 eq("clash flow", [sub.nodes[0].name, sub.nodes[0].protocol, sub.nodes[0].host, sub.nodes[0].port, sub.nodes[0].link], ["🇭🇰 HK 01", "ss", "hk.example.com", 443, null]);
 eq("clash block", [sub.nodes[1].name, sub.nodes[1].protocol, sub.nodes[1].host, sub.nodes[1].port], ["美国 02", "trojan", "5.6.7.8", 8443]);
 
+// 列表项顶格（与 proxies 同列）：块状、行内、混写，后面跟顶层键
+const clashFlat = `mixed-port: 7890
+proxies:
+- name: 洛杉矶 01
+  type: vless
+  server: la.example.net
+  port: 443
+  ws-opts:
+    path: /x
+    headers:
+      Host: cdn.example.com
+- {name: 日本 02, type: vmess, server: 1.2.3.4, port: 8080, uuid: u}
+-
+  name: 德国 03
+  type: hysteria2
+  server: "de.example.org"
+  port: '9929'
+proxy-groups:
+- name: auto
+  type: select
+rules:
+- MATCH,auto
+`;
+sub = parse.parseSubscriptionContent(clashFlat);
+eq("clash flat count", [sub.format, sub.nodes.length], ["clash", 3]);
+eq("clash flat block", [sub.nodes[0].name, sub.nodes[0].protocol, sub.nodes[0].host, sub.nodes[0].port], ["洛杉矶 01", "vless", "la.example.net", 443]);
+eq("clash flat flow", [sub.nodes[1].name, sub.nodes[1].protocol, sub.nodes[1].host, sub.nodes[1].port], ["日本 02", "vmess", "1.2.3.4", 8080]);
+eq("clash flat bare dash", [sub.nodes[2].name, sub.nodes[2].protocol, sub.nodes[2].host, sub.nodes[2].port], ["德国 03", "hysteria2", "de.example.org", 9929]);
+
+// 单个节点、CRLF、引号键、跨行的行内写法
+const clashOne = 'proxies:\r\n- { "name": "JP Skyline", "type": "ss",\r\n    "server": "jp.example.com", "port": 443 }\r\nrules:\r\n- MATCH,DIRECT\r\n';
+sub = parse.parseSubscriptionContent(clashOne);
+eq("clash single multiline flow", [sub.format, sub.nodes.map((n) => [n.name, n.protocol, n.host, n.port])], ["clash", [["JP Skyline", "ss", "jp.example.com", 443]]]);
+
+// 缩进写法里嵌套的 name/server 不能当成新节点或覆盖已有字段
+const clashNested = `proxies:
+    - name: A
+      type: vmess
+      server: a.example.com
+      port: 1
+      ws-opts:
+        headers:
+          name: not-a-node
+    - name: B
+      type: trojan
+      server: b.example.com
+      port: 2
+`;
+sub = parse.parseSubscriptionContent(clashNested);
+eq("clash nested", sub.nodes.map((n) => [n.name, n.host]), [["A", "a.example.com"], ["B", "b.example.com"]]);
+
 // userinfo
 eq("userinfo", parse.parseUserInfoHeader("upload=1; download=2; total=1073741824; expire=1790000000"), { upload: 1, download: 2, total: 1073741824, expire: 1790000000 });
 eq("userinfo none", parse.parseUserInfoHeader(""), null);

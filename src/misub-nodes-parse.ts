@@ -190,7 +190,7 @@ function yamlScalar(raw: string): string {
 }
 
 function flowField(flow: string, key: string): string {
-  const re = new RegExp("(?:^|[{,])\\s*" + key + "\\s*:\\s*(\"[^\"]*\"|'[^']*'|[^,}]*)");
+  const re = new RegExp("(?:^|[{,])\\s*[\"']?" + key + "[\"']?\\s*:\\s*(\"[^\"]*\"|'[^']*'|[^,}]*)");
   const m = re.exec(flow);
   return m && m[1] !== undefined ? yamlScalar(m[1]) : "";
 }
@@ -217,24 +217,28 @@ export function parseClashProxies(text: string): ParsedNode[] {
   for (let i = start + 1; i < lines.length; i++) {
     const line = lines[i] ?? "";
     if (!line.trim() || /^\s*#/.test(line)) continue;
-    if (/^\S/.test(line)) break; // 下一个顶层键
-    const item = /^(\s*)-\s*(.*)$/.exec(line);
+    // 下一个顶层键才结束；YAML 允许列表项与 proxies 同列（「- name: …」顶格写），那不算结束
+    if (/^\S/.test(line) && !/^-(?:\s|$)/.test(line)) break;
+    const item = /^(\s*)-(?:\s+(.*))?$/.exec(line);
     if (item && (itemIndent < 0 || (item[1] ?? "").length <= itemIndent)) {
       flush();
       itemIndent = (item[1] ?? "").length;
-      const rest = (item[2] ?? "").trim();
+      let rest = (item[2] ?? "").trim();
       current = {};
       if (rest.startsWith("{")) {
+        // 行内写法可能跨多行：拼到右花括号为止
+        while (!rest.includes("}") && i + 1 < lines.length) rest += " " + (lines[++i] ?? "").trim();
         for (const key of ["name", "type", "server", "port"]) current[key] = flowField(rest, key);
         flush();
+        if (nodes.length >= MAX_NODES_PER_SUBSCRIPTION) break;
         continue;
       }
-      const kv = /^([A-Za-z0-9_-]+)\s*:\s*(.*)$/.exec(rest);
+      const kv = /^["']?([A-Za-z0-9_-]+)["']?\s*:\s*(.*)$/.exec(rest);
       if (kv && kv[1]) current[kv[1]] = yamlScalar(kv[2] ?? "");
       continue;
     }
     if (current) {
-      const kv = /^\s+([A-Za-z0-9_-]+)\s*:\s*(.*)$/.exec(line);
+      const kv = /^\s+["']?([A-Za-z0-9_-]+)["']?\s*:\s*(.*)$/.exec(line);
       if (kv && kv[1] && ["name", "type", "server", "port"].includes(kv[1]) && current[kv[1]] === undefined) {
         current[kv[1]] = yamlScalar(kv[2] ?? "");
       }
