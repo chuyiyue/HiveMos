@@ -949,3 +949,21 @@ article.node-card .card-meta {
   button.add-button.misub-add-conn::after,
   button.add-button.misub-save-conn::after { content: none; }
 }
+
+/* 邮箱按类型：类型分段下的配置区跟着类型切换。面板本身也是 grid，保持
+   表单字段间距；[hidden] 必须显式压回 none，别让 display:grid 盖掉它 */
+.email-type-panel { display: grid; gap: 12px; }
+.email-type-panel[hidden] { display: none; }
+
+/* 邮箱类型分段在手机上整行等分、标签不换行；不动全局 .segmented */
+@media (max-width: 639px) {
+  .email-type-segmented {
+    display: flex;
+    flex-wrap: nowrap;
+    width: 100%;
+  }
+  .email-type-segmented .segment {
+    flex: 1 1 0;
+    white-space: nowrap;
+  }
+}

@@ -1,13 +1,13 @@
 // Vault module (v1, panel-only): storage behind the vault board.
-// Secrets are entry passwords, gateway keys, mailbox SMTP passwords, and
-// TOTP entry secrets (the last ones live in vault-totp.ts, which reuses the
+// Secrets are entry passwords, gateway keys, mailbox credentials (SMTP
+// password or Resend API key), and TOTP entry secrets (the last ones live in vault-totp.ts, which reuses the
 // sealing, group and id helpers exported here).
 // They are stored AES-GCM sealed under the VAULT_KEY worker secret
 // (envelope helpers live in crypto.ts, same format as the TOTP seal).
 // Names, urls, usernames, notes and mailbox metadata (SMTP host, port,
 // security and user) are plain text. List views never expose a secret:
 // entries and gateways show only the last four characters (tail), emails
-// show smtp_secret_set. Reading one goes through revealSecret, which
+// show smtp_secret_set or resend_api_key_set. Reading one goes through revealSecret, which
 // writes a vault_access_log row first.
 //
 // The only MCP surface is the TOTP code pair in vault-totp.ts
@@ -91,6 +91,9 @@ export interface EmailRow {
   purpose: string;
   portal: string;
   note: string;
+  // 0078 之前的老行在库里没有 type 列值（迁移默认补 'smtp'）；读出时按
+  // smtp 处理，绝不因为缺列值把老数据当成别的类型。
+  type: string;
   smtp_host: string;
   smtp_port: number | null;
   smtp_security: string;
@@ -113,6 +116,27 @@ const PORTAL_MAX = 80;
 const SMTP_HOST_MAX = 253;
 const SMTP_USER_MAX = 120;
 const SMTP_DEFAULT_PORT: Record<string, number> = { ssl: 465, starttls: 587, none: 25 };
+
+// 首批两种邮箱类型：smtp 用 SMTP 组发信，resend 只用一枚 API Key（复用
+// smtp_secret 密封列）。非法值统一报「邮箱类型不正确」。
+export const EMAIL_TYPE_SMTP = "smtp";
+export const EMAIL_TYPE_RESEND = "resend";
+const EMAIL_TYPES = [EMAIL_TYPE_SMTP, EMAIL_TYPE_RESEND] as const;
+export type EmailType = (typeof EMAIL_TYPES)[number];
+
+function emailTypeOf(value: unknown, fallback: EmailType): EmailType {
+  if (value === undefined || value === null) return fallback;
+  if (typeof value !== "string") throw new VaultError("邮箱类型不正确");
+  const type = value.trim().toLowerCase();
+  if (!type) return fallback;
+  if ((EMAIL_TYPES as readonly string[]).indexOf(type) === -1) throw new VaultError("邮箱类型不正确");
+  return type as EmailType;
+}
+
+// 库里老行可能还没有 type 值（迁移前），一律按 smtp。
+function emailTypeOfRow(row: EmailRow): EmailType {
+  return row.type === EMAIL_TYPE_RESEND ? EMAIL_TYPE_RESEND : EMAIL_TYPE_SMTP;
+}
 
 export function optText(body: Record<string, unknown>, key: string, max: number, label: string): string | undefined {
   const value = body[key];
@@ -484,20 +508,37 @@ export async function deleteGateway(db: D1Database, id: string): Promise<Gateway
 
 // ---- emails ---------------------------------------------------------------
 
+// 公开视图按类型分开：smtp 照旧回 smtp_* 与 smtp_secret_set；resend 的
+// smtp_* 恒为空白，只回 resend_api_key_set（值走 reveal，列表从不回明文）。
 export function emailPublic(row: EmailRow): Record<string, unknown> {
-  return {
+  const type = emailTypeOfRow(row);
+  const base = {
     id: row.id,
     address: row.address,
     purpose: row.purpose,
     portal: row.portal,
     note: row.note,
+    type,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+  if (type === "resend") {
+    return {
+      ...base,
+      smtp_host: "",
+      smtp_port: null,
+      smtp_security: "",
+      smtp_user: "",
+      resend_api_key_set: !!row.smtp_secret,
+    };
+  }
+  return {
+    ...base,
     smtp_host: row.smtp_host || "",
     smtp_port: row.smtp_port == null ? null : row.smtp_port,
     smtp_security: row.smtp_security || "",
     smtp_user: row.smtp_user || "",
     smtp_secret_set: !!row.smtp_secret,
-    created_at: row.created_at,
-    updated_at: row.updated_at,
   };
 }
 
@@ -509,12 +550,13 @@ export async function listEmails(db: D1Database): Promise<EmailRow[]> {
   return rowsOf(await prepare(db, "SELECT * FROM emails ORDER BY created_at ASC, id ASC").all<EmailRow>());
 }
 
-// SMTP is one optional group. No smtp keys on update leaves the stored group
-// alone. An empty group (nothing filled) is "not configured" and is stored
-// as blanks. Filling the host turns the group on: security must be one of
-// ssl / starttls / none, an empty port falls back to 465 / 587 / 25, and an
-// empty user falls back to the mailbox address. A non-empty smtp_secret is
-// sealed; on edit an empty secret keeps the stored ciphertext.
+// SMTP 组逐字段可选、缺省补齐：
+// - 编辑时完全不给 smtp_* 字段 = 不动已存的那一组；
+// - 四个配置字段同时被显式清空 = 未配置，存空白（与 0030 的现状一致）；
+// - 给了配置字段就逐字段合并；只要有一个字段有值就把这一组当「已配置」：host 可单独填（不再强制
+//   host＋security 同填），security 空默认 ssl，port 空按加密方式取
+//   465 / 587 / 25，user 空默认邮箱地址；端口范围、security 枚举与长度
+//   校验照旧。密码非空才密封，编辑时空密码保留原密文。
 function smtpKeysPresent(body: Record<string, unknown>): boolean {
   return (
     body["smtp_host"] !== undefined ||
@@ -531,21 +573,12 @@ function smtpValueFilled(value: unknown): boolean {
   return true;
 }
 
-function smtpGroupFilled(body: Record<string, unknown>): boolean {
-  return (
-    smtpValueFilled(body["smtp_host"]) ||
-    smtpValueFilled(body["smtp_port"]) ||
-    smtpValueFilled(body["smtp_security"]) ||
-    smtpValueFilled(body["smtp_user"]) ||
-    smtpValueFilled(body["smtp_secret"])
-  );
-}
-
+// 空 = 缺省补齐 ssl；其余必须是 ssl / starttls / none。
 function smtpSecurityOf(value: unknown): string {
-  if (value === undefined || value === null || value === "") throw new VaultError("请选择加密方式");
+  if (value === undefined || value === null) return "ssl";
   if (typeof value !== "string") throw new VaultError("加密方式格式不正确");
   const security = value.trim().toLowerCase();
-  if (!security) throw new VaultError("请选择加密方式");
+  if (!security) return "ssl";
   if (security !== "ssl" && security !== "starttls" && security !== "none") throw new VaultError("加密方式不正确");
   return security;
 }
@@ -583,18 +616,48 @@ interface SmtpWrite {
   secretEnc: string | null;
 }
 
+const BLANK_SMTP: SmtpWrite = { host: "", port: null, security: "", user: "", secretEnc: null };
+
+function smtpFieldGiven(body: Record<string, unknown>, key: string): boolean {
+  return body[key] !== undefined && body[key] !== null;
+}
+
+// 逐字段合并：给了的字段按新值算，没给的沿用库里已有值；新建时没给的
+// 用缺省值补齐。四个配置字段同时被显式清空 = 整组回到未配置。
 async function resolveSmtp(env: Env, body: Record<string, unknown>, address: string, existing: EmailRow | null): Promise<SmtpWrite | null> {
-  if (!smtpKeysPresent(body)) return existing ? null : { host: "", port: null, security: "", user: "", secretEnc: null };
-  if (!smtpGroupFilled(body)) return { host: "", port: null, security: "", user: "", secretEnc: null };
-  const host = optText(body, "smtp_host", SMTP_HOST_MAX, "SMTP 服务器") ?? "";
-  if (!host) throw new VaultError("请填写 SMTP 服务器");
-  const security = smtpSecurityOf(body["smtp_security"]);
-  const port = smtpPortOf(body["smtp_port"], security);
-  const userText = optText(body, "smtp_user", SMTP_USER_MAX, "SMTP 用户名");
+  if (!smtpKeysPresent(body)) return existing ? null : { ...BLANK_SMTP };
+  const configKeys = ["smtp_host", "smtp_port", "smtp_security", "smtp_user"];
+  const given = configKeys.filter((key) => smtpFieldGiven(body, key));
+  const allGivenBlank = given.length > 0 && given.every((key) => !smtpValueFilled(body[key]));
+  const secretFilled = smtpValueFilled(body["smtp_secret"]);
+  // 面板「清空 SMTP」会同时提交四个配置字段且都为空；只有这种整组全空
+  // 才回到未配置（secret 一并清掉，与 0030 之后的现状一致）。只给空密码
+  // 不算清空，编辑时它表示「不改」。
+  if (allGivenBlank && !secretFilled && (!existing || given.length === configKeys.length)) {
+    return { ...BLANK_SMTP };
+  }
+  if (!existing && given.length === 0 && !secretFilled) return { ...BLANK_SMTP };
+
+  const host = smtpFieldGiven(body, "smtp_host")
+    ? optText(body, "smtp_host", SMTP_HOST_MAX, "SMTP 服务器") ?? ""
+    : existing?.smtp_host ?? "";
+  const securityInput = smtpFieldGiven(body, "smtp_security")
+    ? body["smtp_security"]
+    : existing?.smtp_security || "";
+  const security = smtpSecurityOf(securityInput);
+  const portInput = smtpFieldGiven(body, "smtp_port")
+    ? body["smtp_port"]
+    : existing?.smtp_port == null
+      ? ""
+      : existing.smtp_port;
+  const port = smtpPortOf(portInput, security);
+  const userText = smtpFieldGiven(body, "smtp_user")
+    ? optText(body, "smtp_user", SMTP_USER_MAX, "SMTP 用户名") ?? ""
+    : existing?.smtp_user ?? "";
   const user = userText ? userText : address;
   let secretEnc = existing ? existing.smtp_secret : null;
   const secret = body["smtp_secret"];
-  if (secret !== undefined && secret !== null) {
+  if (smtpFieldGiven(body, "smtp_secret")) {
     if (typeof secret !== "string") throw new VaultError("SMTP 密码格式不正确");
     if (secret !== "") {
       if (secret.length > SECRET_MAX) throw new VaultError("SMTP 密码太长了");
@@ -602,6 +665,21 @@ async function resolveSmtp(env: Env, body: Record<string, unknown>, address: str
     }
   }
   return { host, port, security, user, secretEnc };
+}
+
+// resend 只有一个专属写入字段 resend_api_key，复用 smtp_secret 密封列
+// （同一把 VAULT_KEY、同一个 enc1 信封）。非空才密封；不传或空 = 不改，
+// 新建且为空 = 未设置。
+async function resolveResendKey(env: Env, body: Record<string, unknown>, existing: EmailRow | null): Promise<string | null> {
+  let secretEnc = existing ? existing.smtp_secret : null;
+  const raw = body["resend_api_key"];
+  if (raw === undefined || raw === null) return secretEnc;
+  if (typeof raw !== "string") throw new VaultError("Resend API Key 格式不正确");
+  const key = raw.trim();
+  if (!key) return secretEnc;
+  if (key.length > SECRET_MAX) throw new VaultError("Resend API Key 太长了");
+  secretEnc = await sealSecret(env, key);
+  return secretEnc;
 }
 
 function applySmtp(row: EmailRow, smtp: SmtpWrite): void {
@@ -617,13 +695,14 @@ export async function createEmail(db: D1Database, env: Env, body: Record<string,
   const purpose = optText(body, "purpose", PURPOSE_MAX, "用途") ?? "";
   const portal = optText(body, "portal", PORTAL_MAX, "入口") ?? "";
   const note = optText(body, "note", NOTE_MAX, "备注") ?? "";
-  const smtp = await resolveSmtp(env, body, address, null);
+  const type = emailTypeOf(body["type"], EMAIL_TYPE_SMTP);
   const row: EmailRow = {
     id: newId("em"),
     address,
     purpose,
     portal,
     note,
+    type,
     smtp_host: "",
     smtp_port: null,
     smtp_security: "",
@@ -632,16 +711,23 @@ export async function createEmail(db: D1Database, env: Env, body: Record<string,
     created_at: now,
     updated_at: now,
   };
-  if (smtp) applySmtp(row, smtp);
+  if (type === EMAIL_TYPE_RESEND) {
+    // resend 行不带 SMTP 配置；API Key 存进同一个密封列。
+    row.smtp_secret = await resolveResendKey(env, body, null);
+  } else {
+    const smtp = await resolveSmtp(env, body, address, null);
+    if (smtp) applySmtp(row, smtp);
+  }
   await prepare(
     db,
-    "INSERT INTO emails (id, address, purpose, portal, note, smtp_host, smtp_port, smtp_security, smtp_user, smtp_secret, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    "INSERT INTO emails (id, address, purpose, portal, note, type, smtp_host, smtp_port, smtp_security, smtp_user, smtp_secret, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     [
       row.id,
       row.address,
       row.purpose,
       row.portal,
       row.note,
+      row.type,
       row.smtp_host,
       row.smtp_port,
       row.smtp_security,
@@ -668,17 +754,33 @@ export async function updateEmail(db: D1Database, env: Env, id: string, body: Re
   if (portal !== undefined) row.portal = portal;
   const note = optText(body, "note", NOTE_MAX, "备注");
   if (note !== undefined) row.note = note;
-  const smtp = await resolveSmtp(env, body, row.address, row);
-  if (smtp) applySmtp(row, smtp);
+  // 允许编辑时切换类型。切到 resend 时清掉 smtp_host / port / security /
+  // user，smtp_secret 列保留——它就是新类型的 API Key 槽位，没重填就沿用
+  // 原密文（从 smtp 切过来时沿用的是原密码）。切回 smtp 时这一列同样保留
+  // 当密码槽位，配置列沿用库里已有的（resend 期间恒为空白）。
+  const currentType = emailTypeOfRow(row);
+  const type = emailTypeOf(body["type"], currentType);
+  row.type = type;
+  if (type === EMAIL_TYPE_RESEND) {
+    row.smtp_host = "";
+    row.smtp_port = null;
+    row.smtp_security = "";
+    row.smtp_user = "";
+    row.smtp_secret = await resolveResendKey(env, body, row);
+  } else {
+    const smtp = await resolveSmtp(env, body, row.address, row);
+    if (smtp) applySmtp(row, smtp);
+  }
   row.updated_at = now;
   await prepare(
     db,
-    "UPDATE emails SET address = ?, purpose = ?, portal = ?, note = ?, smtp_host = ?, smtp_port = ?, smtp_security = ?, smtp_user = ?, smtp_secret = ?, updated_at = ? WHERE id = ?",
+    "UPDATE emails SET address = ?, purpose = ?, portal = ?, note = ?, type = ?, smtp_host = ?, smtp_port = ?, smtp_security = ?, smtp_user = ?, smtp_secret = ?, updated_at = ? WHERE id = ?",
     [
       row.address,
       row.purpose,
       row.portal,
       row.note,
+      row.type,
       row.smtp_host,
       row.smtp_port,
       row.smtp_security,
