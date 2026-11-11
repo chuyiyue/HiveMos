@@ -523,7 +523,6 @@
     ["calendar", "日历"],
     ["vault", "保险库"],
     ["machines", "云计算资源"],
-    ["proxy", "代理"],
   ];
   var PERM_ADVANCED = [
     ["agents_other", "操作其他 Agent"],
@@ -542,7 +541,6 @@
     ["calendar", "日历", "日程的查看与编辑"],
     ["vault", "保险库", "保险库条目的取用"],
     ["machines", "云计算资源", "服务器、云主机与 Workers 的状态与操作"],
-    ["proxy", "代理", "代理订阅与节点的查看与管理"],
   ];
 
   function emptyPerms() {

@@ -33,7 +33,6 @@ export const PERMISSION_DOMAINS = [
   "calendar",
   "vault",
   "machines",
-  "proxy",
 ] as const;
 
 export type PermissionDomain = (typeof PERMISSION_DOMAINS)[number];
