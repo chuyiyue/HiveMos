@@ -393,6 +393,92 @@
   var CLOSE_ICON =
     "<svg class=\"icon\" viewBox=\"0 0 24 24\" aria-hidden=\"true\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\"><path d=\"M6 6l12 12M18 6L6 18\"/></svg>";
 
+  // ---- 自动填充防护（登录后全站；登录页 body.auth-body 整体跳过）----
+  // 浏览器/密码管理器会把保存的登录密码误填进登录后页面的普通输入框
+  // （保险库验证码页签的搜索框中招过），按字段分两类统一处理，
+  // 与 MiSub 令牌框（machines.js 的 data-misub-token）同一口径：
+  // - 普通字段：未显式设置时补 autocomplete="off"，并加密码管理器
+  //   忽略标记（data-1p-ignore / data-lpignore / data-bwignore）
+  // - 凭据字段（type="password"，或带 data-secret-input 的文本框/文本域）：
+  //   忽略标记 + autocomplete="new-password"（源码写明 current-password /
+  //   one-time-code 的保留其语义）+ 默认 readonly 锁；首次聚焦/点按时
+  //   由下面的文档级监听解锁。源码已带 readonly 的字段（MiSub 令牌框、
+  //   验证码显示密钥）不接管解锁，保持其原有行为
+  var AUTOFILL_SKIP_TYPES = {
+    hidden: 1, checkbox: 1, radio: 1, file: 1, submit: 1, button: 1,
+    reset: 1, image: 1, range: 1, color: 1, date: 1, time: 1, month: 1,
+    week: 1, "datetime-local": 1,
+  };
+
+  function isLoginSurface(el) {
+    if (document.body && document.body.classList.contains("auth-body")) return true;
+    return !!(el && el.closest && el.closest("#login-form, #totp-form"));
+  }
+
+  function hardenInput(el) {
+    if (!el || el.hasAttribute("data-autofill-done")) return;
+    var tag = el.tagName;
+    if (tag !== "INPUT" && tag !== "TEXTAREA") return;
+    if (isLoginSurface(el)) return;
+    var type = tag === "INPUT" ? (el.getAttribute("type") || "text").toLowerCase() : "textarea";
+    if (AUTOFILL_SKIP_TYPES[type]) {
+      el.setAttribute("data-autofill-done", "skip");
+      return;
+    }
+    el.setAttribute("data-autofill-done", "1");
+    if (!el.hasAttribute("data-1p-ignore")) el.setAttribute("data-1p-ignore", "true");
+    if (!el.hasAttribute("data-lpignore")) el.setAttribute("data-lpignore", "true");
+    if (!el.hasAttribute("data-bwignore")) el.setAttribute("data-bwignore", "true");
+    var isSecret = type === "password" || el.hasAttribute("data-secret-input");
+    if (isSecret) {
+      var ac = el.getAttribute("autocomplete");
+      if (tag === "INPUT" && ac !== "current-password" && ac !== "one-time-code") {
+        el.setAttribute("autocomplete", "new-password");
+      }
+      if (!el.hasAttribute("readonly")) {
+        el.setAttribute("readonly", "");
+        el.setAttribute("data-autofill-lock", "1");
+      }
+    } else if (!el.hasAttribute("autocomplete")) {
+      el.setAttribute("autocomplete", "off");
+    }
+  }
+
+  function hardenInputs(root) {
+    if (!root) return;
+    if (root.nodeType === 1) hardenInput(root);
+    if (!root.querySelectorAll) return;
+    var nodes = root.querySelectorAll("input, textarea");
+    for (var i = 0; i < nodes.length; i++) hardenInput(nodes[i]);
+  }
+
+  function unlockAutofill(event) {
+    var t = event.target;
+    if (t && t.matches && t.matches("[data-autofill-lock]")) t.removeAttribute("readonly");
+  }
+  document.addEventListener("focusin", unlockAutofill);
+  document.addEventListener("pointerdown", unlockAutofill);
+
+  // 对话框之外的页面级渲染（设置页整页、各页搜索框、内联小表单）靠
+  // 观察器兜底；静态内容在脚本执行时与 DOMContentLoaded 各扫一遍。
+  if (!(document.body && document.body.classList.contains("auth-body"))) {
+    var autofillObserver = new MutationObserver(function (records) {
+      for (var i = 0; i < records.length; i++) {
+        var added = records[i].addedNodes;
+        for (var j = 0; j < added.length; j++) {
+          if (added[j].nodeType === 1) hardenInputs(added[j]);
+        }
+      }
+    });
+    autofillObserver.observe(document.documentElement, { childList: true, subtree: true });
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", function () {
+        hardenInputs(document);
+      });
+    }
+    hardenInputs(document);
+  }
+
   function buildOverlay(options, panel) {
     disarmDelete();
     if (currentOverlay) currentOverlay.close();
@@ -417,6 +503,7 @@
     var body = document.createElement("div");
     body.className = "manage-body";
     body.innerHTML = options.bodyHtml || "";
+    hardenInputs(body);
     var confirmSlot = document.createElement("div");
     confirmSlot.className = "confirm-slot";
     confirmSlot.setAttribute("data-manage-confirm", "");
@@ -439,6 +526,7 @@
       },
       setBody: function (html) {
         body.innerHTML = html || "";
+        hardenInputs(body);
         body.append(confirmSlot);
       },
       close: function () {
@@ -2441,6 +2529,7 @@
     var body = document.createElement("div");
     body.className = "modal-body form-grid";
     body.innerHTML = options.bodyHtml || "";
+    hardenInputs(body);
     var error = document.createElement("p");
     error.className = "field-error modal-error";
     error.hidden = true;
@@ -2488,9 +2577,11 @@
       },
       setBody: function (html) {
         body.innerHTML = html;
+        hardenInputs(body);
       },
       showResult: function (html, closeLabel) {
         body.innerHTML = html;
+        hardenInputs(body);
         error.hidden = true;
         submit.hidden = true;
         cancel.disabled = false;
@@ -3139,6 +3230,7 @@
     feedStamp: feedStamp,
     askConfirm: askConfirm,
     openFormDialog: openFormDialog,
+    hardenInputs: hardenInputs,
     openActionMenu: openActionMenu,
     openGroupManager: openGroupManager,
     openMenu: openMenu,
