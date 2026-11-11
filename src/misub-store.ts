@@ -1,6 +1,6 @@
 // MiSub API 快照的 D1 存储与同步频率（表见 migrations/0078_misub_store.sql）。
 // 每个连接一行，快照整体用 VAULT_KEY 密封在 secrets_enc；页面只读 D1。
-// 同步：hourly cron 按连接间隔（默认 6 小时，0 关闭）；手动同步 5 分钟冷却。
+// 同步：hourly cron 只认每个连接自己的间隔，未设置即 0（关闭、零出站）；手动同步 5 分钟冷却。
 // 失败只记错误，保留上次成功的快照。
 
 import type { D1Database, Env } from "./env";

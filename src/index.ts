@@ -184,11 +184,17 @@ export default {
     // touching anything: no snapshot refresh, no mirror sync, no probe, and
     // no stamp — the stamp only moves when a sweep actually ran.
     //
-    // MiSub sync has its own per-connection interval, so it runs before the gate.
+    // MiSub auto-pull follows each connection's own setting only. An unset
+    // interval is off (0): that connection makes no automatic outbound call,
+    // not even a list request. Manual refresh and pull-on-save are separate
+    // and are not affected. This call stays outside cronSweepDue because the
+    // 功能设置 interval does not decide MiSub; a connection that is off still
+    // spends nothing. Budget remains SWEEP_SUBREQUEST_BUDGET per invocation
+    // (oldest first).
     try {
       await runMisubSweep(env, now);
     } catch {
-      // Recorded per connection; the last good snapshot stays.
+      // Failures are recorded per row; the old node lists stay in D1.
     }
     try {
       if (!(await cronSweepDue(env.DB, now))) return;

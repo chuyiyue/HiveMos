@@ -3,6 +3,9 @@
 //
 // 连接存 schema_meta.misub_connections（JSON），令牌用 VAULT_KEY 密封；
 // 抓到的快照密封后存 D1（misub-store.ts）。Worker 只调 MiSub API，不拉机场订阅。
+// 同步频率：每个连接自己的自动同步间隔，未设置就是 0（关闭），没在该连接上
+// 明确开启就不自动出站；hourly cron 只同步已开启且到期的，手动刷新与保存时
+// 同步不受这个间隔影响。拉取失败保留上一次成功的数据，只记录错误。
 
 import type { D1Database, Env } from "./env";
 import { decryptString, resolveContentKey, sealString, type ContentKey } from "./crypto";
@@ -90,13 +93,27 @@ function projectConnection(c: StoredConnection, active: boolean): MisubConnectio
   };
 }
 
-export const DEFAULT_AUTO_INTERVAL_HOURS = 6;
+// 新连接、以及库里缺这个字段的旧连接，有效间隔都是 0。不再回退 6 小时。
+export const DEFAULT_AUTO_INTERVAL_HOURS = 0;
 export const MAX_INTERVAL_HOURS = 168;
 
-function normalizeStoredInterval(value: unknown): number {
+// 未设置（null / undefined / 缺失）和非法值一律 0（关闭）。0..168 的整数原样保留，
+// 包括已经存成 6 的连接——那是当时明确写下的值，不在读取时改掉。
+export function effectiveAutoIntervalHours(value: unknown): number {
   return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= MAX_INTERVAL_HOURS
     ? value
-    : DEFAULT_AUTO_INTERVAL_HOURS;
+    : 0;
+}
+
+function normalizeStoredInterval(value: unknown): number {
+  return effectiveAutoIntervalHours(value);
+}
+
+// 写入：字段省略时用 whenOmitted（新建为 0，更新为原值）。null 或空串是「留空」，按关闭处理。
+function resolveAutoIntervalWrite(value: unknown, whenOmitted: number): number {
+  if (value === undefined) return whenOmitted;
+  if (value === null || (typeof value === "string" && value.trim() === "")) return 0;
+  return validateIntervalHours(value, "自动拉取间隔");
 }
 
 export function validateIntervalHours(value: unknown, label: string): number {
@@ -515,10 +532,7 @@ export async function addMisubConnection(
   if (input.refresh_enabled !== undefined && typeof input.refresh_enabled !== "boolean") {
     throw new MisubError(400, "刷新开关格式不正确");
   }
-  const autoInterval =
-    input.auto_interval_hours === undefined || input.auto_interval_hours === null || input.auto_interval_hours === ""
-      ? DEFAULT_AUTO_INTERVAL_HOURS
-      : validateIntervalHours(input.auto_interval_hours, "同步间隔");
+  const autoInterval = resolveAutoIntervalWrite(input.auto_interval_hours, DEFAULT_AUTO_INTERVAL_HOURS);
 
   const key = vaultKeyOf(env);
   if (key.state === "invalid") throw new MisubError(503, VAULT_INVALID_SAVE_MESSAGE);
@@ -597,10 +611,7 @@ export async function updateMisubConnection(
     newRefreshEnabled = input.refresh_enabled;
   }
 
-  const newAutoInterval =
-    input.auto_interval_hours !== undefined
-      ? validateIntervalHours(input.auto_interval_hours, "同步间隔")
-      : current.auto_interval_hours;
+  const newAutoInterval = resolveAutoIntervalWrite(input.auto_interval_hours, current.auto_interval_hours);
 
   // 验证 token
   let newTokenEnc = current.token_enc;

@@ -3145,7 +3145,7 @@
       '<label>名称<input name="name" maxlength="60" autocomplete="off" placeholder="选填" /></label>' +
       '<label>MiSub 地址<input name="base_url" maxlength="2048" autocomplete="off" placeholder="https://" /></label>' +
       '<label>令牌<input name="token" maxlength="16384" autocomplete="off" data-1p-ignore="true" data-lpignore="true" data-bwignore="true" placeholder="MiSub 系统设置 → External Management API" /></label>' +
-      '<label>同步间隔（小时，0 为不自动）<input name="auto_interval_hours" type="number" inputmode="numeric" min="0" max="168" step="1" value="6" /></label>'
+      '<label>同步间隔（小时，0 为不自动）<input name="auto_interval_hours" type="number" inputmode="numeric" min="0" max="168" step="1" value="0" /></label>'
     );
   }
 
@@ -3369,7 +3369,7 @@
       ["令牌", '<span data-misub-token-slot="' + cid + '">' + misubTokenInner(conn.id) + "</span>"],
       ["测试", C.escapeHtml(misubTestSummary(conn)) + (conn.last_test_at && !conn.last_test_ok && conn.last_error ? "：" + C.escapeHtml(conn.last_error) : "")],
     ];
-    var hours = conn.auto_interval_hours == null ? 6 : conn.auto_interval_hours;
+    var hours = conn.auto_interval_hours == null ? 0 : conn.auto_interval_hours;
     return (
       '<div class="conn-detail">' +
       C.manageInfoHead({ iconHtml: HMIcons.svg("icon-plug", "icon"), title: conn.name || "未命名连接", sub: "" }) +
