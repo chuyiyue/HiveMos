@@ -658,7 +658,7 @@
       "<span class=\"subtle\">图标</span></div>" +
       "<label>服务名<input name=\"issuer\" maxlength=\"120\" autocomplete=\"off\" value=\"" + esc(v.issuer || "") + "\" /></label>" +
       "<label>账号<input name=\"account\" maxlength=\"200\" autocomplete=\"off\" value=\"" + esc(v.account || "") + "\" /></label>" +
-      "<label>密钥<input name=\"secret\" maxlength=\"512\" autocomplete=\"off\" value=\"" + esc(v.secret || "") + "\" />" +
+      "<label>密钥<input name=\"secret\" data-secret-input maxlength=\"512\" autocomplete=\"off\" value=\"" + esc(v.secret || "") + "\" />" +
       "<p class=\"subtle totp-preview\" data-add-preview></p></label>" +
       "<button type=\"button\" class=\"ghost totp-more-toggle\" data-more-toggle aria-expanded=\"false\">更多选项</button>" +
       "<div class=\"totp-more\" data-more hidden>" +
@@ -778,7 +778,7 @@
       "<span class=\"subtle\">图标</span></div>" +
       "<label>服务名<input name=\"issuer\" maxlength=\"120\" autocomplete=\"off\" value=\"" + esc(entry.issuer || "") + "\" /></label>" +
       "<label>账号<input name=\"account\" maxlength=\"200\" autocomplete=\"off\" value=\"" + esc(entry.account || "") + "\" /></label>" +
-      "<label>密钥<span class=\"secret-field\"><input type=\"password\" data-totp-secret readonly placeholder=\"••••••••••\" autocomplete=\"off\" />" +
+      "<label>密钥<span class=\"secret-field\"><input type=\"password\" data-totp-secret readonly placeholder=\"••••••••••\" autocomplete=\"off\" data-1p-ignore=\"true\" data-lpignore=\"true\" data-bwignore=\"true\" />" +
       "<button type=\"button\" class=\"secret-eye\" data-totp-eye aria-label=\"显示密钥\">" + EYE_SVG + "</button></span></label>" +
       "<label>分组" + C.groupSelect("group_id", S.groups || [], entry.group_id || "") + "</label>" +
       "<label>备注<textarea name=\"note\" rows=\"2\" maxlength=\"300\">" + esc(entry.note || "") + "</textarea></label>" +
