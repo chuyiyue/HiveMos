@@ -4,7 +4,8 @@
    数据走 /api/vault-broker/ 契约（providers / entries / grants / audit），
    fetch 封装集中在 brokerApi 一处；USE_MOCK 开关保留供本地自测，
    线上为 false 走真实接口。Agent 名单从 /api/agents 拉取，不写死。
-   vault.js 负责顶层页签与容器，本模块通过 window.HiveVaultGuide.afterRender
+   本模块挂在保险库页签内部的「外部指引」子层（与「条目」子层切换），
+   vault.js 负责页签与子层容器，本模块通过 window.HiveVaultGuide.afterRender
    被通知重绘（模式与 vault-totp.js 一致）。 */
 (function () {
   var C = window.HiveCommon;

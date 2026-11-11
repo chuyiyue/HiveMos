@@ -6,7 +6,9 @@
    邮箱 SMTP 密码只在管理弹窗里经同一条 reveal 取出后全量展示，点文本复制。 */
 (function () {
   var C = window.HiveCommon;
-  var activeTab = location.hash === "#gateway" ? "gateway" : location.hash === "#email" ? "email" : location.hash === "#totp" ? "totp" : location.hash === "#guide" ? "guide" : "vault";
+  var activeTab = location.hash === "#gateway" ? "gateway" : location.hash === "#email" ? "email" : location.hash === "#totp" ? "totp" : "vault";
+  // 保险库页签内的子层：条目（默认）/ 外部指引；#guide 深链直达指引子层
+  var vaultSub = location.hash === "#guide" ? "guide" : "entries";
 
   var ENTRIES = null;
   var GROUPS = null;
@@ -616,33 +618,41 @@
       '<button class="page-tab" type="button" role="tab" data-tab="gateway" aria-selected="' +
       (activeTab === "gateway" ? "true" : "false") +
       '">模型网关</button>' +
-      '<button class="page-tab" type="button" role="tab" data-tab="guide" aria-selected="' +
-      (activeTab === "guide" ? "true" : "false") +
-      '">外部指引</button>' +
       "</div>" +
       '<div class="page-head-actions">' +
       (activeTab === "vault"
-        ? C.addBar({ addLabel: "添加条目", addAction: "add-secret", groupAction: "add-vgroup" })
+        ? vaultSub === "guide"
+          ? ""
+          : C.addBar({ addLabel: "添加条目", addAction: "add-secret", groupAction: "add-vgroup" })
         : activeTab === "gateway"
           ? C.addBar({ addLabel: "添加网关", addAction: "add-gateway", groupAction: "add-vgroup" })
           : activeTab === "totp"
             ? '<button type=\"button\" class=\"secondary\" data-totp-act=\"scan\" data-totp-add-btn>扫码添加</button><button type=\"button\" class=\"secondary\" data-totp-act=\"io\" data-totp-add-btn>导入导出</button><button type=\"button\" class=\"add-button\" data-totp-act=\"add\" data-totp-add-btn>手动添加</button>'
-            : activeTab === "guide"
-              ? ""
-              : '<button type="button" class="add-button" data-add="email">添加邮箱</button>') +
+            : '<button type="button" class="add-button" data-add="email">添加邮箱</button>') +
       "</div></div>";
+    // 保险库页签内部顶部一层子层切换：条目 / 外部指引，指引容器就挂在指引子层里
+    var vaultPanel =
+      '<div class="page-tabs guide-subtabs" role="tablist" aria-label="保险库子层">' +
+      '<button type="button" class="guide-tab" role="tab" data-vault-sub="entries" aria-selected="' +
+      (vaultSub === "entries" ? "true" : "false") +
+      '">条目</button>' +
+      '<button type="button" class="guide-tab" role="tab" data-vault-sub="guide" aria-selected="' +
+      (vaultSub === "guide" ? "true" : "false") +
+      '">外部指引</button>' +
+      "</div>" +
+      "<div data-vault-sub-panel=\"entries\"" + (vaultSub === "entries" ? "" : " hidden") + ">" + vaultHtml + "</div>" +
+      "<div data-vault-sub-panel=\"guide\"" + (vaultSub === "guide" ? "" : " hidden") + "><div data-guide-root></div></div>";
     C.mount(
       C.layout(
         head +
-          "<div data-panel=\"vault\"" + (activeTab === "vault" ? "" : " hidden") + ">" + vaultHtml + "</div>" +
+          "<div data-panel=\"vault\"" + (activeTab === "vault" ? "" : " hidden") + ">" + vaultPanel + "</div>" +
           "<div data-panel=\"gateway\"" + (activeTab === "gateway" ? "" : " hidden") + ">" + gatewayHtml + "</div>" +
           "<div data-panel=\"email\"" + (activeTab === "email" ? "" : " hidden") + ">" + emailHtml + "</div>" +
-          "<div data-panel=\"totp\"" + (activeTab === "totp" ? "" : " hidden") + "><div data-totp-root></div></div>" +
-          "<div data-panel=\"guide\"" + (activeTab === "guide" ? "" : " hidden") + "><div data-guide-root></div></div>"
+          "<div data-panel=\"totp\"" + (activeTab === "totp" ? "" : " hidden") + "><div data-totp-root></div></div>"
       )
     );
     if (window.HiveVaultTotp) window.HiveVaultTotp.afterRender(activeTab === "totp");
-    if (window.HiveVaultGuide) window.HiveVaultGuide.afterRender(activeTab === "guide");
+    if (window.HiveVaultGuide) window.HiveVaultGuide.afterRender(activeTab === "vault" && vaultSub === "guide");
   }
 
   function submitForm(ctrl, request, onOk) {
@@ -963,10 +973,17 @@
       showEntrySecret(showSecret.getAttribute("data-entry-show"));
       return;
     }
+    var vsub = target.closest("[data-vault-sub]");
+    if (vsub) {
+      vaultSub = vsub.getAttribute("data-vault-sub") || "entries";
+      history.replaceState(null, "", vaultSub === "guide" ? "#guide" : "#vault");
+      render();
+      return;
+    }
     var tab = target.closest(".page-tab");
     if (tab) {
       activeTab = tab.getAttribute("data-tab");
-      history.replaceState(null, "", "#" + activeTab);
+      history.replaceState(null, "", "#" + (activeTab === "vault" && vaultSub === "guide" ? "guide" : activeTab));
       render();
       return;
     }
