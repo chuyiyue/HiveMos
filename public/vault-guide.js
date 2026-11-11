@@ -2,8 +2,8 @@
    只展示服务商连接说明、条目引用、注入方式与允许主机等指引元数据，
    全程没有令牌/密码/值输入框，也不向服务商发任何请求。
    数据走 /api/vault-broker/ 契约（providers / entries / grants / audit），
-   fetch 封装集中在 brokerApi 一处；当前 USE_MOCK 为 true 用本地 mock
-   异步返回，切真实接口时只改这一处开关。
+   fetch 封装集中在 brokerApi 一处；USE_MOCK 开关保留供本地自测，
+   线上为 false 走真实接口。Agent 名单从 /api/agents 拉取，不写死。
    vault.js 负责顶层页签与容器，本模块通过 window.HiveVaultGuide.afterRender
    被通知重绘（模式与 vault-totp.js 一致）。 */
 (function () {
@@ -12,7 +12,7 @@
   var esc = C.escapeHtml;
 
   // ===== 数据层：mock 与真实接口的唯一切换点 =====
-  var USE_MOCK = true;
+  var USE_MOCK = false;
   var API_BASE = "/api/vault-broker";
 
   var DAY = 24 * 60 * 60 * 1000;
@@ -194,6 +194,7 @@
     entries: null,
     grants: null,
     audit: null,
+    agents: null,
     expandedGuides: {},
     auditEntryFilter: "",
   };
@@ -212,10 +213,25 @@
     var p = findIn(S.providers, id);
     return p ? p.name : "服务商已删除";
   }
+  function agentRows() {
+    if (S.agents) return S.agents;
+    return USE_MOCK ? MOCK_AGENTS : [];
+  }
   function agentName(id) {
-    var found = null;
-    MOCK_AGENTS.forEach(function (agent) { if (agent.id === id) found = agent; });
+    var found = findIn(agentRows(), id);
     return found ? found.name : id;
+  }
+  function loadAgents() {
+    if (S.agents) return Promise.resolve(S.agents);
+    if (USE_MOCK) { S.agents = MOCK_AGENTS; return Promise.resolve(S.agents); }
+    return fetch("/api/agents", { headers: { accept: "application/json" }, cache: "no-store" })
+      .then(function (r) { return r.json().catch(function () { return {}; }); })
+      .then(function (data) {
+        var rows = (data && Array.isArray(data.agents)) ? data.agents : [];
+        S.agents = rows.map(function (a) { return { id: a.id, name: a.name || a.id }; });
+        return S.agents;
+      })
+      .catch(function () { S.agents = []; return S.agents; });
   }
   var TYPE_LABELS = { "1password": "1Password", bitwarden: "Bitwarden", other: "其他" };
   function typeLabel(type) { return TYPE_LABELS[type] || "其他"; }
@@ -241,6 +257,7 @@
       brokerApi("GET", "/entries"),
       brokerApi("GET", "/grants"),
       brokerApi("GET", "/audit"),
+      loadAgents(),
     ]).then(function (results) {
       S.loading = false;
       var providers = pickList(results[0], "providers");
@@ -630,7 +647,9 @@
     var entryOptions = (S.entries || []).map(function (e) {
       return '<option value="' + esc(e.id) + '"' + (v.entry_id === e.id ? " selected" : "") + ">" + esc(e.name) + "</option>";
     }).join("");
-    var agentOptions = MOCK_AGENTS.map(function (a) {
+    var agentRowsNow = agentRows().slice();
+    if (v.agent_id && !findIn(agentRowsNow, v.agent_id)) agentRowsNow.push({ id: v.agent_id, name: v.agent_id });
+    var agentOptions = agentRowsNow.map(function (a) {
       return '<option value="' + esc(a.id) + '"' + (v.agent_id === a.id ? " selected" : "") + ">" + esc(a.name) + "</option>";
     }).join("");
     return (
