@@ -727,7 +727,7 @@
         "<label>SSH 地址<input name=\"ssh_host\" maxlength=\"120\" autocomplete=\"off\" placeholder=\"留空时用主机 IP\" value=\"" + C.escapeHtml(v.ssh_host || "") + "\" /></label>" +
         "<label>SSH 端口<input name=\"ssh_port\" type=\"number\" min=\"1\" max=\"65535\" value=\"" + (v.ssh_port != null ? v.ssh_port : 22) + "\" /></label>" +
         "<label>SSH 用户名<input name=\"ssh_user\" maxlength=\"60\" autocomplete=\"off\" placeholder=\"" + (item ? "留空表示不修改" : "例如 root") + "\" /></label>" +
-        "<label>SSH 密码或私钥<textarea name=\"ssh_secret\" rows=\"3\" maxlength=\"16384\" placeholder=\"" + (item ? "留空表示不修改" : "密码或私钥") + "\"></textarea></label>"
+        "<label>SSH 密码或私钥<textarea name=\"ssh_secret\" data-secret-input rows=\"3\" maxlength=\"16384\" placeholder=\"" + (item ? "留空表示不修改" : "密码或私钥") + "\"></textarea></label>"
       );
     }
     if (kind === "host") {
@@ -911,7 +911,7 @@
   // 认证方式二选一：只渲染选中方式的输入框，另一个不出现在 DOM 里。
   function secretFieldHtml(authType, editing) {
     if (authType === "key") {
-      return "<label>私钥<textarea name=\"ssh_secret\" rows=\"5\" maxlength=\"16384\" autocomplete=\"off\" placeholder=\"" + (editing ? "留空表示不修改" : "粘贴 OpenSSH 或 PEM 私钥") + "\"></textarea></label>";
+      return "<label>私钥<textarea name=\"ssh_secret\" data-secret-input rows=\"5\" maxlength=\"16384\" autocomplete=\"off\" placeholder=\"" + (editing ? "留空表示不修改" : "粘贴 OpenSSH 或 PEM 私钥") + "\"></textarea></label>";
     }
     return "<label>密码<input name=\"ssh_secret\" type=\"password\" maxlength=\"200\" autocomplete=\"off\" placeholder=\"" + (editing ? "留空表示不修改" : "SSH 登录密码") + "\" /></label>";
   }
@@ -1716,7 +1716,7 @@
   function credentialFields(provider) {
     if (provider === "huawei") {
       return (
-        "<label>Access Key<input data-wiz-field=\"accessKey\" maxlength=\"200\" autocomplete=\"off\" /></label>" +
+        "<label>Access Key<input data-wiz-field=\"accessKey\" data-secret-input maxlength=\"200\" autocomplete=\"off\" /></label>" +
         "<label>Secret Key<input data-wiz-field=\"secretKey\" type=\"password\" maxlength=\"500\" autocomplete=\"off\" /></label>" +
         "<label>区域<input data-wiz-field=\"region\" maxlength=\"60\" autocomplete=\"off\" /></label>" +
         "<label>Project ID<input data-wiz-field=\"projectId\" maxlength=\"200\" autocomplete=\"off\" /></label>" +
@@ -3640,7 +3640,7 @@
     return (
       '<label>连接名称（选填）<input name="name" maxlength="60" autocomplete="off" placeholder="留空按地址自动命名" /></label>' +
       '<label>MiSub 地址<input name="base_url" maxlength="2048" autocomplete="off" placeholder="https://你的 MiSub 域名" /></label>' +
-      '<label>令牌<input name="token" type="password" maxlength="16384" autocomplete="new-password" data-misub-token="1" data-1p-ignore="true" data-lpignore="true" readonly placeholder="在 MiSub 系统设置里创建的令牌" /></label>'
+      '<label>令牌<input name="token" type="password" maxlength="16384" autocomplete="new-password" data-misub-token="1" data-1p-ignore="true" data-lpignore="true" data-bwignore="true" readonly placeholder="在 MiSub 系统设置里创建的令牌" /></label>'
     );
   }
 
@@ -3958,7 +3958,7 @@
       '<label>MiSub 地址<input name="base_url" maxlength="2048" autocomplete="off" value="' +
       C.escapeHtml(conn.base_url || "") +
       '" /></label>' +
-      '<label>令牌<input name="token" type="password" maxlength="16384" autocomplete="new-password" data-misub-token="1" data-1p-ignore="true" data-lpignore="true" readonly placeholder="留空不修改（当前末 4 位 ' +
+      '<label>令牌<input name="token" type="password" maxlength="16384" autocomplete="new-password" data-misub-token="1" data-1p-ignore="true" data-lpignore="true" data-bwignore="true" readonly placeholder="留空不修改（当前末 4 位 ' +
       C.escapeHtml(tail) +
       '）" /></label>' +
       '<label class="misub-check"><input type="checkbox" name="refresh_enabled"' +
@@ -4370,7 +4370,7 @@
         warning +
         '<label>连接名称（选填）<input name="name" maxlength="60" autocomplete="off" placeholder="留空按地址自动命名" /></label>' +
         '<label>MiSub 地址<input name="base_url" maxlength="2048" autocomplete="off" placeholder="https://你的 MiSub 域名" /></label>' +
-        '<label>令牌<input name="token" type="password" maxlength="16384" autocomplete="new-password" data-misub-token="1" data-1p-ignore="true" data-lpignore="true" readonly placeholder="在 MiSub 系统设置里创建的令牌" /></label>' +
+        '<label>令牌<input name="token" type="password" maxlength="16384" autocomplete="new-password" data-misub-token="1" data-1p-ignore="true" data-lpignore="true" data-bwignore="true" readonly placeholder="在 MiSub 系统设置里创建的令牌" /></label>' +
         misubUaFieldHtml("") +
         '<label>自动拉取间隔（小时）<input name="auto_interval_hours" type="number" inputmode="numeric" min="0" max="168" step="1" value="6" /></label>' +
         misubTokenHelpHtml() +

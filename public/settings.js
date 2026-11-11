@@ -359,7 +359,7 @@
       C.escapeHtml(state.currentPassword) +
       '" /></label>' +
       "<label>新密码" +
-      '<input data-field="newPassword" name="newPassword" type="' +
+      '<input data-field="newPassword" name="newPassword" data-secret-input type="' +
       type +
       '" maxlength="256" autocomplete="new-password" value="' +
       C.escapeHtml(state.newPassword) +
@@ -371,7 +371,7 @@
       C.escapeHtml(strengthText(state.newPassword, score)) +
       "</p>" +
       "<label>确认新密码" +
-      '<input data-field="confirmPassword" name="confirmPassword" type="' +
+      '<input data-field="confirmPassword" name="confirmPassword" data-secret-input type="' +
       type +
       '" maxlength="256" autocomplete="new-password" value="' +
       C.escapeHtml(state.confirmPassword) +
