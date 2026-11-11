@@ -172,7 +172,6 @@ async function connectionsRoute(request: Request, env: Env): Promise<Response> {
     const body = await readBody(request);
     if (!body.ok) return body.response;
     return wrap(async () => {
-      const beforeCount = (await listMisubConnections(env.DB)).connections.length;
       const result = await addMisubConnection(env, {
         name: body.value["name"],
         base_url: body.value["base_url"],
@@ -190,7 +189,7 @@ async function connectionsRoute(request: Request, env: Env): Promise<Response> {
       });
       return json(
         { ok: true, connection: result.connection, connections: result.connections, active_id: result.active_id },
-        beforeCount === 0 ? 201 : 200,
+        201,
       );
     });
   }

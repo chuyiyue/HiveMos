@@ -307,7 +307,7 @@ export async function saveMisubConfig(
     // 新建并设为当前
     const conn: StoredConnection = {
       id: newId(ID_PREFIX),
-      name: "MiSub",
+      name: defaultNameFromBaseUrl(baseUrl),
       base_url: baseUrl,
       token_enc: tokenEnc,
       token_tail: tokenTail,
