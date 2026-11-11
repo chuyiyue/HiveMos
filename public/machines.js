@@ -23,7 +23,9 @@
 
   var state = {
     items: [], connections: [], groups: [], loaded: false, loadError: "",
-    misub: null, misubLoaded: false, misubError: "",
+    misubMeta: null, misubMetaLoaded: false,
+    misub: null, misubSnapshotLoaded: false, misubSnapshotLoading: false,
+    misubError: "",
   };
   // Full credential values stay off the list payloads. Each surface fetches
   // its own row and caches it for the rest of the page session.
@@ -611,9 +613,12 @@
       "</div>" +
       '<div class="page-head-actions">' +
       (activeTab === "proxy"
-        ? state.misub && state.misub.configured === true
-          ? '<button type="button" class="secondary add-group-button" data-mshead="reload">刷新</button>' +
-            '<button type="button" class="add-button" data-mshead="settings">设置</button>'
+        ? state.misubMetaLoaded
+          ? (misubActiveConn()
+              ? '<button type="button" class="secondary add-group-button" data-mshead="reload">刷新</button>'
+              : "") +
+            '<button type="button" class="secondary add-group-button" data-misub-connections>连接管理</button>' +
+            '<button type="button" class="add-button misub-add-conn" data-misub-add>添加连接</button>'
           : ""
         : (activeTab === "hosts" ? '<button type="button" class="secondary add-group-button" data-providers>服务商</button>' : "") +
           '<button type="button" class="secondary add-group-button" data-add-group>分组管理</button>' +
@@ -638,13 +643,19 @@
     var machinesReq = api("GET", "/api/machines");
     var connsReq = api("GET", "/api/machines/providers").catch(function () { return { data: {} }; });
     var groupsReq = api("GET", "/api/groups?scope=machines").catch(function () { return { data: {} }; });
-    var misubReq = api("GET", "/api/misub").catch(function () { return { data: {} }; });
+    // 进入页面只取连接元信息，不出站；快照等代理页签激活后再拉。
+    var misubReq = api("GET", "/api/misub?meta=1")
+      .then(function (res) { applyMisubMeta(res); })
+      .catch(function () {
+        state.misubMetaLoaded = true;
+        state.misubMeta = null;
+        state.misubError = "MiSub 读取失败";
+      });
     return Promise.all([machinesReq, connsReq, groupsReq, misubReq])
       .then(function (results) {
         var res = results[0];
         var connRes = results[1];
         var groupsRes = results[2];
-        applyMisubPayload(results[3]);
         state.loaded = true;
         if (res.data && res.data.ok) {
           state.items = res.data.machines || [];
@@ -656,15 +667,19 @@
         if (groupsRes.data && groupsRes.data.ok) state.groups = groupsRes.data.groups || [];
         render();
         refreshConnPanel();
+        maybeLoadMisubSnapshot();
         scheduleProbeRefresh();
         fillWorkerStats();
       })
       .catch(function () {
         state.loaded = true;
         state.loadError = "云主机数据读取失败";
-        state.misubLoaded = true;
-        state.misubError = "MiSub 读取失败";
+        if (!state.misubMetaLoaded) {
+          state.misubMetaLoaded = true;
+          state.misubMeta = null;
+        }
         render();
+        maybeLoadMisubSnapshot();
       });
   }
 
@@ -2670,11 +2685,14 @@
     return date.getFullYear() + "-" + twoDigit(date.getMonth() + 1) + "-" + twoDigit(date.getDate());
   }
 
+  // 全站文件体积口径只有 KB/MB/GB，不出现 B。
   function fmtBytes(value) {
     var bytes = Number(value);
-    if (!Number.isFinite(bytes) || bytes <= 0) bytes = 0;
+    if (!Number.isFinite(bytes) || bytes <= 0) return "0 KB";
     if (bytes >= 1073741824) return (bytes / 1073741824).toFixed(1) + " GB";
-    return (bytes / 1048576).toFixed(1) + " MB";
+    if (bytes >= 1048576) return (bytes / 1048576).toFixed(1) + " MB";
+    if (bytes >= 1024) return Math.round(bytes / 1024) + " KB";
+    return "0 KB";
   }
 
   function misubCount(value) {
@@ -2682,24 +2700,113 @@
     return Number.isFinite(count) && count > 0 ? count : 0;
   }
 
-  function applyMisubPayload(res) {
-    state.misubLoaded = true;
-    if (res && res.data && res.data.ok) {
-      state.misub = res.data;
-      state.misubError = "";
-      return;
-    }
-    state.misubError = (res && res.data && res.data.error) || "MiSub 读取失败";
+  function misubConnections() {
+    return state.misubMeta && Array.isArray(state.misubMeta.connections) ? state.misubMeta.connections : [];
   }
 
-  function reloadMisub(fresh) {
+  function misubActiveId() {
+    return (state.misubMeta && state.misubMeta.active_id) || "";
+  }
+
+  function findMisubConn(id) {
+    var found = null;
+    misubConnections().forEach(function (entry) { if (entry.id === id) found = entry; });
+    return found;
+  }
+
+  function misubActiveConn() {
+    return findMisubConn(misubActiveId());
+  }
+
+  function misubConfig() {
+    return (state.misubMeta && state.misubMeta.config) || {};
+  }
+
+  function misubVaultState() {
+    return (state.misubMeta && state.misubMeta.vault_key_state) || "";
+  }
+
+  function misubTimeLabel(value) {
+    if (value == null || value === "") return "—";
+    return fmtLocalTime(value) || "—";
+  }
+
+  function misubTestSummary(conn) {
+    if (!conn || !conn.last_test_at) return "尚未测试";
+    var result = conn.last_test_ok ? "成功" : "失败";
+    var when = misubTimeLabel(conn.last_test_at);
+    return when && when !== "—" ? result + " · " + when : result;
+  }
+
+  // 只记录连接元信息，不出站；当前连接变化时清掉旧快照，避免串数据。
+  function applyMisubMeta(res) {
+    state.misubMetaLoaded = true;
+    if (!res || !res.data || !res.data.ok) {
+      state.misubMeta = null;
+      state.misubSnapshotLoading = false;
+      state.misubError = (res && res.data && res.data.error) || "MiSub 读取失败";
+      return;
+    }
+    var data = res.data;
+    var hadMetaError = !state.misubMeta;
+    var previousActive = misubActiveId();
+    state.misubMeta = data;
+    if (hadMetaError) state.misubError = "";
+    if (!data.active_id || (previousActive && previousActive !== data.active_id)) {
+      state.misub = null;
+      state.misubSnapshotLoaded = false;
+      state.misubSnapshotLoading = false;
+      state.misubError = "";
+    }
+  }
+
+  function reloadMisubMeta() {
+    return api("GET", "/api/misub?meta=1")
+      .then(function (res) {
+        applyMisubMeta(res);
+        render();
+        if (misubPanelCtrl && misubPanelCtrl.dialog.open) paintMisubPanel();
+        maybeLoadMisubSnapshot();
+      })
+      .catch(function () {});
+  }
+
+  function maybeLoadMisubSnapshot() {
+    if (activeTab !== "proxy") return;
+    if (!state.misubMetaLoaded || !misubActiveConn()) return;
+    if (state.misubSnapshotLoaded || state.misubSnapshotLoading) return;
+    loadMisubSnapshot(false, false);
+  }
+
+  function loadMisubSnapshot(fresh, force) {
+    if (!misubActiveConn()) return Promise.resolve();
+    if (state.misubSnapshotLoading) return Promise.resolve();
+    if (state.misubSnapshotLoaded && !fresh && !force) return Promise.resolve();
+    var requestActive = misubActiveId();
+    state.misubSnapshotLoading = true;
+    if (!state.misub) state.misubError = "";
+    render();
     return api("GET", "/api/misub" + (fresh ? "?fresh=1" : ""))
       .then(function (res) {
-        applyMisubPayload(res);
+        // 请求期间切换了当前连接：丢弃旧连接的结果，交给新一轮加载。
+        if (misubActiveId() !== requestActive) return;
+        state.misubSnapshotLoading = false;
+        if (res && res.data && res.data.ok) {
+          state.misub = res.data;
+          state.misubSnapshotLoaded = true;
+          state.misubError = "";
+          if (state.misubMeta) {
+            if (Array.isArray(res.data.connections)) state.misubMeta.connections = res.data.connections;
+            if (typeof res.data.active_id === "string") state.misubMeta.active_id = res.data.active_id;
+          }
+        } else {
+          state.misubError = (res && res.data && res.data.error) || "MiSub 读取失败";
+        }
         render();
       })
       .catch(function () {
-        state.misubLoaded = true;
+        if (misubActiveId() !== requestActive) return;
+        state.misubSnapshotLoading = false;
         state.misubError = "MiSub 读取失败";
         render();
       });
@@ -2725,7 +2832,7 @@
 
   function misubSegmented() {
     return (
-      '<div class="segmented" role="group" aria-label="MiSub 列表">' +
+      '<div class="segmented misub-segmented" role="group" aria-label="MiSub 列表">' +
       MISUB_SEGMENTS.map(function (option) {
         return (
           '<button type="button" class="segment" data-misub-seg="' + option[0] + '" aria-pressed="' +
@@ -2761,7 +2868,7 @@
       ["组成", misubCount(item.subscription_count) + " 个订阅源 · " + misubCount(item.manual_count) + " 个手动节点"],
     ];
     if (item.description) facts.push(["说明", item.description]);
-    var canRefresh = !!(state.misub && state.misub.config && state.misub.config.refresh_enabled);
+    var canRefresh = !!misubConfig().refresh_enabled;
     return C.record({
       id: item.id,
       title: item.name || "未命名订阅组",
@@ -2795,8 +2902,12 @@
     if (item.group) facts.push(["分组", item.group]);
     facts.push(["流量", fmtBytes(used) + " / " + fmtBytes(total)]);
     var expire = Number(item.expire);
+    var expired = false;
     if (item.expire != null && item.expire !== "" && Number.isFinite(expire) && expire > 0) {
-      facts.push(["到期", fmtDate(expire * 1000) + "（剩 " + misubRemainDays(expire) + " 天）"]);
+      expired = expire * 1000 <= Date.now();
+      facts.push(["到期", expired
+        ? fmtDate(expire * 1000) + "（已过期）"
+        : fmtDate(expire * 1000) + "（剩 " + misubRemainDays(expire) + " 天）"]);
     }
     if (item.last_update != null && item.last_update !== "") {
       facts.push(["最后刷新", fmtLocalTime(item.last_update)]);
@@ -2809,7 +2920,7 @@
     return C.record({
       id: item.id,
       title: item.name || "未命名订阅源",
-      statusHtml: misubDisabledBadge(item),
+      statusHtml: misubDisabledBadge(item) + (expired ? C.badge("已过期", "warn") : ""),
       extra: extra,
       facts: facts,
     });
@@ -2883,34 +2994,69 @@
     }
   }
 
-  function misubConnectCard(data) {
-    var vaultOn = !!data && data.vault_key_state === "on";
-    var warning = data && !vaultOn ? '<p class="callout danger" role="alert">保险库未配置，暂时不能保存 MiSub 令牌</p>' : "";
+  function misubAddFieldsHtml() {
+    return (
+      '<label>连接名称（选填）<input name="name" maxlength="60" autocomplete="off" placeholder="留空按地址自动命名" /></label>' +
+      '<label>MiSub 地址<input name="base_url" maxlength="2048" autocomplete="off" placeholder="https://你的 MiSub 域名" /></label>' +
+      '<label>令牌<input name="token" type="password" maxlength="16384" autocomplete="new-password" data-misub-token="1" data-1p-ignore="true" data-lpignore="true" readonly placeholder="在 MiSub 系统设置里创建的令牌" /></label>'
+    );
+  }
+
+  function misubConnectCard() {
+    var vaultOn = misubVaultState() === "on";
+    var warning = vaultOn ? "" : '<p class="callout danger" role="alert">保险库未配置，暂时不能保存 MiSub 令牌</p>';
     return C.section(
       "连接 MiSub",
       "",
       warning +
-        '<form data-misub-connect>' +
+        '<form data-misub-add-form>' +
         '<div class="stack">' +
-        '<label>MiSub 地址<input name="base_url" maxlength="2048" autocomplete="off" placeholder="https://你的 MiSub 域名" /></label>' +
-        '<label>令牌<input name="token" type="password" maxlength="16384" autocomplete="new-password" data-misub-token="1" data-1p-ignore="true" data-lpignore="true" readonly placeholder="在 MiSub 系统设置里创建的令牌" /></label>' +
+        misubAddFieldsHtml() +
         '<p class="subtle">令牌会密封保存，界面只显示末 4 位</p>' +
         '<p class="callout danger" data-misub-error role="alert" hidden></p>' +
         '<div class="add-bar">' +
         '<button type="button" class="secondary" data-misub-test>测试连接</button>' +
-        '<button type="submit" class="add-button"' + (vaultOn ? "" : " disabled") + '>保存并连接</button>' +
+        '<button type="submit" class="add-button misub-save-conn"' + (vaultOn ? "" : " disabled") + '>保存并连接</button>' +
         "</div>" +
         "</div>" +
         "</form>"
     );
   }
 
+  function misubErrorState(conn, baseUrl, hint) {
+    return C.section(
+      "MiSub",
+      hint,
+      '<p class="callout danger" role="alert">' + C.escapeHtml(state.misubError || "MiSub 读取失败") + "</p>" +
+        '<p class="subtle">' + C.escapeHtml((conn.name || "未命名连接") + " · " + baseUrl) + "</p>" +
+        '<div class="manage-actions">' +
+        '<button type="button" class="secondary" data-misub-retry>重试</button>' +
+        '<button type="button" class="secondary" data-misub-connections>连接管理</button>' +
+        "</div>"
+    );
+  }
+
   function renderMisub() {
-    if (!state.misubLoaded) return C.section("MiSub", "", C.emptyState("正在加载", ""));
-    var data = state.misub;
-    if (!data || data.configured !== true) return misubConnectCard(data);
-    var config = data.config || {};
-    var hint = "已连接 · " + (config.base_url || "") + " · 上次获取 " + fmtLocalTime(data.fetched_at);
+    if (!state.misubMetaLoaded) return C.section("MiSub", "", C.emptyState("正在加载", ""));
+    if (!state.misubMeta) {
+      return C.section(
+        "MiSub",
+        "",
+        '<p class="callout danger" role="alert">' + C.escapeHtml(state.misubError || "MiSub 读取失败") + "</p>" +
+          '<div class="manage-actions"><button type="button" class="secondary" data-misub-retry>重试</button></div>'
+      );
+    }
+    var conn = misubActiveConn();
+    if (!conn) return misubConnectCard();
+    var config = misubConfig();
+    var baseUrl = conn.base_url || config.base_url || "";
+    var hint = "当前连接 · " + (conn.name || "未命名连接") + " · " + baseUrl;
+    if (state.misub) hint += " · 上次获取 " + fmtLocalTime(state.misub.fetched_at);
+    if (!state.misub) {
+      if (state.misubSnapshotLoading) return C.section("MiSub", hint, C.emptyState("正在加载", "正在读取 MiSub 数据"));
+      if (state.misubError) return misubErrorState(conn, baseUrl, hint);
+      return C.section("MiSub", hint, C.emptyState("正在加载", ""));
+    }
     var body =
       misubOverview() +
       '<div class="stack">' +
@@ -2970,7 +3116,7 @@
       });
   }
 
-  function saveMisubConfig(form) {
+  function saveMisubAddForm(form) {
     var baseUrl = misubField(form, "base_url");
     var token = misubField(form, "token");
     if (!baseUrl) return setMisubFormError(form, "请填写 MiSub 地址");
@@ -2979,7 +3125,13 @@
     if (submit && submit.disabled) return;
     setMisubFormError(form, "");
     if (submit) submit.disabled = true;
-    api("PUT", "/api/misub/config", { base_url: baseUrl, token: token, refresh_enabled: false })
+    api("POST", "/api/misub/connections", {
+      name: misubField(form, "name"),
+      base_url: baseUrl,
+      token: token,
+      refresh_enabled: false,
+      active: true,
+    })
       .then(function (res) {
         if (!res.data || !res.data.ok) {
           if (submit) submit.disabled = false;
@@ -2987,7 +3139,12 @@
           return;
         }
         C.toast("已保存并连接");
-        return reloadMisub();
+        state.misub = null;
+        state.misubSnapshotLoaded = false;
+        state.misubError = "";
+        return reloadMisubMeta().then(function () {
+          if (activeTab === "proxy") return loadMisubSnapshot(false, true);
+        });
       })
       .catch(function () {
         if (submit) submit.disabled = false;
@@ -3006,7 +3163,7 @@
           return;
         }
         C.toast("已触发 MiSub 刷新该订阅组");
-        return reloadMisub();
+        return loadMisubSnapshot(false, true);
       })
       .catch(function () {
         if (button.isConnected) button.disabled = false;
@@ -3014,93 +3171,451 @@
       });
   }
 
-  function testMisubSettings(ctrl, button) {
-    var baseUrl = misubField(ctrl.form, "base_url");
-    var token = misubField(ctrl.form, "token");
-    if (!baseUrl) return ctrl.setError("请填写 MiSub 地址");
-    if (!token) return ctrl.setError("请填写令牌");
-    ctrl.setError("");
-    button.disabled = true;
-    api("POST", "/api/misub/test", { base_url: baseUrl, token: token })
+  // ---- MiSub 连接管理：仿服务商面板，左列表右详情 ----
+  var misubPanelCtrl = null;
+  var misubPanelState = null;
+
+  function freshMisubPanelState() {
+    return { selectedId: "", notice: null };
+  }
+
+  function setMisubPanelNotice(text, isError) {
+    if (misubPanelState) misubPanelState.notice = text ? { text: text, error: !!isError } : null;
+    var el = misubPanelCtrl && misubPanelCtrl.bodyEl.querySelector("[data-misub-panel-status]");
+    if (!el) return;
+    el.textContent = text || "";
+    el.classList.toggle("is-error", !!isError);
+  }
+
+  function misubPanelNoticeHtml() {
+    var notice = misubPanelState && misubPanelState.notice;
+    if (misubPanelState) misubPanelState.notice = null;
+    return (
+      '<p class="manage-status' + (notice && notice.error ? " is-error" : "") +
+      '" data-misub-panel-status role="status">' +
+      (notice ? C.escapeHtml(notice.text) : "") +
+      "</p>"
+    );
+  }
+
+  function misubPanelCardsHtml() {
+    var conns = misubConnections();
+    if (!conns.length) {
+      return (
+        '<div class="conn-empty">' +
+        C.emptyState("还没有 MiSub 连接", "") +
+        '<button type="button" class="add-button" data-misub-panel-add>添加连接</button>' +
+        "</div>"
+      );
+    }
+    return C.cardList(
+      conns
+        .map(function (conn) {
+          var selected = misubPanelState && misubPanelState.selectedId === conn.id;
+          var isActive = conn.id === misubActiveId();
+          var tail = conn.token_tail ? "末 4 位 " + C.escapeHtml(conn.token_tail) : "已保存";
+          return C.record({
+            id: conn.id,
+            className: "conn-card" + (selected ? " is-selected" : ""),
+            iconHtml: HMIcons.svg("icon-plug", "icon record-icon"),
+            title: conn.name || "未命名连接",
+            pill: "MiSub",
+            corner: isActive
+              ? C.badge("当前", "accent")
+              : selected
+                ? C.badge("已选", "accent")
+                : '<span class="conn-pick-hint">查看</span>',
+            facts: [
+              ["地址", C.escapeHtml(conn.base_url || "—")],
+              ["令牌", tail],
+              ["最近测试", C.escapeHtml(misubTestSummary(conn))],
+            ],
+            manage: "misubconn:" + conn.id,
+          });
+        })
+        .join("")
+    );
+  }
+
+  function misubInfoHtml(conn) {
+    var rows = [
+      ["地址", copyValueHtml(conn.base_url || "—")],
+      ["令牌", conn.token_tail ? "末 4 位 " + C.escapeHtml(conn.token_tail) : "已保存"],
+      ["最近测试", C.escapeHtml(misubTestSummary(conn))],
+      ["创建时间", C.escapeHtml(misubTimeLabel(conn.created_at))],
+    ];
+    if (conn.last_test_at && !conn.last_test_ok && conn.last_error) {
+      rows.push(["失败原因", C.escapeHtml(conn.last_error)]);
+    }
+    return (
+      '<dl class="kv">' +
+      rows
+        .map(function (pair) {
+          return "<div><dt>" + C.escapeHtml(pair[0]) + "</dt><dd>" + pair[1] + "</dd></div>";
+        })
+        .join("") +
+      "</dl>"
+    );
+  }
+
+  function misubDetailHtml(conn) {
+    var cid = C.escapeHtml(conn.id);
+    var isActive = conn.id === misubActiveId();
+    var tail = conn.token_tail || "—";
+    return (
+      '<div class="conn-detail">' +
+      C.manageInfoHead({
+        iconHtml: HMIcons.svg("icon-plug", "icon"),
+        title: conn.name || "未命名连接",
+        sub: conn.base_url || "",
+      }) +
+      '<section class="conn-section">' +
+      '<h3 class="conn-section-title">连接信息</h3>' +
+      misubInfoHtml(conn) +
+      '<div class="manage-actions">' +
+      (isActive
+        ? C.badge("当前连接", "accent")
+        : '<button type="button" class="secondary" data-misub-activate="' + cid + '">设为当前连接</button>') +
+      "</div>" +
+      "</section>" +
+      '<section class="conn-section">' +
+      '<h3 class="conn-section-title">改名</h3>' +
+      '<form data-misub-rename novalidate>' +
+      '<label>连接名称<input name="name" maxlength="60" autocomplete="off" value="' +
+      C.escapeHtml(conn.name) +
+      '" /></label>' +
+      '<div class="manage-actions"><button type="submit">保存名称</button></div>' +
+      "</form>" +
+      "</section>" +
+      '<section class="conn-section">' +
+      '<h3 class="conn-section-title">凭据</h3>' +
+      '<form data-misub-cred novalidate>' +
+      '<label>MiSub 地址<input name="base_url" maxlength="2048" autocomplete="off" value="' +
+      C.escapeHtml(conn.base_url || "") +
+      '" /></label>' +
+      '<label>令牌<input name="token" type="password" maxlength="16384" autocomplete="new-password" data-misub-token="1" data-1p-ignore="true" data-lpignore="true" readonly placeholder="留空不修改（当前末 4 位 ' +
+      C.escapeHtml(tail) +
+      '）" /></label>' +
+      '<label class="misub-check"><input type="checkbox" name="refresh_enabled"' +
+      (conn.refresh_enabled ? " checked" : "") +
+      " />允许触发订阅组刷新</label>" +
+      '<p class="subtle">保存前会先用已存凭据测试，通过后才替换</p>' +
+      '<div class="manage-actions">' +
+      '<button type="button" class="secondary" data-misub-test-saved="' + cid + '">测试连接</button>' +
+      '<button type="submit">保存凭据</button>' +
+      "</div>" +
+      "</form>" +
+      "</section>" +
+      '<div class="manage-actions conn-danger-row">' +
+      '<button type="button" class="danger" data-misub-delete="' + cid + '">删除连接</button>' +
+      "</div>" +
+      "</div>"
+    );
+  }
+
+  function misubPanelHtml() {
+    var conns = misubConnections();
+    var selected = null;
+    if (misubPanelState) {
+      if (misubPanelState.selectedId) {
+        selected = findMisubConn(misubPanelState.selectedId);
+        if (!selected) misubPanelState.selectedId = "";
+      }
+      if (!selected && conns.length) {
+        selected = conns[0];
+        misubPanelState.selectedId = selected.id;
+      }
+    }
+    return (
+      misubPanelNoticeHtml() +
+      '<div class="conn-admin' + (selected ? " has-detail" : "") + '">' +
+      '<div class="conn-list">' + misubPanelCardsHtml() + "</div>" +
+      (selected ? misubDetailHtml(selected) : "") +
+      "</div>"
+    );
+  }
+
+  function paintMisubPanel() {
+    if (!misubPanelCtrl) return;
+    var slot = misubPanelCtrl.bodyEl.querySelector("[data-misub-panel]");
+    if (!slot) return;
+    slot.innerHTML = misubPanelHtml();
+  }
+
+  function openMisubPanel() {
+    misubPanelState = freshMisubPanelState();
+    misubPanelState.selectedId = misubActiveId() || "";
+    if (!misubPanelState.selectedId && misubConnections().length) misubPanelState.selectedId = misubConnections()[0].id;
+    misubPanelCtrl = C.openManageDialog({
+      title: "MiSub 连接管理",
+      size: "lg",
+      bodyHtml: '<div data-misub-panel></div>',
+    });
+    paintMisubPanel();
+    misubPanelCtrl.dialog.addEventListener("click", handleMisubPanelClick);
+    misubPanelCtrl.dialog.addEventListener("submit", handleMisubPanelSubmit);
+  }
+
+  function selectMisubConnection(id) {
+    if (!misubPanelState || !findMisubConn(id)) return;
+    if (misubPanelState.selectedId === id) return;
+    misubPanelState.selectedId = id;
+    misubPanelState.notice = null;
+    paintMisubPanel();
+  }
+
+  function activateMisubConnection(id, button) {
+    if (!id || (button && button.disabled)) return;
+    if (button) button.disabled = true;
+    api("POST", "/api/misub/connections/" + encodeURIComponent(id) + "/activate")
       .then(function (res) {
-        button.disabled = false;
-        if (res.data && res.data.ok) {
-          C.toast("连接成功");
+        if (!res.data || !res.data.ok) {
+          if (button && button.isConnected) button.disabled = false;
+          setMisubPanelNotice((res.data && res.data.error) || "设为当前失败", true);
           return;
         }
-        C.toast((res.data && res.data.error) || "连接失败", "danger");
+        state.misub = null;
+        state.misubSnapshotLoaded = false;
+        state.misubError = "";
+        return reloadMisubMeta().then(function () {
+          setMisubPanelNotice("已设为当前连接", false);
+          if (activeTab === "proxy") return loadMisubSnapshot(false, true);
+        });
       })
       .catch(function () {
-        button.disabled = false;
-        C.toast("连接失败", "danger");
+        if (button && button.isConnected) button.disabled = false;
+        setMisubPanelNotice("网络异常，请重试", true);
       });
   }
 
-  function disconnectMisubSettings(ctrl, button, vaultKeyState) {
-    var slot = ctrl.form.querySelector("[data-misub-confirm-slot]");
-    if (!slot) return;
+  function testMisubSaved(id, button) {
+    var conn = findMisubConn(id);
+    if (!conn) return;
+    var form = misubPanelCtrl && misubPanelCtrl.bodyEl.querySelector("form[data-misub-cred]");
+    if (form) {
+      var baseUrl = misubField(form, "base_url");
+      var token = misubField(form, "token");
+      if ((baseUrl && baseUrl !== (conn.base_url || "")) || token) {
+        setMisubPanelNotice("凭据有修改，请先保存再测试", true);
+        return;
+      }
+    }
+    if (button) {
+      button.disabled = true;
+      button.textContent = "测试中…";
+    }
+    api("POST", "/api/misub/connections/" + encodeURIComponent(id) + "/test")
+      .then(function (res) {
+        var data = res.data || {};
+        var failed = !data.ok || (data.connection && data.connection.last_test_ok === false);
+        var text = failed
+          ? (data.error || (data.connection && data.connection.last_error) || "连接失败")
+          : "测试成功";
+        return reloadMisubMeta().then(function () {
+          setMisubPanelNotice(text, failed);
+        });
+      })
+      .catch(function () {
+        if (button && button.isConnected) {
+          button.disabled = false;
+          button.textContent = "测试连接";
+        }
+        setMisubPanelNotice("网络异常，请重试", true);
+      });
+  }
+
+  function deleteMisubConnection(conn, anchor) {
+    var mount = misubPanelCtrl && misubPanelCtrl.dialog.open && misubPanelCtrl.confirmSlot ? misubPanelCtrl.confirmSlot : anchor;
     C.askConfirm({
-      anchor: slot,
-      title: "断开 MiSub",
-      text: "确认断开 MiSub 吗？连接地址与令牌会被删除，已获取的数据不再更新",
-      confirmLabel: "断开连接",
+      anchor: mount,
+      title: "删除连接",
+      text: "确认删除连接「" + (conn.name || "未命名连接") + "」吗？地址与令牌会被删除，已获取的数据不再更新",
+      confirmLabel: "删除连接",
       danger: true,
     }).then(function (yes) {
-      if (!yes || button.disabled) return;
-      button.disabled = true;
-      api("DELETE", "/api/misub/config")
+      if (!yes) return;
+      api("DELETE", "/api/misub/connections/" + encodeURIComponent(conn.id))
         .then(function (res) {
           if (!res.data || !res.data.ok) {
-            button.disabled = false;
-            ctrl.setError((res.data && res.data.error) || "断开失败，请重试");
+            setMisubPanelNotice((res.data && res.data.error) || "删除失败，请重试", true);
             return;
           }
-          ctrl.close();
-          state.misub = { ok: true, configured: false, vault_key_state: vaultKeyState };
-          state.misubError = "";
-          render();
-          C.toast("已断开 MiSub");
-          return reloadMisub();
+          if (misubPanelState) misubPanelState.selectedId = "";
+          return reloadMisubMeta().then(function () {
+            setMisubPanelNotice("连接已删除", false);
+            if (activeTab === "proxy" && misubActiveConn()) return loadMisubSnapshot(false, true);
+          });
         })
         .catch(function () {
-          button.disabled = false;
-          ctrl.setError("网络异常，请重试");
+          setMisubPanelNotice("网络异常，请重试", true);
         });
     });
   }
 
-  function openMisubSettings() {
-    var data = state.misub || {};
-    var config = data.config || {};
-    var tokenTail = config.token_tail || "—";
+  function submitMisubRename(form) {
+    if (!misubPanelState || !misubPanelState.selectedId) return;
+    var name = misubField(form, "name");
+    if (!name) {
+      setMisubPanelNotice("请填写连接名称", true);
+      return;
+    }
+    if (Array.from(name).length > 60) {
+      setMisubPanelNotice("名称最多 60 个字", true);
+      return;
+    }
+    var button = form.querySelector('[type="submit"]');
+    if (button) button.disabled = true;
+    api("PATCH", "/api/misub/connections/" + encodeURIComponent(misubPanelState.selectedId), { name: name })
+      .then(function (res) {
+        if (!res.data || !res.data.ok) {
+          if (button && button.isConnected) button.disabled = false;
+          setMisubPanelNotice((res.data && res.data.error) || "保存失败，请重试", true);
+          return;
+        }
+        return reloadMisubMeta().then(function () {
+          setMisubPanelNotice("名称已保存", false);
+        });
+      })
+      .catch(function () {
+        if (button && button.isConnected) button.disabled = false;
+        setMisubPanelNotice("网络异常，请重试", true);
+      });
+  }
+
+  function submitMisubCredentials(form) {
+    if (!misubPanelState || !misubPanelState.selectedId) return;
+    var conn = findMisubConn(misubPanelState.selectedId);
+    if (!conn) return;
+    var baseUrl = misubField(form, "base_url");
+    if (!baseUrl) {
+      setMisubPanelNotice("请填写 MiSub 地址", true);
+      return;
+    }
+    var token = misubField(form, "token");
+    var refreshInput = form.querySelector('[name="refresh_enabled"]');
+    var body = { base_url: baseUrl, refresh_enabled: !!(refreshInput && refreshInput.checked) };
+    if (token) body.token = token;
+    var wasActive = conn.id === misubActiveId();
+    var button = form.querySelector('[type="submit"]');
+    if (button) {
+      button.disabled = true;
+      button.textContent = "正在验证…";
+    }
+    api("PATCH", "/api/misub/connections/" + encodeURIComponent(conn.id), body)
+      .then(function (res) {
+        if (!res.data || !res.data.ok) {
+          if (button && button.isConnected) {
+            button.disabled = false;
+            button.textContent = "保存凭据";
+          }
+          setMisubPanelNotice((res.data && res.data.error) || "保存失败，请重试", true);
+          return;
+        }
+        return reloadMisubMeta().then(function () {
+          setMisubPanelNotice("凭据已保存", false);
+          if (wasActive && activeTab === "proxy") {
+            state.misub = null;
+            state.misubSnapshotLoaded = false;
+            state.misubError = "";
+            return loadMisubSnapshot(false, true);
+          }
+        });
+      })
+      .catch(function () {
+        if (button && button.isConnected) {
+          button.disabled = false;
+          button.textContent = "保存凭据";
+        }
+        setMisubPanelNotice("网络异常，请重试", true);
+      });
+  }
+
+  function handleMisubPanelSubmit(event) {
+    var form = event.target;
+    if (!(form instanceof HTMLFormElement)) return;
+    if (form.hasAttribute("data-misub-rename")) {
+      event.preventDefault();
+      submitMisubRename(form);
+      return;
+    }
+    if (form.hasAttribute("data-misub-cred")) {
+      event.preventDefault();
+      submitMisubCredentials(form);
+    }
+  }
+
+  function handleMisubPanelClick(event) {
+    var target = event.target;
+    if (!(target instanceof Element)) return;
+    var zone = target.closest("[data-manage]");
+    if (zone && !target.closest("button, a, input, select, textarea")) {
+      var key = zone.getAttribute("data-manage") || "";
+      if (key.indexOf("misubconn:") === 0) {
+        selectMisubConnection(key.slice("misubconn:".length));
+        return;
+      }
+    }
+    var add = target.closest("[data-misub-panel-add]");
+    if (add) {
+      openMisubAddDialog();
+      return;
+    }
+    var activate = target.closest("[data-misub-activate]");
+    if (activate && !activate.disabled) {
+      activateMisubConnection(activate.getAttribute("data-misub-activate"), activate);
+      return;
+    }
+    var testBtn = target.closest("[data-misub-test-saved]");
+    if (testBtn && !testBtn.disabled) {
+      testMisubSaved(testBtn.getAttribute("data-misub-test-saved"), testBtn);
+      return;
+    }
+    var del = target.closest("[data-misub-delete]");
+    if (del && !del.disabled) {
+      var conn = findMisubConn(del.getAttribute("data-misub-delete"));
+      if (conn) deleteMisubConnection(conn, del);
+    }
+  }
+
+  function openMisubAddDialog() {
+    var vaultOn = misubVaultState() === "on";
+    var warning = vaultOn ? "" : '<p class="callout danger" role="alert">保险库未配置，暂时不能保存 MiSub 令牌</p>';
     var ctrl = C.openFormDialog({
-      title: "MiSub 设置",
+      title: "添加 MiSub 连接",
       bodyHtml:
-        '<label>MiSub 地址<input name="base_url" maxlength="2048" autocomplete="off" placeholder="https://你的 MiSub 域名" value="' +
-        C.escapeHtml(config.base_url || "") +
-        '" /></label>' +
-        '<label>令牌<input name="token" type="password" maxlength="16384" autocomplete="new-password" data-misub-token="1" data-1p-ignore="true" data-lpignore="true" readonly placeholder="留空不修改（当前末 4 位 ' +
-        C.escapeHtml(tokenTail) +
-        '）" /></label>' +
-        '<label class="misub-check"><input type="checkbox" name="refresh_enabled"' +
-        (config.refresh_enabled ? " checked" : "") +
-        " />允许触发订阅组刷新</label>" +
-        '<p class="subtle">打开后订阅组卡上会出现触发刷新，会让 MiSub 真去拉一次上游订阅</p>' +
-        '<div class="confirm-slot" data-misub-confirm-slot></div>',
+        warning +
+        '<label>连接名称（选填）<input name="name" maxlength="60" autocomplete="off" placeholder="留空按地址自动命名" /></label>' +
+        '<label>MiSub 地址<input name="base_url" maxlength="2048" autocomplete="off" placeholder="https://你的 MiSub 域名" /></label>' +
+        '<label>令牌<input name="token" type="password" maxlength="16384" autocomplete="new-password" data-misub-token="1" data-1p-ignore="true" data-lpignore="true" readonly placeholder="在 MiSub 系统设置里创建的令牌" /></label>' +
+        '<p class="subtle">令牌会密封保存，界面只显示末 4 位</p>' +
+        '<label class="misub-check"><input type="checkbox" name="set_active" checked />保存后设为当前连接</label>',
       actionsLeftHtml:
-        '<button type="button" class="secondary" data-msettings="test">测试连接</button>' +
-        '<button type="button" class="danger" data-msettings="disconnect">断开连接</button>',
+        '<button type="button" class="secondary" data-misub-add-test' + (vaultOn ? "" : " disabled") + '>测试连接</button>',
       submitLabel: "保存",
       onSubmit: function (c) {
+        if (!vaultOn) {
+          c.setError("保险库未配置，暂时不能保存 MiSub 令牌");
+          return;
+        }
         var baseUrl = misubField(c.form, "base_url");
         var token = misubField(c.form, "token");
-        var refreshInput = c.form.querySelector('[name="refresh_enabled"]');
-        if (!baseUrl) { c.setError("请填写 MiSub 地址"); return; }
+        if (!baseUrl) {
+          c.setError("请填写 MiSub 地址");
+          return;
+        }
+        if (!token) {
+          c.setError("请填写令牌");
+          return;
+        }
+        var activeInput = c.form.querySelector('[name="set_active"]');
+        var makeActive = activeInput ? activeInput.checked : true;
         c.setBusy(true);
-        api("PUT", "/api/misub/config", {
+        api("POST", "/api/misub/connections", {
+          name: misubField(c.form, "name"),
           base_url: baseUrl,
           token: token,
-          refresh_enabled: !!(refreshInput && refreshInput.checked),
+          refresh_enabled: false,
+          active: makeActive,
         })
           .then(function (res) {
             c.setBusy(false);
@@ -3108,9 +3623,20 @@
               c.setError((res.data && res.data.error) || "保存失败，请重试");
               return;
             }
+            var created = res.data.connection;
             c.close();
-            C.toast("MiSub 设置已保存");
-            return reloadMisub();
+            if (makeActive) {
+              state.misub = null;
+              state.misubSnapshotLoaded = false;
+              state.misubError = "";
+            }
+            return reloadMisubMeta().then(function () {
+              if (misubPanelCtrl && misubPanelCtrl.dialog.open && misubPanelState) {
+                if (created && findMisubConn(created.id)) misubPanelState.selectedId = created.id;
+                paintMisubPanel();
+              }
+              if (makeActive && activeTab === "proxy") return loadMisubSnapshot(false, true);
+            });
           })
           .catch(function () {
             c.setBusy(false);
@@ -3119,13 +3645,9 @@
       },
     });
     ctrl.dialog.addEventListener("click", function (event) {
-      var target = event.target instanceof Element ? event.target.closest("[data-msettings]") : null;
+      var target = event.target instanceof Element ? event.target.closest("[data-misub-add-test]") : null;
       if (!target || target.disabled) return;
-      if (target.getAttribute("data-msettings") === "test") {
-        testMisubSettings(ctrl, target);
-        return;
-      }
-      disconnectMisubSettings(ctrl, target, data.vault_key_state);
+      testMisubConnection(ctrl.form, target);
     });
   }
 
@@ -3135,9 +3657,9 @@
 
   function handleSubmit(event) {
     var form = event.target;
-    if (!(form instanceof Element) || !form.hasAttribute("data-misub-connect")) return;
+    if (!(form instanceof Element) || !form.hasAttribute("data-misub-add-form")) return;
     event.preventDefault();
-    saveMisubConfig(form);
+    saveMisubAddForm(form);
   }
 
   function handleClick(event) {
@@ -3148,6 +3670,23 @@
       activeTab = tab.getAttribute("data-tab");
       history.replaceState(null, "", "#" + activeTab);
       render();
+      maybeLoadMisubSnapshot();
+      return;
+    }
+    var misubConnBtn = target.closest("[data-misub-connections]");
+    if (misubConnBtn) {
+      openMisubPanel();
+      return;
+    }
+    var misubAddBtn = target.closest("[data-misub-add]");
+    if (misubAddBtn) {
+      openMisubAddDialog();
+      return;
+    }
+    var misubRetry = target.closest("[data-misub-retry]");
+    if (misubRetry) {
+      if (!state.misubMeta) reloadMisubMeta();
+      else loadMisubSnapshot(false, true);
       return;
     }
     var provBtn = target.closest("[data-providers]");
@@ -3171,13 +3710,10 @@
     }
     var misubHead = target.closest("[data-mshead]");
     if (misubHead && !misubHead.disabled) {
-      if (misubHead.getAttribute("data-mshead") === "settings") {
-        openMisubSettings();
-        return;
-      }
+      if (misubHead.getAttribute("data-mshead") !== "reload") return;
       misubHead.disabled = true;
       misubHead.textContent = "刷新中…";
-      reloadMisub(true).then(function () {
+      loadMisubSnapshot(true, true).then(function () {
         if (misubHead.isConnected) {
           misubHead.disabled = false;
           misubHead.textContent = "刷新";

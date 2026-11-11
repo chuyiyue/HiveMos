@@ -911,3 +911,21 @@ article.node-card .card-meta {
 .misub-dim {
   opacity: .55;
 }
+
+/* 代理页签的 segmented 在手机上整行等分，标签不换行；不动全局 .segmented */
+@media (max-width: 639px) {
+  .misub-segmented {
+    display: flex;
+    flex-wrap: nowrap;
+    width: 100%;
+  }
+  .misub-segmented .segment {
+    flex: 1 1 0;
+    white-space: nowrap;
+  }
+  /* 代理页签的主按钮保留完整文案，别被全局 add-button 缩成「添加」 */
+  button.add-button.misub-add-conn,
+  button.add-button.misub-save-conn { font-size: var(--fs-md); }
+  button.add-button.misub-add-conn::after,
+  button.add-button.misub-save-conn::after { content: none; }
+}
