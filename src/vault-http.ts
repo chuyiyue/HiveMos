@@ -1,8 +1,8 @@
 // Panel REST for the vault board. Routes sit behind the admin session gate
 // (the caller in index.ts has already authenticated); mutations additionally
 // pass the cross-site check here, same as memory-http. List responses only
-// ever carry the tail of a secret, or smtp_secret_set for a mailbox SMTP
-// password. Plaintext leaves through POST /api/vault/reveal, which writes
+// ever carry the tail of a secret, or smtp_secret_set / resend_api_key_set for
+// a mailbox credential. Plaintext leaves through POST /api/vault/reveal, which writes
 // an access-log row (and, after that gate, a best-effort oplog entry for the
 // system log's vault board). The TOTP tab (阶段 1/3/4) follows the same rules: its
 // list carries public fields only, live codes come from /codes, and revealing

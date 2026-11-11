@@ -872,12 +872,12 @@ const TOOLS = [
   },
   {
     name: "vault_list_emails",
-    description: "列出保险库的发信邮箱（地址、用途、入口、备注与 SMTP 配置概况），不含 SMTP 密码明文",
+    description: "列出保险库的发信邮箱（类型、地址、用途、入口、备注与配置概况），不含明文。type=smtp 回 SMTP 服务器/端口/加密方式/用户名与密码是否已设；type=resend 只回 API Key 是否已设",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
   },
   {
     name: "vault_get_email",
-    description: "按 email_id 或 address 取一个发信邮箱并回 SMTP 密码明文。放行前先写一条访问记录（审计失败就不返回明文），与面板「查看」同一条路径。只在当前任务确实需要发信时调用，不要把密码写入记忆、日志或文件",
+    description: "按 email_id 或 address 取一个发信邮箱并回凭据明文（type=smtp 回密码，type=resend 回 API Key）。放行前先写一条访问记录（审计失败就不返回明文），与面板「查看」同一条路径。只在当前任务确实需要发信时调用，不要把凭据写入记忆、日志或文件",
     inputSchema: {
       type: "object",
       properties: {
@@ -889,7 +889,7 @@ const TOOLS = [
   },
   {
     name: "vault_create_email",
-    description: "新建一个发信邮箱，字段与校验与面板新建一致。SMTP 是一组可选配置：给了任一 smtp_* 字段就要把服务器与加密方式填全，密码密封保存",
+    description: "新建一个发信邮箱，字段与校验与面板新建一致。type 取 smtp 或 resend（缺省 smtp）。smtp：SMTP 组逐字段可选，给了任一 smtp_* 就按该组保存，服务器可单填，加密方式空默认 ssl、端口空按加密方式取 465/587/25、用户名空默认邮箱地址，密码非空才密封；smtp 不给任何 smtp_* 则整组留空。resend：只收 resend_api_key（可空，密封保存），不要再给 smtp_* 配置",
     inputSchema: {
       type: "object",
       properties: {
@@ -897,11 +897,13 @@ const TOOLS = [
         purpose: { type: "string", description: "用途" },
         portal: { type: "string", description: "入口" },
         note: { type: "string", description: "备注" },
-        smtp_host: { type: "string", description: "SMTP 服务器" },
+        type: { type: "string", description: "邮箱类型：smtp 或 resend，缺省 smtp" },
+        smtp_host: { type: "string", description: "SMTP 服务器（type=smtp 时用，可单填）" },
         smtp_port: { type: "integer", description: "SMTP 端口；缺省按加密方式取 465 / 587 / 25" },
-        smtp_security: { type: "string", description: "加密方式：ssl、starttls 或 none" },
+        smtp_security: { type: "string", description: "加密方式 ssl、starttls 或 none；空默认 ssl" },
         smtp_user: { type: "string", description: "SMTP 用户名，缺省用邮箱地址" },
-        smtp_secret: { type: "string", description: "SMTP 密码（密封保存）" },
+        smtp_secret: { type: "string", description: "SMTP 密码（密封保存），可空" },
+        resend_api_key: { type: "string", description: "type=resend 的 API Key（密封保存），可空" },
       },
       required: ["address"],
       additionalProperties: false,
@@ -909,7 +911,7 @@ const TOOLS = [
   },
   {
     name: "vault_update_email",
-    description: "局部更新一个发信邮箱：用 email_id 或 address 定位，只改给出的字段；SMTP 组只在给出任一 smtp_* 字段时整体处理（空密码保留原密码），完全不给则不动已存的 SMTP 配置。只给 address 时它仅作定位、不能改地址；改地址要带 email_id 再给新 address",
+    description: "局部更新一个发信邮箱：用 email_id 或 address 定位，只改给出的字段。可给 type 切换类型（smtp 或 resend）：切到 resend 会清空 SMTP 服务器/端口/加密方式/用户名，密封槽位保留并当 API Key 槽位（没给新 key 就沿用原值）；切回 smtp 该槽位保留当密码槽位、配置列沿用库里已有值。smtp：不给任何 smtp_* 字段则不动已存 SMTP 组；给了字段就逐字段可选、缺省补齐（空密码保留原密文）。resend：只认 resend_api_key，不给或空表示不改。只给 address 时它仅作定位、不能改地址；改地址要带 email_id 再给新 address",
     inputSchema: {
       type: "object",
       properties: {
@@ -918,11 +920,13 @@ const TOOLS = [
         purpose: { type: "string", description: "用途" },
         portal: { type: "string", description: "入口" },
         note: { type: "string", description: "备注" },
-        smtp_host: { type: "string", description: "SMTP 服务器" },
+        type: { type: "string", description: "邮箱类型：smtp 或 resend；切换时按描述处理密封槽位" },
+        smtp_host: { type: "string", description: "SMTP 服务器（type=smtp 时用，可单填）" },
         smtp_port: { type: "integer", description: "SMTP 端口；缺省按加密方式取 465 / 587 / 25" },
-        smtp_security: { type: "string", description: "加密方式：ssl、starttls 或 none" },
-        smtp_user: { type: "string", description: "SMTP 用户名" },
+        smtp_security: { type: "string", description: "加密方式 ssl、starttls 或 none；空默认 ssl" },
+        smtp_user: { type: "string", description: "SMTP 用户名；空默认邮箱地址" },
         smtp_secret: { type: "string", description: "SMTP 密码（密封保存）；空表示保留原密码" },
+        resend_api_key: { type: "string", description: "type=resend 的 API Key（密封保存）；不给或空表示保留原值" },
       },
       additionalProperties: false,
     },
@@ -2096,7 +2100,13 @@ async function callVaultTool(
     }
     if (kind === "email") {
       const email = row as EmailRow;
-      return toolResult(id, { email: { ...emailPublic(email), smtp_secret: email.smtp_secret ? revealed.value : "" } });
+      // 明文按类型命名：smtp 回 smtp_secret（密码），resend 回
+      // resend_api_key（API Key）。两者都走 revealSecret 的同一条审计门。
+      const pub = emailPublic(email);
+      const secret = email.smtp_secret ? revealed.value : "";
+      return toolResult(id, {
+        email: pub.type === "resend" ? { ...pub, resend_api_key: secret } : { ...pub, smtp_secret: secret },
+      });
     }
     const gateway = row as GatewayRow;
     return toolResult(id, { gateway: { ...gatewayPublic(gateway), key: revealed.value } });
