@@ -111,6 +111,8 @@ export interface PublicAgent {
   avatar_url: string | null;
   has_custom_avatar: boolean;
   call_count: number;
+  // 保险库纯指引的 per-agent 技能开关（内置技能 vault-broker），默认关。
+  vault_guide_enabled: boolean;
 }
 
 export interface PublicGroup {
@@ -144,6 +146,7 @@ interface AgentRow {
   avatar_url?: string | null;
   has_custom_avatar?: number | string | null;
   call_count: number | string | null;
+  vault_guide_enabled?: number | string | null;
 }
 
 export interface AuditItem {
@@ -1194,7 +1197,7 @@ export async function resolveAgent(db: D1Database, agentId: string, name: string
   if (name) {
     const byName = await prepare(
       db,
-      "SELECT id, name, status, group_id, permissions, last_seen_at, pinned_at, created_at, call_count, avatar_icon, avatar_url, EXISTS(SELECT 1 FROM agent_avatars WHERE agent_id = agents.id) AS has_custom_avatar FROM agents WHERE name = ?",
+      "SELECT id, name, status, group_id, permissions, last_seen_at, pinned_at, created_at, call_count, avatar_icon, avatar_url, vault_guide_enabled, EXISTS(SELECT 1 FROM agent_avatars WHERE agent_id = agents.id) AS has_custom_avatar FROM agents WHERE name = ?",
       [name],
     ).first<AgentRow>();
     if (byName) return toPublicAgent(byName);
@@ -1445,11 +1448,12 @@ function toPublicAgent(row: AgentRow): PublicAgent {
     avatar_url: row.avatar_url ?? null,
     has_custom_avatar: asNumber(row.has_custom_avatar) === 1,
     call_count: asNumber(row.call_count) ?? 0,
+    vault_guide_enabled: asNumber(row.vault_guide_enabled) === 1,
   };
 }
 
 async function getAgentRow(db: D1Database, id: string): Promise<AgentRow | null> {
-  return prepare(db, "SELECT id, name, status, group_id, permissions, last_seen_at, pinned_at, created_at, call_count, avatar_icon, avatar_url, EXISTS(SELECT 1 FROM agent_avatars WHERE agent_id = agents.id) AS has_custom_avatar FROM agents WHERE id = ?", [id]).first<AgentRow>();
+  return prepare(db, "SELECT id, name, status, group_id, permissions, last_seen_at, pinned_at, created_at, call_count, avatar_icon, avatar_url, vault_guide_enabled, EXISTS(SELECT 1 FROM agent_avatars WHERE agent_id = agents.id) AS has_custom_avatar FROM agents WHERE id = ?", [id]).first<AgentRow>();
 }
 
 // Resolves an optional group reference for the agent scope. Absent or blank
@@ -1467,7 +1471,7 @@ async function resolveAgentGroupId(db: D1Database, value: unknown): Promise<{ ok
 export async function listAgents(db: D1Database): Promise<PublicAgent[]> {
   const listed = await prepare(
     db,
-    "SELECT id, name, status, group_id, permissions, last_seen_at, pinned_at, created_at, call_count, avatar_icon, avatar_url, EXISTS(SELECT 1 FROM agent_avatars WHERE agent_id = agents.id) AS has_custom_avatar FROM agents ORDER BY created_at DESC",
+    "SELECT id, name, status, group_id, permissions, last_seen_at, pinned_at, created_at, call_count, avatar_icon, avatar_url, vault_guide_enabled, EXISTS(SELECT 1 FROM agent_avatars WHERE agent_id = agents.id) AS has_custom_avatar FROM agents ORDER BY created_at DESC",
   ).all<AgentRow>();
   return rowsOf(listed).map(toPublicAgent);
 }
@@ -1501,13 +1505,13 @@ export async function listSidebarAgents(db: D1Database, limit: number): Promise<
   });
   const pinnedListed = await prepare(
     db,
-    "SELECT id, name, status, group_id, permissions, last_seen_at, pinned_at, created_at, avatar_icon, avatar_url, EXISTS(SELECT 1 FROM agent_avatars WHERE agent_id = agents.id) AS has_custom_avatar FROM agents WHERE pinned_at IS NOT NULL ORDER BY pinned_at ASC, created_at ASC",
+    "SELECT id, name, status, group_id, permissions, last_seen_at, pinned_at, created_at, avatar_icon, avatar_url, vault_guide_enabled, EXISTS(SELECT 1 FROM agent_avatars WHERE agent_id = agents.id) AS has_custom_avatar FROM agents WHERE pinned_at IS NOT NULL ORDER BY pinned_at ASC, created_at ASC",
   ).all<AgentRow>();
   const pinned = rowsOf(pinnedListed).map((row) => toItem(row, true));
   if (pinned.length >= limit) return pinned;
   const fillListed = await prepare(
     db,
-    "SELECT id, name, status, group_id, permissions, last_seen_at, pinned_at, created_at, avatar_icon, avatar_url, EXISTS(SELECT 1 FROM agent_avatars WHERE agent_id = agents.id) AS has_custom_avatar FROM agents WHERE status = 'active' AND pinned_at IS NULL ORDER BY last_seen_at DESC, created_at DESC LIMIT ?",
+    "SELECT id, name, status, group_id, permissions, last_seen_at, pinned_at, created_at, avatar_icon, avatar_url, vault_guide_enabled, EXISTS(SELECT 1 FROM agent_avatars WHERE agent_id = agents.id) AS has_custom_avatar FROM agents WHERE status = 'active' AND pinned_at IS NULL ORDER BY last_seen_at DESC, created_at DESC LIMIT ?",
     [limit - pinned.length],
   ).all<AgentRow>();
   return pinned.concat(rowsOf(fillListed).map((row) => toItem(row, false)));
@@ -1543,7 +1547,7 @@ export async function createAgent(env: Env, value: unknown): Promise<{ ok: true;
     return dbFailure();
   }
   await auditAgentQuietly(db, id, "create");
-  return { ok: true, agent: { id, name, status: "active", group_id: resolved.groupId, permissions, last_seen_at: null, pinned_at: null, created_at: now, call_count: 0, avatar_icon: null, avatar_url: null, has_custom_avatar: false, token } };
+  return { ok: true, agent: { id, name, status: "active", group_id: resolved.groupId, permissions, last_seen_at: null, pinned_at: null, created_at: now, call_count: 0, avatar_icon: null, avatar_url: null, has_custom_avatar: false, vault_guide_enabled: false, token } };
 }
 
 export async function updateAgent(db: D1Database, id: string, value: unknown): Promise<{ ok: true; agent: PublicAgent } | Failure> {
@@ -1580,6 +1584,11 @@ export async function updateAgent(db: D1Database, id: string, value: unknown): P
     if (body.status !== "active" && body.status !== "disabled") return { ok: false, status: 400, error: "状态不正确" };
     status = body.status;
   }
+  let vaultGuideEnabled = asNumber(existing.vault_guide_enabled) === 1 ? 1 : 0;
+  if ("vault_guide_enabled" in body) {
+    if (typeof body.vault_guide_enabled !== "boolean") return { ok: false, status: 400, error: "指引技能开关不正确" };
+    vaultGuideEnabled = body.vault_guide_enabled ? 1 : 0;
+  }
   // Avatar sources are mutually exclusive: setting one clears the others
   // (the uploaded image row is dropped below once the update lands).
   let avatarIcon = existing.avatar_icon ?? null;
@@ -1612,7 +1621,7 @@ export async function updateAgent(db: D1Database, id: string, value: unknown): P
     }
   }
   try {
-    await prepare(db, "UPDATE agents SET name = ?, group_id = ?, permissions = ?, pinned_at = ?, status = ?, avatar_icon = ?, avatar_url = ? WHERE id = ?", [name, groupId, serializePermissions(permissions), pinnedAt, status, avatarIcon, avatarUrl, id]).run();
+    await prepare(db, "UPDATE agents SET name = ?, group_id = ?, permissions = ?, pinned_at = ?, status = ?, avatar_icon = ?, avatar_url = ?, vault_guide_enabled = ? WHERE id = ?", [name, groupId, serializePermissions(permissions), pinnedAt, status, avatarIcon, avatarUrl, vaultGuideEnabled, id]).run();
   } catch (error) {
     if (isUniqueError(error)) return { ok: false, status: 409, error: "这个名字已存在" };
     return dbFailure();
@@ -1625,7 +1634,7 @@ export async function updateAgent(db: D1Database, id: string, value: unknown): P
     }
   }
   if ("permissions" in body) await auditAgentQuietly(db, id, "permissions");
-  if ("name" in body || "group_id" in body || "pinned" in body || "status" in body) await auditAgentQuietly(db, id, "update");
+  if ("name" in body || "group_id" in body || "pinned" in body || "status" in body || "vault_guide_enabled" in body) await auditAgentQuietly(db, id, "update");
   const fresh = await getAgentRow(db, id);
   if (!fresh) return { ok: false, status: 404, error: "未找到" };
   return { ok: true, agent: toPublicAgent(fresh) };

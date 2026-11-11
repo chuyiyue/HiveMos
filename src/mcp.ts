@@ -135,6 +135,7 @@ import {
 } from "./vault";
 import type { EmailRow, GatewayRow, VaultEntryRow } from "./vault";
 import { getTotpCodeForAgent, listTotpForAgent } from "./vault-totp";
+import { GuideError, listGuideForAgent } from "./vault-guide";
 
 const MAX_BODY_BYTES = 64 * 1024;
 
@@ -1061,6 +1062,11 @@ const TOOLS = [
       additionalProperties: false,
     },
   },
+  {
+    name: "vault_guide_list",
+    description: "列出管理员授权给你的外部保险库连接指引（服务商与连接说明、条目引用、用途、建议注入方式、允许主机、标签）。指引只有引用与说明、没有任何凭据值；取值要按连接说明在你自己那端完成。未被授权的条目不会出现在这里",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
 ];
 
 // 权限分类（域、操作、advanced 开关）在 src/tool-permissions.ts，单一事实
@@ -1272,6 +1278,18 @@ async function callTool(request: Request, env: Env, ctx: WaitCtx, id: unknown, p
   }
   if (name.startsWith("agents_")) {
     return await callAgentsTool(env, request, id, name, record as Record<string, unknown>, auth);
+  }
+  if (name === "vault_guide_list") {
+    // 三重门中的后两重（per-agent 技能开关 + grant 行级 ACL）在
+    // listGuideForAgent 里判：不过的条目不出现在结果里、不泄露存在性；
+    // 返回的每条都会逐条写 view 审计，审计失败整次按错误返回。
+    try {
+      const entries = await listGuideForAgent(env.DB, auth.agentId, Date.now());
+      return toolResult(id, { entries });
+    } catch (error) {
+      if (error instanceof GuideError) return toolResult(id, error.message, true);
+      throw error;
+    }
   }
   if (name.startsWith("vault_")) {
     try {

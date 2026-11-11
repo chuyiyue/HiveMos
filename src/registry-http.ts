@@ -256,6 +256,8 @@ async function agentOne(request: Request, env: Env, id: string): Promise<Respons
       text = `${action}了 Agent「${name}」`;
     } else if ("permissions" in value) {
       text = `修改了 Agent「${name}」的权限`;
+    } else if ("vault_guide_enabled" in value) {
+      text = value.vault_guide_enabled ? `开启了 Agent「${name}」的指引技能` : `关闭了 Agent「${name}」的指引技能`;
     } else if ("avatar_icon" in value || "avatar_url" in value) {
       text = `更换了 Agent「${name}」的头像`;
     } else if ("name" in value) {

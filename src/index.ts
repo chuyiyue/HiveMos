@@ -47,6 +47,7 @@ import { handleBackupRequest } from "./backup-http";
 import { maybeRunScheduledBackup } from "./backup";
 import { cronSweepDue } from "./settings";
 import { handleVaultRequest } from "./vault-http";
+import { handleVaultGuideRequest } from "./vault-guide-http";
 import { handleOAuthAdmin, handleOAuthPublic } from "./oauth-http";
 import { handleExtrasRequest } from "./extras-http";
 import { handleGithubAuthedRequest, handleGithubPublicRequest } from "./github";
@@ -160,6 +161,10 @@ export default {
       if (backup) return backup;
       const vault = await handleVaultRequest(request, env, wait, path);
       if (vault) return vault;
+      // 保险库外部连接「纯指引」：连接目录与指引的管理面（面板子层），
+      // 纯元数据、零出站，与 /api/vault/* 隔离走 /api/vault-broker/ 前缀。
+      const vaultGuide = await handleVaultGuideRequest(request, env, path);
+      if (vaultGuide) return vaultGuide;
       const oauthAdmin = await handleOAuthAdmin(request, env, path);
       if (oauthAdmin) return oauthAdmin;
       const extras = await handleExtrasRequest(request, env, wait, path);

@@ -63,6 +63,13 @@ export const TOOL_PERMISSIONS: Record<string, ToolPermission> = {
   vault_get_email: { domain: "vault", op: "read" },
   vault_list_gateways: { domain: "vault", op: "read" },
   vault_get_gateway: { domain: "vault", op: "read" },
+  // 外部连接指引查询（纯指引版）：域门只认 vault.read，但放行还要过
+  // 工具层的另外两重门——per-agent 技能开关（agents.vault_guide_enabled，
+  // 对应内置技能 vault-broker）与条目 grant 行级 ACL；两重门在 handler
+  // （vault-guide.ts 的 listGuideForAgent）里判，不满足的条目不出现在
+  // 结果里、连存在性都不泄露。本表只登记域门，不代表单靠 vault.read
+  // 就能看到任何指引。
+  vault_guide_list: { domain: "vault", op: "read" },
   // 验证码是纯高级域工具：只认 totp.read，不挂 vault 域（见文件头）。
   vault_2fa_list: { advanced: { key: "totp", op: "read" } },
   vault_2fa_get_code: { advanced: { key: "totp", op: "read" } },
