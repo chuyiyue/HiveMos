@@ -685,13 +685,14 @@
 
   // 添加与编辑共用同一套字段构建；item 为空是添加，传入条目是编辑并预填。
   // 状态、心跳、版本是运行态字段，不在表单里，编辑时保持不变；
-  // API 令牌不回填，编辑时留空表示不修改；服务器 SSH 凭据由 openItemDialog
-  // 打开后经 reveal 取回预填（见该函数内的 serverSecretOriginal）。
+  // API 令牌与服务器 SSH 凭据都由 openItemDialog 打开后经 reveal 取回
+  // 预填（见该函数内的 serverSecretOriginal / workerTokenOriginal），
+  // 提交时与预填原值相同不发该字段，清空也不发。
   function workerPlatformFields(platform, v, editing) {
     v = v || {};
     var tokenField =
-      "<label>API 令牌<input name=\"api_token\" type=\"password\" maxlength=\"16384\" autocomplete=\"off\" placeholder=\"" +
-      (editing ? "留空表示不修改" : platform === "vercel" ? "有项目读取权限的 Vercel 令牌" : "有 Workers 读取权限的令牌") +
+      "<label>API 令牌<input name=\"api_token\" type=\"text\" data-secret-input maxlength=\"16384\" autocomplete=\"off\" placeholder=\"" +
+      (editing ? "清空表示不修改" : platform === "vercel" ? "有项目读取权限的 Vercel 令牌" : "有 Workers 读取权限的令牌") +
       "\" /></label>";
     if (platform === "vercel") {
       return (
@@ -760,6 +761,8 @@
     // 编辑服务器时经 reveal 取回的当前 SSH 凭据原文：预填展示用，也用来
     // 判断提交时字段有没有真改动。
     var serverSecretOriginal = null;
+    // 编辑边缘账号时经 reveal 取回的当前 API 令牌原文，用途同上。
+    var workerTokenOriginal = null;
     var dlg = C.openFormDialog({
       title: (editing ? "编辑" : "添加") + TITLE_FOR[kind],
       bodyHtml: itemFields(kind, item),
@@ -807,7 +810,8 @@
           if (platform === "vercel") payload.team_id = val(ctrl, "team_id");
           else payload.cf_account_id = val(ctrl, "cf_account_id");
           var token = val(ctrl, "api_token");
-          if (token) payload.api_token = token;
+          // 与预填原值相同视为没改，不提交（保持「不修改」语义）。
+          if (token && token !== workerTokenOriginal && token !== (workerTokenOriginal || "").trim()) payload.api_token = token;
         }
         ctrl.setBusy(true);
         var request = editing
@@ -837,6 +841,17 @@
           if (typeof value !== "string" || !value) return;
           serverSecretOriginal = value;
           var field = dlg.form.querySelector('[name="ssh_secret"]');
+          if (field && !field.value) field.value = value;
+        })
+        .catch(function () {});
+    }
+    if (editing && kind === "worker" && item.api_token_tail) {
+      api("POST", "/api/machines/" + encodeURIComponent(item.id) + "/reveal")
+        .then(function (res) {
+          var value = res.data && res.data.ok && res.data.reveal ? res.data.reveal.secret : null;
+          if (typeof value !== "string" || !value) return;
+          workerTokenOriginal = value;
+          var field = dlg.form.querySelector('[name="api_token"]');
           if (field && !field.value) field.value = value;
         })
         .catch(function () {});
@@ -2378,7 +2393,7 @@
         var facts = [
           ["主机", C.escapeHtml((item.ssh_host || item.ip || "未填写") + (item.ssh_port ? ":" + item.ssh_port : ""))],
           ["用户名", C.escapeHtml(result.data.reveal.ssh_user || "未填写")],
-          ["密码末四位", C.escapeHtml(item.ssh_tail || "无")],
+          ["密码", C.escapeHtml(value || "无")],
           ["更新时间", C.escapeHtml(C.formatMinute(item.updated_at) || "—")],
         ];
         ctrl.setBody(secretHtml + C.record({ id: item.id, title: item.name, facts: facts }));

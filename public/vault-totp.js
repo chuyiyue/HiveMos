@@ -778,8 +778,8 @@
       "<span class=\"subtle\">图标</span></div>" +
       "<label>服务名<input name=\"issuer\" maxlength=\"120\" autocomplete=\"off\" value=\"" + esc(entry.issuer || "") + "\" /></label>" +
       "<label>账号<input name=\"account\" maxlength=\"200\" autocomplete=\"off\" value=\"" + esc(entry.account || "") + "\" /></label>" +
-      "<label>密钥<span class=\"secret-field\"><input type=\"password\" data-totp-secret readonly placeholder=\"••••••••••\" autocomplete=\"off\" data-1p-ignore=\"true\" data-lpignore=\"true\" data-bwignore=\"true\" />" +
-      "<button type=\"button\" class=\"secret-eye\" data-totp-eye aria-label=\"显示密钥\">" + EYE_SVG + "</button></span></label>" +
+      "<label>密钥<span class=\"secret-field\"><input type=\"text\" data-totp-secret readonly autocomplete=\"off\" data-1p-ignore=\"true\" data-lpignore=\"true\" data-bwignore=\"true\" />" +
+      "<button type=\"button\" class=\"secret-eye\" data-totp-eye aria-label=\"隐藏密钥\">" + EYE_OFF_SVG + "</button></span></label>" +
       "<label>分组" + C.groupSelect("group_id", S.groups || [], entry.group_id || "") + "</label>" +
       "<label>备注<textarea name=\"note\" rows=\"2\" maxlength=\"300\">" + esc(entry.note || "") + "</textarea></label>" +
       switchHtml("ai_read", entry.ai_read !== false, "允许 AI 读取") +
@@ -792,6 +792,30 @@
     var dialog = ctrl.dialog;
     C.refreshSelects(dialog);
     wireFormBits(dialog, null);
+    // 密钥默认明文：打开弹窗就经 reveal 拉一次填进框里（框初始就是
+    // type=text）；眼睛按钮只负责在明文/打码之间切换，拉取失败时点
+    // 眼睛重试。notify 只在用户点眼睛触发时弹错误提示。
+    var secretInput0 = dialog.querySelector("[data-totp-secret]");
+    var eyeBtn0 = dialog.querySelector("[data-totp-eye]");
+    function loadManageSecret(notify) {
+      if (!secretInput0 || secretInput0.getAttribute("data-loaded")) return;
+      if (eyeBtn0) eyeBtn0.disabled = true;
+      api("POST", "/api/vault/reveal", { kind: "totp", id: entry.id }).then(function (result) {
+        if (eyeBtn0) eyeBtn0.disabled = false;
+        if (!dialog.isConnected) return;
+        var value = result.data && result.data.ok && result.data.reveal ? result.data.reveal.value : null;
+        if (typeof value === "string" && value) {
+          secretInput0.value = value;
+          secretInput0.setAttribute("data-loaded", "1");
+        } else if (notify) {
+          C.toast((result.data && result.data.error) || "读取失败", "danger");
+        }
+      }).catch(function () {
+        if (eyeBtn0) eyeBtn0.disabled = false;
+        if (notify && dialog.isConnected) C.toast("网络异常，请重试", "danger");
+      });
+    }
+    loadManageSecret(false);
     dialog.addEventListener("click", function (event) {
       var target = event.target;
       if (!(target instanceof Element)) return;
@@ -807,36 +831,19 @@
       if (eyeBtn) {
         var secretInput = dialog.querySelector("[data-totp-secret]");
         if (!secretInput) return;
+        if (!secretInput.getAttribute("data-loaded")) {
+          loadManageSecret(true);
+          return;
+        }
         if (secretInput.type === "text") {
           secretInput.type = "password";
           eyeBtn.innerHTML = EYE_SVG;
           eyeBtn.setAttribute("aria-label", "显示密钥");
           return;
         }
-        if (secretInput.getAttribute("data-loaded")) {
-          secretInput.type = "text";
-          eyeBtn.innerHTML = EYE_OFF_SVG;
-          eyeBtn.setAttribute("aria-label", "隐藏密钥");
-          return;
-        }
-        eyeBtn.disabled = true;
-        api("POST", "/api/vault/reveal", { kind: "totp", id: entry.id }).then(function (result) {
-          eyeBtn.disabled = false;
-          if (!dialog.isConnected) return;
-          var value = result.data && result.data.ok && result.data.reveal ? result.data.reveal.value : null;
-          if (typeof value === "string" && value) {
-            secretInput.value = value;
-            secretInput.setAttribute("data-loaded", "1");
-            secretInput.type = "text";
-            eyeBtn.innerHTML = EYE_OFF_SVG;
-            eyeBtn.setAttribute("aria-label", "隐藏密钥");
-          } else {
-            C.toast((result.data && result.data.error) || "读取失败", "danger");
-          }
-        }).catch(function () {
-          eyeBtn.disabled = false;
-          if (dialog.isConnected) C.toast("网络异常，请重试", "danger");
-        });
+        secretInput.type = "text";
+        eyeBtn.innerHTML = EYE_OFF_SVG;
+        eyeBtn.setAttribute("aria-label", "隐藏密钥");
         return;
       }
 

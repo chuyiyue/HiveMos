@@ -5,6 +5,7 @@
 //   POST   /api/backup/run                 立即备份（或 dry_run 只产包）
 //   PUT    /api/backup/targets/:id         先测活再保存
 //   DELETE /api/backup/targets/:id         清空该目标（停用并抹掉凭据）
+//   POST   /api/backup/targets/:id/reveal  读已存凭据明文（面板预填用，记操作日志）
 //
 // index.ts 已做过管理员会话校验；写操作在这里补跨站检查，口径与其它模块一致。
 
@@ -19,6 +20,7 @@ import {
   isTargetId,
   readBackupSchedule,
   readPublicTargets,
+  revealTargetSecret,
   runBackup,
   saveGithubTarget,
   saveWebdavTarget,
@@ -49,6 +51,11 @@ export async function handleBackupRequest(request: Request, env: Env, path: stri
   if (path === "/api/backup/run") {
     if (request.method.toUpperCase() !== "POST") return methodNotAllowed("POST");
     return startRun(request, env);
+  }
+  const reveal = /^\/api\/backup\/targets\/([A-Za-z0-9_-]+)\/reveal$/.exec(path);
+  if (reveal && reveal[1]) {
+    if (request.method.toUpperCase() !== "POST") return methodNotAllowed("POST");
+    return revealTarget(request, env, reveal[1]);
   }
   const target = /^\/api\/backup\/targets\/([A-Za-z0-9_-]+)$/.exec(path);
   if (target && target[1]) {
@@ -197,6 +204,26 @@ async function saveTarget(request: Request, env: Env, id: string): Promise<Respo
     });
     const targets = await readPublicTargets(env.DB);
     return json({ ok: true, target: targets.webdav });
+  } catch (error) {
+    return fail(error);
+  }
+}
+
+async function revealTarget(request: Request, env: Env, id: string): Promise<Response> {
+  const gate = await mutationGate(request);
+  if (gate) return gate;
+  if (!isTargetId(id)) return json({ ok: false, error: "备份目标不存在" }, 404);
+  try {
+    const value = await revealTargetSecret(env, id);
+    await logOp(env.DB, {
+      actor: await panelActor(request, env),
+      module: "设置",
+      action: "查看",
+      targetId: "backup",
+      targetName: "同步与备份",
+      text: `查看了${targetLabel(id)}备份目标的凭据`,
+    });
+    return json({ ok: true, secret: value });
   } catch (error) {
     return fail(error);
   }

@@ -748,3 +748,12 @@ async function recordRun(db: D1Database, result: BackupRunResult, actor: string)
 export async function openStoredTargetSecret(env: Env, row: TargetRow): Promise<string> {
   return openTargetSecret(env, row.token_enc);
 }
+
+// 面板 reveal：管理员会话里读某个目标已存凭据的明文（GitHub 令牌 /
+// WebDAV 密码）。目标不存在或没存凭据时回空串，不假装有值；存了但
+// 解不开时按 openTargetSecret 的错误口径抛 BackupError。
+export async function revealTargetSecret(env: Env, id: TargetId): Promise<string> {
+  const row = await getTargetRow(env.DB, id);
+  if (!row) return "";
+  return openTargetSecret(env, id === "github" ? row.token_enc : row.password_enc);
+}

@@ -65,6 +65,12 @@
       github: { ok: false, message: "", visibility: "", signature: "" },
       webdav: { ok: false, message: "", visibility: "", signature: "" },
     },
+    // 备份凭据 reveal 预填的拉取标记：每个目标每次加载只拉一次，
+    // 保存成功后清掉标记，让刷新时按新值再拉一次。
+    backupSecretState: {
+      github: { loading: false, loaded: false },
+      webdav: { loading: false, loaded: false },
+    },
     busy: false,
     focus: "",
     focusSelect: false,
@@ -966,8 +972,8 @@
 
   function githubCard() {
     var target = backupTargetOf("github");
-    var tokenHint = target && target.has_token ? "已保存 " + C.maskTail(target.token_tail) + "，留空表示不修改" : "建议使用 repo 权限的细粒度令牌";
-    var tokenPlaceholder = target && target.has_token ? "留空表示不修改" : "粘贴访问令牌";
+    var tokenHint = target && target.has_token ? "已预填现值，清空表示不修改" : "建议使用 repo 权限的细粒度令牌";
+    var tokenPlaceholder = target && target.has_token ? "清空表示不修改" : "粘贴访问令牌";
     return (
       '<div class="stack feature-item">' +
       '<label>仓库 owner<input data-field="ghOwner" name="ghOwner" type="text" maxlength="100" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="例如 octocat" value="' +
@@ -982,7 +988,7 @@
       '<label>路径前缀<input data-field="ghPath" name="ghPath" type="text" maxlength="300" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="可留空，例如 backups" value="' +
       C.escapeHtml(state.ghPath) +
       '" /></label>' +
-      '<label>访问令牌<input data-field="ghToken" name="ghToken" type="password" maxlength="1000" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="' +
+      '<label>访问令牌<input data-field="ghToken" name="ghToken" type="text" data-secret-input maxlength="1000" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="' +
       C.escapeHtml(tokenPlaceholder) +
       '" value="' +
       C.escapeHtml(state.ghToken) +
@@ -1006,8 +1012,8 @@
 
   function webdavCard() {
     var target = backupTargetOf("webdav");
-    var passwordHint = target && target.has_password ? "已保存 " + C.maskTail(target.password_tail) + "，留空表示不修改" : "可留空";
-    var passwordPlaceholder = target && target.has_password ? "留空表示不修改" : "粘贴密码";
+    var passwordHint = target && target.has_password ? "已预填现值，清空表示不修改" : "可留空";
+    var passwordPlaceholder = target && target.has_password ? "清空表示不修改" : "粘贴密码";
     return (
       '<div class="stack feature-item">' +
       '<label>服务器地址<input data-field="wdBase" name="wdBase" type="url" maxlength="400" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="https://example.com/dav" value="' +
@@ -1019,7 +1025,7 @@
       '<label>远程目录<input data-field="wdDir" name="wdDir" type="text" maxlength="300" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="可留空，例如 hivemos" value="' +
       C.escapeHtml(state.wdDir) +
       '" /></label>' +
-      '<label>密码<input data-field="wdPass" name="wdPass" type="password" maxlength="1000" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="' +
+      '<label>密码<input data-field="wdPass" name="wdPass" type="text" data-secret-input maxlength="1000" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="' +
       C.escapeHtml(passwordPlaceholder) +
       '" value="' +
       C.escapeHtml(state.wdPass) +
@@ -1207,6 +1213,36 @@
     }
   }
 
+  // 备份凭据预填：目标存了凭据时经 reveal 拉一次明文填进表单 state，
+  // 卡片渲染时带出来；用户已经在框里输入内容时不覆盖。
+  function ensureBackupSecret(id) {
+    var target = backupTargetOf(id);
+    if (!target) return;
+    var has = id === "github" ? target.has_token : target.has_password;
+    if (!has) return;
+    var mark = state.backupSecretState[id];
+    if (!mark || mark.loading || mark.loaded) return;
+    mark.loading = true;
+    api("POST", "/api/backup/targets/" + id + "/reveal")
+      .then(function (result) {
+        mark.loading = false;
+        mark.loaded = true;
+        if (loggedOut(result)) return;
+        var secret = result.data && result.data.ok && typeof result.data.secret === "string" ? result.data.secret : "";
+        if (!secret) return;
+        // 只回填 state 与当前 DOM 输入框，不整页重绘，免得打断正在填的别的字段。
+        var field = id === "github" ? "ghToken" : "wdPass";
+        if (state[field]) return;
+        state[field] = secret;
+        var node = document.querySelector('[data-field="' + field + '"]');
+        if (node && !node.value) node.value = secret;
+      })
+      .catch(function () {
+        mark.loading = false;
+        mark.loaded = true;
+      });
+  }
+
   function applyBackupState(result) {
     if (!result.data || result.data.ok !== true || !result.data.backup) {
       state.backup = null;
@@ -1244,6 +1280,8 @@
       else if (webdav) state.backupTab = "webdav";
     }
     state.backupSeeded = true;
+    ensureBackupSecret("github");
+    ensureBackupSecret("webdav");
   }
 
   function refreshBackup() {
@@ -1346,6 +1384,8 @@
       state.backupTest[id] = { ok: false, message: "", visibility: "", signature: "" };
       if (id === "github") state.ghToken = "";
       else state.wdPass = "";
+      // 让随后的刷新按保存后的值重新 reveal 预填一次。
+      state.backupSecretState[id].loaded = false;
       toast(backupTargetName(id) + "备份目标已保存");
       refreshBackup();
     });

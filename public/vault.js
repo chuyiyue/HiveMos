@@ -162,11 +162,30 @@
         gatewayKeys[id] = { status: "error", value: "" };
         paintGatewayKey(id);
       }
+      flushGatewayKeyWaiters(id);
     }).catch(function () {
       if (!gatewayKeys[id] || gatewayKeys[id].ticket !== ticket) return;
       gatewayKeys[id] = { status: "error", value: "" };
       paintGatewayKey(id);
+      flushGatewayKeyWaiters(id);
     });
+  }
+
+  // 编辑弹窗预填用：密钥就绪（缓存命中或拉取完成）后回调一次，失败给 null。
+  var gatewayKeyWaiters = {};
+  function flushGatewayKeyWaiters(id) {
+    var list = gatewayKeyWaiters[id];
+    if (!list) return;
+    delete gatewayKeyWaiters[id];
+    var entry = gatewayKeys[id];
+    var value = entry && entry.status === "ok" ? entry.value : null;
+    list.forEach(function (fn) { fn(value); });
+  }
+  function whenGatewayKey(id, fn) {
+    var entry = gatewayKeys[id];
+    if (entry && entry.status === "ok") { fn(entry.value); return; }
+    (gatewayKeyWaiters[id] = gatewayKeyWaiters[id] || []).push(fn);
+    ensureGatewayKey(id, true);
   }
 
   function gatewayKeyHtml(item, kick) {
@@ -718,21 +737,25 @@
   }
 
   // 添加与编辑共用同一套字段构建；item 为空是添加，传入条目是编辑并预填。
-  // 密码只存加密值与末四位，编辑时密码留空表示不修改
+  // 编辑时由 openSecretDialog 经 reveal 预填密码现值，提交时与原值相同
+  // 不发 password 字段，清空也不发（不会删掉已存密码）。
   function secretFields(item) {
     var v = item || { name: "", url: "", username: "", note: "" };
     return (
       "<label>名称<input name=\"name\" maxlength=\"60\" autocomplete=\"off\" value=\"" + C.escapeHtml(v.name) + "\" /></label>" +
       "<label>网址<input name=\"url\" maxlength=\"300\" autocomplete=\"off\" placeholder=\"例如 https://example.com\" value=\"" + C.escapeHtml(v.url) + "\" /></label>" +
       "<label>账号<input name=\"username\" maxlength=\"120\" autocomplete=\"off\" value=\"" + C.escapeHtml(v.username) + "\" /></label>" +
-      "<label>密码<input name=\"password\" data-secret-input maxlength=\"200\" autocomplete=\"off\" />" + (item ? "<p class=\"subtle field-hint\">留空表示不修改</p>" : "") + "</label>" +
+      "<label>密码<input name=\"password\" data-secret-input maxlength=\"200\" autocomplete=\"off\" />" + (item ? "<p class=\"subtle field-hint\">已预填现值，清空表示不修改</p>" : "") + "</label>" +
       "<label>备注<textarea name=\"note\" rows=\"3\" maxlength=\"300\">" + C.escapeHtml(v.note) + "</textarea></label>" +
       "<label>分组" + C.groupSelect("group_id", GROUPS || [], v.group_id || "") + "</label>"
     );
   }
   function openSecretDialog(item) {
     var editing = !!item;
-    C.openFormDialog({
+    // 编辑时 reveal 回的当前密码原文：预填展示用，也用来判断提交时
+    // 密码字段有没有真改动（与原值相同就不提交，保持不修改语义）。
+    var revealedPassword = null;
+    var ctrl = C.openFormDialog({
       title: editing ? "编辑条目" : "添加条目",
       bodyHtml: secretFields(item),
       submitLabel: editing ? "保存" : "添加",
@@ -742,7 +765,7 @@
         if (!name) { ctrl.setError("请填写名称"); return; }
         if (!editing && !password) { ctrl.setError("请填写密码"); return; }
         var payload = { name: name, url: val(ctrl, "url"), username: val(ctrl, "username"), note: val(ctrl, "note"), group_id: val(ctrl, "group_id") || null };
-        if (password) payload.password = password;
+        if (password && password !== revealedPassword && password !== (revealedPassword || "").trim()) payload.password = password;
         submitForm(
           ctrl,
           editing ? api("PATCH", "/api/vault/entries/" + encodeURIComponent(item.id), payload) : api("POST", "/api/vault/entries", payload),
@@ -750,6 +773,15 @@
         );
       },
     });
+    if (editing && item.tail) {
+      api("POST", "/api/vault/reveal", { kind: "entry", id: item.id }).then(function (result) {
+        var value = result.data && result.data.ok && result.data.reveal ? result.data.reveal.value : null;
+        if (typeof value !== "string" || !value) return;
+        revealedPassword = value;
+        var input = ctrl.form.querySelector('[name="password"]');
+        if (input && !input.value) input.value = value;
+      }).catch(function () {});
+    }
   }
 
   var PROTO_OPTIONS = ["OpenAI 兼容", "Anthropic", "Gemini", "Azure OpenAI", "Ollama"];
@@ -804,12 +836,15 @@
       "<label>名称<input name=\"name\" maxlength=\"60\" autocomplete=\"off\" value=\"" + C.escapeHtml(v.name) + "\" /></label>" +
       protoField(v.proto) +
       "<label>地址<input name=\"base\" maxlength=\"120\" autocomplete=\"off\" value=\"" + C.escapeHtml(v.base_url) + "\" /></label>" +
-      "<label>密钥<input name=\"key\" data-secret-input maxlength=\"200\" autocomplete=\"off\" />" + (item ? "<p class=\"subtle field-hint\">留空表示不修改</p>" : "") + "</label>" +
+      "<label>密钥<input name=\"key\" data-secret-input maxlength=\"200\" autocomplete=\"off\" />" + (item ? "<p class=\"subtle field-hint\">已预填现值，清空表示不修改</p>" : "") + "</label>" +
       "<label>分组" + C.groupSelect("group_id", GROUPS || [], v.group_id || "") + "</label>"
     );
   }
   function openGatewayDialog(item) {
     var editing = !!item;
+    // 编辑时 reveal 回的当前密钥原文：预填展示用，也用来判断提交时
+    // 密钥字段有没有真改动（与原值相同就不提交，保持不修改语义）。
+    var revealedKey = null;
     var ctrl = C.openFormDialog({
       title: editing ? "编辑网关" : "添加网关",
       bodyHtml: gatewayFields(item),
@@ -820,18 +855,27 @@
         if (!name) { ctrl.setError("请填写名称"); return; }
         if (!editing && !key) { ctrl.setError("请填写密钥"); return; }
         var payload = { name: name, proto: val(ctrl, "proto"), base_url: val(ctrl, "base"), group_id: val(ctrl, "group_id") || null };
-        if (key) payload.key = key;
+        var keyChanged = !!(key && key !== revealedKey && key !== (revealedKey || "").trim());
+        if (keyChanged) payload.key = key;
         submitForm(
           ctrl,
           editing ? api("PATCH", "/api/vault/gateways/" + encodeURIComponent(item.id), payload) : api("POST", "/api/vault/gateways", payload),
           function () {
-            if (editing && key) delete gatewayKeys[item.id];
+            if (editing && keyChanged) delete gatewayKeys[item.id];
             loadGateways();
           }
         );
       },
     });
     wireProtoField(ctrl.form);
+    if (editing && item.tail) {
+      whenGatewayKey(item.id, function (value) {
+        if (typeof value !== "string" || !value) return;
+        revealedKey = value;
+        var input = ctrl.form.querySelector('[name="key"]');
+        if (input && !input.value) input.value = value;
+      });
+    }
   }
 
   var SMTP_PORTS = { ssl: "465", starttls: "587", none: "25" };
