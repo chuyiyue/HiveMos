@@ -1809,7 +1809,7 @@
     var cards = state.connections
       .map(function (conn) {
         var selected = connPanelState && connPanelState.selectedId === conn.id;
-        var tail = conn.config_tail ? "末四位 " + conn.config_tail : "已保存";
+        var cred = conn.config_tail ? connCredHtml(conn) : "已保存";
         return C.record({
           id: conn.id,
           className: "conn-card" + (selected ? " is-selected" : ""),
@@ -1819,7 +1819,7 @@
           corner: selected ? C.badge("已选", "accent") : '<span class="conn-pick-hint">查看</span>',
           facts: [
             ["已接入设备", connDeviceCount(conn) + " 台"],
-            ["凭据", C.escapeHtml(tail)],
+            ["凭据", cred],
           ],
           manage: "provider:" + conn.id,
         });
