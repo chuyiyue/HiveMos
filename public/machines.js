@@ -685,7 +685,8 @@
 
   // 添加与编辑共用同一套字段构建；item 为空是添加，传入条目是编辑并预填。
   // 状态、心跳、版本是运行态字段，不在表单里，编辑时保持不变；
-  // 密码或私钥、API 令牌不回填，编辑时留空表示不修改
+  // API 令牌不回填，编辑时留空表示不修改；服务器 SSH 凭据由 openItemDialog
+  // 打开后经 reveal 取回预填（见该函数内的 serverSecretOriginal）。
   function workerPlatformFields(platform, v, editing) {
     v = v || {};
     var tokenField =
@@ -756,6 +757,9 @@
 
   function openItemDialog(kind, item) {
     var editing = !!item;
+    // 编辑服务器时经 reveal 取回的当前 SSH 凭据原文：预填展示用，也用来
+    // 判断提交时字段有没有真改动。
+    var serverSecretOriginal = null;
     var dlg = C.openFormDialog({
       title: (editing ? "编辑" : "添加") + TITLE_FOR[kind],
       bodyHtml: itemFields(kind, item),
@@ -779,7 +783,8 @@
           var sshUser = val(ctrl, "ssh_user");
           if (sshUser) payload.ssh_user = sshUser;
           var secret = val(ctrl, "ssh_secret");
-          if (secret) payload.ssh_secret = secret;
+          // 与预填原值相同视为没改，不提交（保持「不修改」语义）。
+          if (secret && secret !== serverSecretOriginal && secret !== (serverSecretOriginal || "").trim()) payload.ssh_secret = secret;
         } else if (kind === "host") {
           payload = {
             name: name,
@@ -825,6 +830,17 @@
           });
       },
     });
+    if (editing && kind === "server" && item.ssh_tail) {
+      api("POST", "/api/machines/" + encodeURIComponent(item.id) + "/reveal")
+        .then(function (res) {
+          var value = res.data && res.data.ok && res.data.reveal ? res.data.reveal.secret : null;
+          if (typeof value !== "string" || !value) return;
+          serverSecretOriginal = value;
+          var field = dlg.form.querySelector('[name="ssh_secret"]');
+          if (field && !field.value) field.value = value;
+        })
+        .catch(function () {});
+    }
     if (kind === "worker" && !editing) {
       dlg.form.addEventListener("click", function (event) {
         var tab = event.target.closest("[data-wplatform]");
@@ -909,7 +925,7 @@
     if (authType === "key") {
       return "<label>私钥<textarea name=\"ssh_secret\" data-secret-input rows=\"5\" maxlength=\"16384\" autocomplete=\"off\" placeholder=\"" + (editing ? "留空表示不修改" : "粘贴 OpenSSH 或 PEM 私钥") + "\"></textarea></label>";
     }
-    return "<label>密码<input name=\"ssh_secret\" type=\"password\" maxlength=\"200\" autocomplete=\"off\" placeholder=\"" + (editing ? "留空表示不修改" : "SSH 登录密码") + "\" /></label>";
+    return "<label>密码<input name=\"ssh_secret\" type=\"text\" data-secret-input maxlength=\"16384\" autocomplete=\"off\" placeholder=\"" + (editing ? "留空表示不修改" : "SSH 登录密码") + "\" /></label>";
   }
 
   function serverFields(item) {
@@ -939,6 +955,9 @@
 
   function openServerDialog(item) {
     var editing = !!item;
+    // 编辑时经 reveal 取回的当前 SSH 凭据原文：预填展示用，也用来判断
+    // 提交时字段有没有真改动（认证方式切换重渲染字段后按它回填）。
+    var serverSecretOriginal = null;
     var ctrl = C.openFormDialog({
       title: (editing ? "编辑" : "添加") + "服务器",
       bodyHtml: serverFields(item),
@@ -959,7 +978,8 @@
         if (ip) payload.ip = ip;
         payload.ssh_host = val(c, "ssh_host") || ip;
         if (sshUser) payload.ssh_user = sshUser;
-        if (secret) payload.ssh_secret = secret;
+        // 与预填原值相同视为没改，不提交（保持「不修改」语义）。
+        if (secret && secret !== serverSecretOriginal && secret !== (serverSecretOriginal || "").trim()) payload.ssh_secret = secret;
         c.setBusy(true);
         var request = editing
           ? api("PATCH", "/api/machines/" + encodeURIComponent(item.id), payload)
@@ -985,6 +1005,21 @@
           });
       },
     });
+    function fillServerSecret() {
+      if (serverSecretOriginal == null) return;
+      var field = ctrl.form.querySelector('[name="ssh_secret"]');
+      if (field && !field.value) field.value = serverSecretOriginal;
+    }
+    if (editing && item.ssh_tail) {
+      api("POST", "/api/machines/" + encodeURIComponent(item.id) + "/reveal")
+        .then(function (res) {
+          var value = res.data && res.data.ok && res.data.reveal ? res.data.reveal.secret : null;
+          if (typeof value !== "string" || !value) return;
+          serverSecretOriginal = value;
+          fillServerSecret();
+        })
+        .catch(function () {});
+    }
     var slot = ctrl.form.querySelector("[data-secret-slot]");
     ctrl.form.addEventListener("click", function (event) {
       var t = event.target && event.target.closest ? event.target.closest("[data-auth]") : null;
@@ -996,6 +1031,7 @@
         b.setAttribute("aria-selected", b === t ? "true" : "false");
       });
       slot.innerHTML = secretFieldHtml(next, editing);
+      fillServerSecret();
     });
   }
 
@@ -1162,7 +1198,7 @@
 
   function wizardConfigFields(provider) {
     return (
-      "<label>API 密钥<input data-wiz-field=\"apiKey\" type=\"password\" maxlength=\"500\" autocomplete=\"off\" placeholder=\"InstaBox 的 API Key\" /></label>" +
+      "<label>API 密钥<input data-wiz-field=\"apiKey\" type=\"text\" data-secret-input maxlength=\"500\" autocomplete=\"off\" placeholder=\"InstaBox 的 API Key\" /></label>" +
       "<details><summary>高级</summary><label>接口地址<input data-wiz-field=\"endpoint\" maxlength=\"300\" autocomplete=\"off\" placeholder=\"留空用官方地址 api.instabox.sh\" /></label></details>"
     );
   }
@@ -1588,6 +1624,19 @@
     });
   }
 
+  // 凭据配置取回后预填进编辑表单：只填还空着的字段，用户已输入的不覆盖。
+  function fillConnCredForm(id) {
+    if (!connPanelCtrl || !connPanelState || connPanelState.selectedId !== id) return;
+    var entry = connCreds[id];
+    if (!entry || entry.status !== "ok" || !entry.config) return;
+    var form = connPanelCtrl.bodyEl.querySelector("form[data-conn-cred]");
+    if (!form) return;
+    form.querySelectorAll("[data-wiz-field]").forEach(function (el) {
+      var key = el.getAttribute("data-wiz-field");
+      if (key && typeof entry.config[key] === "string" && el.value === "") el.value = entry.config[key];
+    });
+  }
+
   function ensureConnCred(id) {
     var entry = connCreds[id];
     if (entry && (entry.status === "loading" || entry.status === "ok")) return;
@@ -1597,11 +1646,16 @@
       .then(function (res) {
         if (!connCreds[id] || connCreds[id].ticket !== ticket) return;
         if (res.data && res.data.ok && typeof res.data.credential === "string") {
-          connCreds[id] = { status: "ok", value: res.data.credential };
+          connCreds[id] = {
+            status: "ok",
+            value: res.data.credential,
+            config: res.data.config && typeof res.data.config === "object" ? res.data.config : null,
+          };
         } else {
           connCreds[id] = { status: "error", value: "" };
         }
         paintConnCred(id);
+        fillConnCredForm(id);
       })
       .catch(function () {
         if (!connCreds[id] || connCreds[id].ticket !== ticket) return;
@@ -1713,7 +1767,7 @@
     if (provider === "huawei") {
       return (
         "<label>Access Key<input data-wiz-field=\"accessKey\" data-secret-input maxlength=\"200\" autocomplete=\"off\" /></label>" +
-        "<label>Secret Key<input data-wiz-field=\"secretKey\" type=\"password\" maxlength=\"500\" autocomplete=\"off\" /></label>" +
+        "<label>Secret Key<input data-wiz-field=\"secretKey\" type=\"text\" data-secret-input maxlength=\"500\" autocomplete=\"off\" /></label>" +
         "<label>区域<input data-wiz-field=\"region\" maxlength=\"60\" autocomplete=\"off\" /></label>" +
         "<label>Project ID<input data-wiz-field=\"projectId\" maxlength=\"200\" autocomplete=\"off\" /></label>" +
         "<label>接口地址（选填）<input data-wiz-field=\"endpoint\" maxlength=\"300\" autocomplete=\"off\" /></label>"
@@ -1722,7 +1776,7 @@
     if (provider === "mcp") {
       return (
         "<label>MCP 端点<input data-wiz-field=\"endpoint\" maxlength=\"500\" autocomplete=\"off\" /></label>" +
-        "<label>令牌（选填）<input data-wiz-field=\"token\" type=\"password\" maxlength=\"2000\" autocomplete=\"off\" /></label>" +
+        "<label>令牌（选填）<input data-wiz-field=\"token\" type=\"text\" data-secret-input maxlength=\"2000\" autocomplete=\"off\" /></label>" +
         "<label>设备列表工具名<input data-wiz-field=\"toolName\" maxlength=\"200\" autocomplete=\"off\" /></label>"
       );
     }
@@ -1960,6 +2014,7 @@
     if (!slot) return;
     slot.innerHTML = connPanelHtml();
     syncImportButton();
+    if (connPanelState.selectedId) fillConnCredForm(connPanelState.selectedId);
   }
 
   function fetchConnDevices(id) {

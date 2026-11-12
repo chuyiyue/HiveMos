@@ -376,7 +376,7 @@ async function providerActionRun(request: Request, env: Env, id: string, action:
         targetName: name,
         text: `查看了服务商连接「${name}」的凭据`,
       });
-      return json({ ok: true, credential: revealed.credential });
+      return json({ ok: true, credential: revealed.credential, config: revealed.config });
     });
   }
   if (method !== "POST") return methodNotAllowed("POST");

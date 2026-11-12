@@ -843,7 +843,9 @@ export async function replaceConnectionCredentials(
   return publicConnectionById(db, id);
 }
 
-// Panel read of the main secret (the value config_tail is taken from).
+// Panel read of the stored credential config: the main secret (the value
+// config_tail is taken from) plus the full decrypted config, so the panel
+// can show the credential in plaintext and prefill the edit form.
 // The audit row is written before the sealed config is opened. List
 // responses stay tail-only and never include this plaintext.
 export async function revealConnectionCredential(
@@ -852,7 +854,7 @@ export async function revealConnectionCredential(
   id: string,
   actor: string,
   now: number,
-): Promise<{ credential: string }> {
+): Promise<{ credential: string; config: ProviderConfig }> {
   const row = await getConnection(db, id);
   if (!row) throw new MachineError(404, "连接不存在");
   await prepare(
@@ -867,7 +869,7 @@ export async function revealConnectionCredential(
     ],
   ).run();
   const config = await storedConfig(db, key, row);
-  return { credential: mainSecretOf(row.provider, config) };
+  return { credential: mainSecretOf(row.provider, config), config };
 }
 
 export interface ConnectionDevice extends ProviderDevice {

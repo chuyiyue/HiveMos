@@ -359,11 +359,30 @@
         emailSecrets[id] = { status: "error", value: "" };
         paintEmailSecret(id);
       }
+      flushEmailSecretWaiters(id);
     }).catch(function () {
       if (!emailSecrets[id] || emailSecrets[id].ticket !== ticket) return;
       emailSecrets[id] = { status: "error", value: "" };
       paintEmailSecret(id);
+      flushEmailSecretWaiters(id);
     });
+  }
+
+  // 编辑弹窗预填用：密钥就绪（缓存命中或拉取完成）后回调一次，失败给 null。
+  var emailSecretWaiters = {};
+  function flushEmailSecretWaiters(id) {
+    var list = emailSecretWaiters[id];
+    if (!list) return;
+    delete emailSecretWaiters[id];
+    var entry = emailSecrets[id];
+    var value = entry && entry.status === "ok" ? entry.value : null;
+    list.forEach(function (fn) { fn(value); });
+  }
+  function whenEmailSecret(id, fn) {
+    var entry = emailSecrets[id];
+    if (entry && entry.status === "ok") { fn(entry.value); return; }
+    (emailSecretWaiters[id] = emailSecretWaiters[id] || []).push(fn);
+    ensureEmailSecret(id, true);
   }
 
   function emailSecretHtml(item) {
@@ -927,12 +946,12 @@
       "<label>端口<input name=\"smtp_port\" type=\"number\" min=\"1\" max=\"65535\" step=\"1\" inputmode=\"numeric\" autocomplete=\"off\" value=\"" + C.escapeHtml(port) + "\" /></label>" +
       smtpSecurityField(v.smtp_security || "") +
       "<label>用户名<input name=\"smtp_user\" maxlength=\"120\" autocomplete=\"off\" placeholder=\"可空，默认与邮箱地址相同\" value=\"" + C.escapeHtml(v.smtp_user || "") + "\" /></label>" +
-      "<label>密码<input name=\"smtp_secret\" type=\"password\" maxlength=\"2000\" autocomplete=\"off\" placeholder=\"可空\" />" +
+      "<label>密码<input name=\"smtp_secret\" type=\"text\" data-secret-input maxlength=\"2000\" autocomplete=\"off\" placeholder=\"可空\" />" +
       (item ? "<p class=\"subtle field-hint\">留空表示不修改</p>" : "") +
       "</label>" +
       "</div>" +
       "<div class=\"email-type-panel\" data-email-type-panel=\"resend\"" + (type === "resend" ? "" : " hidden") + ">" +
-      "<label>API Key<input name=\"resend_api_key\" type=\"password\" maxlength=\"2000\" autocomplete=\"off\" placeholder=\"re_ 开头，可空\" />" +
+      "<label>API Key<input name=\"resend_api_key\" type=\"text\" data-secret-input maxlength=\"2000\" autocomplete=\"off\" placeholder=\"re_ 开头，可空\" />" +
       (item ? "<p class=\"subtle field-hint\">留空表示不修改</p>" : "") +
       "</label>" +
       "</div>"
@@ -940,6 +959,9 @@
   }
   function openEmailDialog(item) {
     var editing = !!item;
+    // 编辑时 reveal 回的当前密钥原文：预填展示用，也用来判断提交时
+    // 密钥字段有没有真改动（与原值相同就不提交，保持不修改语义）。
+    var revealedSecret = null;
     var ctrl = C.openFormDialog({
       title: editing ? "编辑邮箱" : "添加邮箱",
       bodyHtml: emailFields(item),
@@ -959,7 +981,7 @@
         var clearGroup = false;
         if (type === "resend") {
           var resendKey = val(ctrl, "resend_api_key");
-          if (resendKey) { payload.resend_api_key = resendKey; secretChanged = true; }
+          if (resendKey && resendKey !== revealedSecret && resendKey !== (revealedSecret || "").trim()) { payload.resend_api_key = resendKey; secretChanged = true; }
         } else {
           var smtpHost = val(ctrl, "smtp_host");
           var smtpPort = val(ctrl, "smtp_port");
@@ -980,7 +1002,7 @@
             payload.smtp_port = smtpPort ? Number(smtpPort) : "";
             payload.smtp_security = smtpSecurity;
             payload.smtp_user = smtpUser;
-            if (smtpSecret) { payload.smtp_secret = smtpSecret; secretChanged = true; }
+            if (smtpSecret && smtpSecret !== revealedSecret && smtpSecret !== (revealedSecret || "").trim()) { payload.smtp_secret = smtpSecret; secretChanged = true; }
             clearGroup = !smtpAny;
           }
         }
@@ -996,6 +1018,15 @@
     });
     wireSmtpField(ctrl.form);
     wireEmailTypeField(ctrl.form);
+    if (editing && emailSecretSet(item)) {
+      whenEmailSecret(item.id, function (value) {
+        if (typeof value !== "string" || !value) return;
+        revealedSecret = value;
+        var fieldName = emailTypeOf(item) === "resend" ? "resend_api_key" : "smtp_secret";
+        var input = ctrl.form.querySelector('[name="' + fieldName + '"]');
+        if (input && !input.value) input.value = value;
+      });
+    }
   }
 
   // 列表上的「查看密码」：仍要点一次才取明文（服务端记访问记录）。
